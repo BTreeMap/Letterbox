@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.kotlinAndroid)
     alias(libs.plugins.kapt)
+    id("org.jetbrains.kotlin.plugin.compose") version libs.versions.kotlin.get()
 }
 
 android {
@@ -34,6 +35,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    @Suppress("DEPRECATION")
     kotlinOptions {
         jvmTarget = "17"
     }
@@ -89,6 +91,7 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
+    implementation(libs.material)
     implementation(libs.coroutines.core)
     implementation(libs.coroutines.android)
     implementation(libs.room.runtime)
