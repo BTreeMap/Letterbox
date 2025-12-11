@@ -60,6 +60,7 @@ android {
 
 val rustBuildEnabled = project.findProperty("rustBuild") == "true"
 val cargoNdkOutput = rootProject.layout.projectDirectory.dir("app/src/main/jniLibs").asFile
+val hostLibDir = rootProject.layout.projectDirectory.dir("target/release").asFile
 
 val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
     group = "build"
@@ -78,8 +79,27 @@ val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
     onlyIf { rustBuildEnabled }
 }
 
+// Build Rust library for host OS (for unit tests)
+val cargoHostBuild = tasks.register<Exec>("cargoHostBuild") {
+    group = "build"
+    description = "Build Rust shared library for host OS (for FFI unit tests)"
+    workingDir = rootProject.projectDir.resolve("rust/letterbox-core")
+    commandLine("cargo", "build", "--release", "--lib")
+}
+
 tasks.named("preBuild") {
     dependsOn(cargoNdkBuild)
+}
+
+// Configure test task to use host-compiled library
+tasks.withType<Test> {
+    dependsOn(cargoHostBuild)
+    
+    // Set the library path for JNA to find the host-compiled Rust library
+    // The file is built by cargoHostBuild task before tests run, so we always set the path
+    val libFile = File(hostLibDir, "libletterbox_core.so")
+    systemProperty("uniffi.component.letterbox_core.libraryOverride", libFile.absolutePath)
+    systemProperty("jna.library.path", hostLibDir.absolutePath)
 }
 
 dependencies {
@@ -96,11 +116,13 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
+    implementation(libs.jna) { artifact { type = "aar" } }
     kapt(libs.room.compiler)
 
     testImplementation(libs.junit4)
     testImplementation(kotlin("test-junit"))
     testImplementation(libs.coroutines.test)
+    testImplementation("net.java.dev.jna:jna:5.14.0")
 
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.androidx.test.ext)

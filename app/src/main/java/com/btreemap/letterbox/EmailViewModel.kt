@@ -3,6 +3,9 @@ package com.btreemap.letterbox
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.btreemap.letterbox.ffi.EmailHandle
+import com.btreemap.letterbox.ffi.ParseException
+import com.btreemap.letterbox.ffi.parseEml
 import com.btreemap.letterbox.ui.EmailContent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -139,50 +142,71 @@ class EmailViewModel(
     }
 
     /**
-     * Parse email bytes using a simple built-in Kotlin parser.
+     * Parse email bytes using the Rust FFI via UniFFI bindings.
      * 
-     * Note: This is a fallback parser for initial development. In a production build,
-     * the app would use the Rust FFI bindings (via UniFFI) which provide:
-     * - More robust RFC 5322 parsing via stalwart's mail-parser
-     * - Better handling of MIME multipart messages
-     * - Proper character encoding support (non-UTF8 charsets)
-     * - Efficient inline asset extraction for cid: URLs
-     * 
-     * This Kotlin parser handles basic cases but may not correctly parse:
-     * - Encoded headers (RFC 2047)
-     * - Multipart MIME messages
-     * - Non-UTF8 content
+     * Uses stalwart's mail-parser for robust RFC 5322 parsing:
+     * - Full MIME multipart support
+     * - Proper character encoding (non-UTF8 charsets)
+     * - Inline asset extraction for cid: URLs
+     * - Memory-efficient opaque handle pattern
      */
     private suspend fun parseEmailBytes(bytes: ByteArray): EmailContent? {
         return withContext(Dispatchers.Default) {
             try {
-                val text = String(bytes, Charsets.UTF_8)
-                val headers = parseHeaders(text)
-                val body = extractBody(text)
-                
-                val subject = headers["subject"] ?: "Untitled"
-                val from = headers["from"] ?: ""
-                val to = headers["to"] ?: ""
-                val date = headers["date"] ?: ""
-                
-                // Convert plain text to basic HTML if needed
-                val bodyHtml = if (body.startsWith("<")) {
-                    body
-                } else {
-                    "<html><body><pre style=\"white-space: pre-wrap; font-family: sans-serif;\">${htmlEscape(body)}</pre></body></html>"
-                }
+                val handle: EmailHandle = parseEml(bytes)
                 
                 EmailContent(
-                    subject = subject,
-                    from = from,
-                    to = to,
-                    date = date,
-                    bodyHtml = bodyHtml,
-                    getResource = { _ -> null } // No inline resources in simple parser
+                    subject = handle.subject(),
+                    from = handle.from(),
+                    to = handle.to(),
+                    date = handle.date(),
+                    bodyHtml = handle.bodyHtml(),
+                    getResource = { cid -> handle.getResource(cid) }
                 )
-            } catch (e: Exception) {
-                null
+            } catch (e: ParseException) {
+                // Rust parser returned a parse error - fall back to Kotlin parser
+                parseEmailBytesKotlin(bytes)
+            } catch (e: UnsatisfiedLinkError) {
+                // Native library not available - fall back to Kotlin parser
+                parseEmailBytesKotlin(bytes)
+            } catch (e: ExceptionInInitializerError) {
+                // Library initialization failed - fall back to Kotlin parser
+                parseEmailBytesKotlin(bytes)
             }
+        }
+    }
+
+    /**
+     * Fallback Kotlin parser for cases where the native library is not available.
+     */
+    private fun parseEmailBytesKotlin(bytes: ByteArray): EmailContent? {
+        return try {
+            val text = String(bytes, Charsets.UTF_8)
+            val headers = parseHeaders(text)
+            val body = extractBody(text)
+            
+            val subject = headers["subject"] ?: "Untitled"
+            val from = headers["from"] ?: ""
+            val to = headers["to"] ?: ""
+            val date = headers["date"] ?: ""
+            
+            // Convert plain text to basic HTML if needed
+            val bodyHtml = if (body.startsWith("<")) {
+                body
+            } else {
+                "<html><body><pre style=\"white-space: pre-wrap; font-family: sans-serif;\">${htmlEscape(body)}</pre></body></html>"
+            }
+            
+            EmailContent(
+                subject = subject,
+                from = from,
+                to = to,
+                date = date,
+                bodyHtml = bodyHtml,
+                getResource = { _ -> null }
+            )
+        } catch (e: Exception) {
+            null
         }
     }
 
