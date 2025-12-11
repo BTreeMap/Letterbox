@@ -1,18 +1,19 @@
-name: CI
+name: Main Branch Build
 
 on:
   push:
     branches: ["main", "copilot/**"]
-  pull_request:
-  release:
-    types: [published]
 
+# Minimal permissions: only what's needed for pre-releases
 permissions:
-  contents: write
+  contents: write  # Required for creating pre-releases
 
 jobs:
-  build:
+  lint-and-test:
+    name: Lint and Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read  # Override: this job only needs read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,6 +63,43 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
 
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    permissions:
+      contents: read  # Override: this job only needs read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android components
+        run: |
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked || true
+
+      - name: Gradle permissions
+        run: chmod +x gradlew
+
       - name: Build Android native libraries
         run: |
           cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ../app/src/main/jniLibs build --release
@@ -88,9 +126,12 @@ jobs:
           retention-days: 30
 
   pre-release:
+    name: Create Pre-release
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write  # Required for creating releases
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -116,23 +157,5 @@ jobs:
             Automated pre-release from commit ${{ github.sha }}
             
             This is an unsigned APK for testing purposes.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release'
-    steps:
-      - name: Download release APK
-        uses: actions/download-artifact@v4
-        with:
-          name: letterbox-release-apk
-          path: ./artifacts
-
-      - name: Upload release APK to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ./artifacts/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
