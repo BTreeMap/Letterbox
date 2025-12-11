@@ -41,6 +41,29 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/letterbox-core/target/
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
       - name: Install cargo-ndk
         run: |
           if ! command -v cargo-ndk &> /dev/null; then
@@ -48,6 +71,11 @@ jobs:
           else
             echo "cargo-ndk already installed, skipping"
           fi
+
+      - name: Install and pin NDK
+        run: |
+          sdkmanager --install "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
 
       - name: Rust format check
         run: cargo fmt --all -- --check
@@ -68,7 +96,7 @@ jobs:
       - name: Android unit tests (including FFI integration tests)
         run: ./gradlew test --no-daemon
         env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
+          LD_LIBRARY_PATH: ${{ github.workspace }}/rust/letterbox-core/target/release
 
   build:
     name: Build APK
@@ -109,14 +137,30 @@ jobs:
 
       - name: Build Android native libraries
         run: |
-          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ../app/src/main/jniLibs build --release
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --release
         working-directory: rust/letterbox-core
+
+      - name: Verify native libraries were generated
+        run: |
+          echo "Checking for generated .so files in jniLibs:"
+          find ${{ github.workspace }}/app/src/main/jniLibs -maxdepth 2 -type f -name "*.so" -print
+          if [ -z "$(find ${{ github.workspace }}/app/src/main/jniLibs -maxdepth 2 -type f -name "*.so")" ]; then
+            echo "ERROR: No .so files found in jniLibs!"
+            exit 1
+          fi
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon
 
       - name: Build release APK
         run: ./gradlew assembleRelease --no-daemon
+
+      - name: Verify native libraries in APKs
+        run: |
+          echo "Checking for .so files in debug APK:"
+          unzip -l app/build/outputs/apk/debug/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in debug APK!" && exit 1)
+          echo "Checking for .so files in release APK:"
+          unzip -l app/build/outputs/apk/release/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in release APK!" && exit 1)
 
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
