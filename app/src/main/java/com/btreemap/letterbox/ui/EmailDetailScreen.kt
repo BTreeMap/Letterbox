@@ -161,16 +161,26 @@ private fun EmailWebView(
                                     ByteArrayInputStream(bytes)
                                 )
                             } else {
-                                // Return empty response for missing resources
-                                null
+                                // Return 404 for missing cid: resources
+                                WebResourceResponse(
+                                    "text/plain",
+                                    "utf-8",
+                                    404,
+                                    "Not Found",
+                                    emptyMap(),
+                                    ByteArrayInputStream("Resource not found".toByteArray())
+                                )
                             }
                         }
 
-                        // Block all other external requests
+                        // Block all other external requests with a clear error
                         return WebResourceResponse(
                             "text/plain",
                             "utf-8",
-                            ByteArrayInputStream(ByteArray(0))
+                            403,
+                            "Forbidden",
+                            emptyMap(),
+                            ByteArrayInputStream("External resources are blocked for security".toByteArray())
                         )
                     }
 

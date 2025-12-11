@@ -139,8 +139,19 @@ class EmailViewModel(
     }
 
     /**
-     * Parse email bytes using a simple built-in parser.
-     * In a production app, this would use the Rust FFI bindings.
+     * Parse email bytes using a simple built-in Kotlin parser.
+     * 
+     * Note: This is a fallback parser for initial development. In a production build,
+     * the app would use the Rust FFI bindings (via UniFFI) which provide:
+     * - More robust RFC 5322 parsing via stalwart's mail-parser
+     * - Better handling of MIME multipart messages
+     * - Proper character encoding support (non-UTF8 charsets)
+     * - Efficient inline asset extraction for cid: URLs
+     * 
+     * This Kotlin parser handles basic cases but may not correctly parse:
+     * - Encoded headers (RFC 2047)
+     * - Multipart MIME messages
+     * - Non-UTF8 content
      */
     private suspend fun parseEmailBytes(bytes: ByteArray): EmailContent? {
         return withContext(Dispatchers.Default) {

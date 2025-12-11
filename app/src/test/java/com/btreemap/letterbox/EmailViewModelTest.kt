@@ -56,8 +56,9 @@ class EmailViewModelTest {
         )
 
         val originalTime = entry.lastAccessed
-        Thread.sleep(10) // Small delay to ensure different timestamp
         
+        // Access the entry - the implementation uses System.currentTimeMillis()
+        // so the new timestamp should be >= the original
         val updated = repository.access(entry.id)
         
         assertTrue(updated != null)
