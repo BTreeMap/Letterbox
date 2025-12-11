@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Letterbox</string>
+    <string name="recent_files_title">Recent Files</string>
+    <string name="empty_history_message">Open an .eml or .msg file to get started.</string>
+</resources>
