@@ -42,7 +42,10 @@ android {
         buildConfig = true
     }
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.11"
+        kotlinCompilerExtensionVersion = "1.7.3"
+    }
+    kotlin {
+        jvmToolchain(17)
     }
     packaging {
         resources {
