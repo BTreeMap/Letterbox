@@ -99,7 +99,8 @@ dependencies {
     kapt(libs.room.compiler)
 
     testImplementation(libs.junit4)
-    testImplementation(kotlin("test"))
+    testImplementation(kotlin("test-junit"))
+    testImplementation(libs.coroutines.test)
 
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.androidx.test.ext)

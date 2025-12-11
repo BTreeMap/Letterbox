@@ -4,6 +4,6 @@ plugins {
     alias(libs.plugins.kapt) apply false
 }
 
-tasks.register("clean", Delete::class) {
-    delete(rootProject.buildDir)
+tasks.register<Delete>("clean") {
+    delete(rootProject.layout.buildDirectory)
 }

@@ -3,28 +3,240 @@ package com.btreemap.letterbox
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.btreemap.letterbox.ui.EmailContent
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * UI State for the main screen.
+ */
+data class EmailUiState(
+    val history: List<HistoryEntry> = emptyList(),
+    val currentEmail: EmailContent? = null,
+    val isLoading: Boolean = false,
+    val errorMessage: String? = null
+)
 
 class EmailViewModel(
-    private val repository: HistoryRepository
+    private val repository: InMemoryHistoryRepository
 ) : ViewModel() {
 
-    val history: StateFlow<List<HistoryEntry>> = repository.items
+    private val _uiState = MutableStateFlow(EmailUiState())
+    val uiState: StateFlow<EmailUiState> = _uiState.asStateFlow()
 
-    fun ingestSample(displayName: String = "Sample EML") {
+    init {
+        // Observe history changes
         viewModelScope.launch {
-            repository.ingest(
-                bytes = "Subject: $displayName\n\nHello from Letterbox.".toByteArray(),
-                displayName = displayName,
-                originalUri = null
-            )
+            repository.items.collect { items ->
+                _uiState.update { it.copy(history = items) }
+            }
         }
+    }
+
+    /**
+     * Ingest email from a URI (content:// or file://).
+     */
+    fun ingestFromUri(bytes: ByteArray, filename: String, uri: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            
+            try {
+                // Parse the email to extract subject for display name
+                val parsed = parseEmailBytes(bytes)
+                val displayName = parsed?.subject?.takeIf { it.isNotBlank() } ?: filename
+                
+                // Store in repository
+                val entry = repository.ingest(bytes, displayName, uri)
+                
+                // If successfully parsed, show the email
+                if (parsed != null) {
+                    _uiState.update { it.copy(
+                        isLoading = false,
+                        currentEmail = parsed
+                    ) }
+                } else {
+                    _uiState.update { it.copy(
+                        isLoading = false,
+                        errorMessage = "Could not parse email"
+                    ) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(
+                    isLoading = false,
+                    errorMessage = "Error: ${e.message}"
+                ) }
+            }
+        }
+    }
+
+    /**
+     * Open a history entry for viewing.
+     */
+    fun openHistoryEntry(entry: HistoryEntry) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            
+            try {
+                // Update last accessed time
+                repository.access(entry.id)
+                
+                // Load the file content
+                val file = repository.blobFor(entry.blobHash)
+                if (file != null && file.exists()) {
+                    val bytes = file.readBytes()
+                    val parsed = parseEmailBytes(bytes)
+                    
+                    if (parsed != null) {
+                        _uiState.update { it.copy(
+                            isLoading = false,
+                            currentEmail = parsed
+                        ) }
+                    } else {
+                        _uiState.update { it.copy(
+                            isLoading = false,
+                            errorMessage = "Could not parse email"
+                        ) }
+                    }
+                } else {
+                    _uiState.update { it.copy(
+                        isLoading = false,
+                        errorMessage = "Email file not found"
+                    ) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(
+                    isLoading = false,
+                    errorMessage = "Error: ${e.message}"
+                ) }
+            }
+        }
+    }
+
+    /**
+     * Close the currently viewed email and return to history.
+     */
+    fun closeEmail() {
+        _uiState.update { it.copy(currentEmail = null) }
+    }
+
+    /**
+     * Clear any error message.
+     */
+    fun clearError() {
+        _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    /**
+     * Set an error message to display.
+     */
+    fun setError(message: String) {
+        _uiState.update { it.copy(errorMessage = message) }
+    }
+
+    /**
+     * Parse email bytes using a simple built-in Kotlin parser.
+     * 
+     * Note: This is a fallback parser for initial development. In a production build,
+     * the app would use the Rust FFI bindings (via UniFFI) which provide:
+     * - More robust RFC 5322 parsing via stalwart's mail-parser
+     * - Better handling of MIME multipart messages
+     * - Proper character encoding support (non-UTF8 charsets)
+     * - Efficient inline asset extraction for cid: URLs
+     * 
+     * This Kotlin parser handles basic cases but may not correctly parse:
+     * - Encoded headers (RFC 2047)
+     * - Multipart MIME messages
+     * - Non-UTF8 content
+     */
+    private suspend fun parseEmailBytes(bytes: ByteArray): EmailContent? {
+        return withContext(Dispatchers.Default) {
+            try {
+                val text = String(bytes, Charsets.UTF_8)
+                val headers = parseHeaders(text)
+                val body = extractBody(text)
+                
+                val subject = headers["subject"] ?: "Untitled"
+                val from = headers["from"] ?: ""
+                val to = headers["to"] ?: ""
+                val date = headers["date"] ?: ""
+                
+                // Convert plain text to basic HTML if needed
+                val bodyHtml = if (body.startsWith("<")) {
+                    body
+                } else {
+                    "<html><body><pre style=\"white-space: pre-wrap; font-family: sans-serif;\">${htmlEscape(body)}</pre></body></html>"
+                }
+                
+                EmailContent(
+                    subject = subject,
+                    from = from,
+                    to = to,
+                    date = date,
+                    bodyHtml = bodyHtml,
+                    getResource = { _ -> null } // No inline resources in simple parser
+                )
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
+    private fun parseHeaders(text: String): Map<String, String> {
+        val headers = mutableMapOf<String, String>()
+        val headerSection = text.substringBefore("\n\n").substringBefore("\r\n\r\n")
+        
+        var currentKey = ""
+        var currentValue = StringBuilder()
+        
+        for (line in headerSection.lines()) {
+            if (line.startsWith(" ") || line.startsWith("\t")) {
+                // Continuation of previous header
+                currentValue.append(" ").append(line.trim())
+            } else if (line.contains(":")) {
+                // Save previous header
+                if (currentKey.isNotEmpty()) {
+                    headers[currentKey.lowercase()] = currentValue.toString().trim()
+                }
+                // Start new header
+                val colonIndex = line.indexOf(':')
+                currentKey = line.substring(0, colonIndex)
+                currentValue = StringBuilder(line.substring(colonIndex + 1).trim())
+            }
+        }
+        
+        // Save last header
+        if (currentKey.isNotEmpty()) {
+            headers[currentKey.lowercase()] = currentValue.toString().trim()
+        }
+        
+        return headers
+    }
+
+    private fun extractBody(text: String): String {
+        val body = if (text.contains("\r\n\r\n")) {
+            text.substringAfter("\r\n\r\n")
+        } else {
+            text.substringAfter("\n\n")
+        }
+        return body.trim()
+    }
+
+    private fun htmlEscape(s: String): String {
+        return s.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&#39;")
     }
 }
 
 class EmailViewModelFactory(
-    private val repository: HistoryRepository
+    private val repository: InMemoryHistoryRepository
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {

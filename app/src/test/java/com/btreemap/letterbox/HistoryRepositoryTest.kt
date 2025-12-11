@@ -1,6 +1,7 @@
 package com.btreemap.letterbox
 
 import java.io.File
+import kotlin.io.path.createTempDirectory
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -12,12 +13,12 @@ import org.junit.Test
 class HistoryRepositoryTest {
 
     private lateinit var tempDir: File
-    private lateinit var repository: HistoryRepository
+    private lateinit var repository: InMemoryHistoryRepository
 
     @Before
     fun setUp() {
-        tempDir = createTempDir(prefix = "letterbox-test")
-        repository = HistoryRepository(tempDir, historyLimit = 2)
+        tempDir = createTempDirectory(prefix = "letterbox-test").toFile()
+        repository = InMemoryHistoryRepository(tempDir, historyLimit = 2)
     }
 
     @After
