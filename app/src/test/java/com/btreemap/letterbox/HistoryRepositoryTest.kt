@@ -13,12 +13,12 @@ import org.junit.Test
 class HistoryRepositoryTest {
 
     private lateinit var tempDir: File
-    private lateinit var repository: HistoryRepository
+    private lateinit var repository: InMemoryHistoryRepository
 
     @Before
     fun setUp() {
         tempDir = createTempDirectory(prefix = "letterbox-test").toFile()
-        repository = HistoryRepository(tempDir, historyLimit = 2)
+        repository = InMemoryHistoryRepository(tempDir, historyLimit = 2)
     }
 
     @After

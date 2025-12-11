@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class EmailViewModel(
-    private val repository: HistoryRepository
+    private val repository: InMemoryHistoryRepository
 ) : ViewModel() {
 
     val history: StateFlow<List<HistoryEntry>> = repository.items
@@ -24,7 +24,7 @@ class EmailViewModel(
 }
 
 class EmailViewModelFactory(
-    private val repository: HistoryRepository
+    private val repository: InMemoryHistoryRepository
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {

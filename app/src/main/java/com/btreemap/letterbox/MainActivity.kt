@@ -30,7 +30,7 @@ import com.btreemap.letterbox.ui.theme.LetterboxTheme
 
 class MainActivity : ComponentActivity() {
     private val viewModel: EmailViewModel by viewModels {
-        EmailViewModelFactory(HistoryRepository(filesDir))
+        EmailViewModelFactory(InMemoryHistoryRepository(filesDir))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
