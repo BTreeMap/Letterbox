@@ -164,9 +164,13 @@ class EmailViewModel(
                     getResource = { cid -> handle.getResource(cid) }
                 )
             } catch (e: ParseException) {
-                null
-            } catch (e: Exception) {
-                // In case native library is not loaded, fall back to Kotlin parser
+                // Rust parser returned a parse error - fall back to Kotlin parser
+                parseEmailBytesKotlin(bytes)
+            } catch (e: UnsatisfiedLinkError) {
+                // Native library not available - fall back to Kotlin parser
+                parseEmailBytesKotlin(bytes)
+            } catch (e: ExceptionInInitializerError) {
+                // Library initialization failed - fall back to Kotlin parser
                 parseEmailBytesKotlin(bytes)
             }
         }

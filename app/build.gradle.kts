@@ -96,11 +96,10 @@ tasks.withType<Test> {
     dependsOn(cargoHostBuild)
     
     // Set the library path for JNA to find the host-compiled Rust library
+    // The file is built by cargoHostBuild task before tests run, so we always set the path
     val libFile = File(hostLibDir, "libletterbox_core.so")
-    if (libFile.exists() || true) { // Always set, file may be built later
-        systemProperty("uniffi.component.letterbox_core.libraryOverride", libFile.absolutePath)
-        systemProperty("jna.library.path", hostLibDir.absolutePath)
-    }
+    systemProperty("uniffi.component.letterbox_core.libraryOverride", libFile.absolutePath)
+    systemProperty("jna.library.path", hostLibDir.absolutePath)
 }
 
 dependencies {
