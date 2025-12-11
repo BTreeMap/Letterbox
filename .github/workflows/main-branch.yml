@@ -3,6 +3,8 @@ name: Main Branch Build
 on:
   push:
     branches: ["main", "copilot/**"]
+    # Note: copilot/** branches run tests/builds but do NOT create pre-releases
+    # Only main branch creates pre-releases (see conditional in pre-release job)
 
 # Minimal permissions: only what's needed for pre-releases
 permissions:
@@ -40,7 +42,12 @@ jobs:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked || true
+        run: |
+          if ! command -v cargo-ndk &> /dev/null; then
+            cargo install cargo-ndk --locked
+          else
+            echo "cargo-ndk already installed, skipping"
+          fi
 
       - name: Rust format check
         run: cargo fmt --all -- --check
@@ -129,6 +136,7 @@ jobs:
     name: Create Pre-release
     needs: build
     runs-on: ubuntu-latest
+    # Only create pre-releases for main branch (not copilot/** branches)
     if: github.ref == 'refs/heads/main'
     permissions:
       contents: write  # Required for creating releases

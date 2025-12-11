@@ -36,6 +36,8 @@ This directory contains the CI/CD workflows for the Letterbox project. The workf
 - Global `contents: write` permission, but individual jobs override to `read` where possible
 - Only the `pre-release` job actually needs write permissions
 - Pre-releases are only created from the `main` branch (not copilot branches)
+  - `copilot/**` branches trigger lint/test/build for validation but skip pre-release creation
+  - This allows development branches to be tested without creating unnecessary releases
 - Artifacts retained for 30 days
 
 ### 3. `release.yml` - Release Publication
