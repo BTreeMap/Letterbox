@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Cache directory for temporary attachment files -->
+    <cache-path name="attachments" path="attachments/" />
+    <!-- Cache directory for sharing .eml files -->
+    <cache-path name="shared" path="shared/" />
+</paths>

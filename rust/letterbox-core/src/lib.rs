@@ -26,10 +26,31 @@ struct ParsedMessage {
     subject: String,
     from: String,
     to: String,
+    cc: String,
+    reply_to: String,
+    message_id: String,
     date: String,
     body_html: Option<String>,
     body_text: Option<String>,
     inline_assets: HashMap<String, Vec<u8>>,
+    attachments: Vec<Attachment>,
+}
+
+/// Represents an email attachment.
+#[derive(Clone)]
+struct Attachment {
+    name: String,
+    content_type: String,
+    size: u64,
+    content: Vec<u8>,
+}
+
+/// Attachment metadata exposed to Kotlin via UniFFI.
+#[derive(Clone, uniffi::Record)]
+pub struct AttachmentInfo {
+    pub name: String,
+    pub content_type: String,
+    pub size: u64,
 }
 
 /// Parse an EML file from raw bytes.
@@ -58,6 +79,21 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
         .map(|addrs| format_addresses(addrs))
         .unwrap_or_default();
 
+    let cc = message
+        .cc()
+        .map(|addrs| format_addresses(addrs))
+        .unwrap_or_default();
+
+    let reply_to = message
+        .reply_to()
+        .map(|addrs| format_addresses(addrs))
+        .unwrap_or_default();
+
+    let message_id = message
+        .message_id()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
     let date = message.date().map(|d| d.to_rfc3339()).unwrap_or_default();
 
     // Get body HTML
@@ -82,6 +118,61 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
         }
     }
 
+    // Extract attachments (files that are not inline CID references and not body parts)
+    let mut attachments = Vec::new();
+    for (part_idx, part) in message.parts.iter().enumerate() {
+        // Skip the root part (usually multipart container)
+        if part_idx == 0 {
+            continue;
+        }
+        
+        // Check if this part is an attachment (has Content-Disposition: attachment)
+        // or has a filename and is not already an inline CID reference
+        let is_inline_cid = part.content_id().is_some();
+        let content_type = part.content_type().map(|ct| {
+            if let Some(subtype) = ct.subtype() {
+                format!("{}/{}", ct.ctype(), subtype)
+            } else {
+                ct.ctype().to_string()
+            }
+        }).unwrap_or_else(|| "application/octet-stream".to_string());
+        
+        // Skip text/plain and text/html parts that are the main body
+        let is_body_part = content_type == "text/plain" || content_type == "text/html";
+        
+        // Get the attachment name
+        let attachment_name = part.attachment_name()
+            .map(|s| s.to_string())
+            .or_else(|| {
+                // Fallback to Content-Type name parameter
+                part.content_type()
+                    .and_then(|ct| ct.attribute("name"))
+                    .map(|s| s.to_string())
+            });
+        
+        // Determine if this is an attachment:
+        // - Has a filename
+        // - Or is explicitly marked as attachment
+        // - And is not an inline CID or body part
+        let has_content_disposition_attachment = part.content_disposition()
+            .map(|cd| cd.ctype() == "attachment")
+            .unwrap_or(false);
+        
+        if attachment_name.is_some() || has_content_disposition_attachment {
+            if !is_inline_cid && !(is_body_part && attachment_name.is_none()) {
+                let bytes = part.contents();
+                if !bytes.is_empty() {
+                    attachments.push(Attachment {
+                        name: attachment_name.unwrap_or_else(|| format!("attachment_{}", part_idx)),
+                        content_type: content_type.clone(),
+                        size: bytes.len() as u64,
+                        content: bytes.to_vec(),
+                    });
+                }
+            }
+        }
+    }
+
     // If no HTML body, convert text to basic HTML
     let final_body_html = body_html.or_else(|| {
         body_text.as_ref().map(|text| {
@@ -96,10 +187,14 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
         subject,
         from,
         to,
+        cc,
+        reply_to,
+        message_id,
         date,
         body_html: final_body_html,
         body_text,
         inline_assets,
+        attachments,
     };
 
     Ok(Arc::new(EmailHandle {
@@ -169,6 +264,30 @@ impl EmailHandle {
             .unwrap_or_default()
     }
 
+    /// Get the "Cc" field formatted as a string.
+    pub fn cc(&self) -> String {
+        self.inner
+            .lock()
+            .map(|msg| msg.cc.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get the "Reply-To" field formatted as a string.
+    pub fn reply_to(&self) -> String {
+        self.inner
+            .lock()
+            .map(|msg| msg.reply_to.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get the "Message-ID" header.
+    pub fn message_id(&self) -> String {
+        self.inner
+            .lock()
+            .map(|msg| msg.message_id.clone())
+            .unwrap_or_default()
+    }
+
     /// Get the date as an RFC3339 string.
     pub fn date(&self) -> String {
         self.inner
@@ -201,6 +320,39 @@ impl EmailHandle {
             .lock()
             .map(|msg| msg.inline_assets.keys().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Get a list of all attachments with their metadata.
+    pub fn get_attachments(&self) -> Vec<AttachmentInfo> {
+        self.inner
+            .lock()
+            .map(|msg| {
+                msg.attachments
+                    .iter()
+                    .map(|a| AttachmentInfo {
+                        name: a.name.clone(),
+                        content_type: a.content_type.clone(),
+                        size: a.size,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get the number of attachments.
+    pub fn attachment_count(&self) -> u32 {
+        self.inner
+            .lock()
+            .map(|msg| msg.attachments.len() as u32)
+            .unwrap_or(0)
+    }
+
+    /// Get attachment content by index.
+    pub fn get_attachment_content(&self, index: u32) -> Option<Vec<u8>> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|msg| msg.attachments.get(index as usize).map(|a| a.content.clone()))
     }
 }
 
@@ -278,5 +430,56 @@ Content-Type: text/html
         // mail-parser is lenient, so this might parse but with empty fields
         // The important thing is it doesn't crash
         assert!(result.is_ok() || result.is_err());
+    }
+
+    static EMAIL_WITH_HEADERS: Lazy<&'static str> = Lazy::new(|| {
+        "Subject: Full Headers\r\n\
+         From: sender@example.com\r\n\
+         To: recipient@example.com\r\n\
+         Cc: cc@example.com\r\n\
+         Reply-To: reply@example.com\r\n\
+         Message-ID: <msg123@example.com>\r\n\r\n\
+         Body"
+    });
+
+    #[test]
+    fn parses_extended_headers() {
+        let handle = parse_eml(EMAIL_WITH_HEADERS.as_bytes().to_vec()).expect("should parse");
+        assert_eq!(handle.cc(), "cc@example.com");
+        assert_eq!(handle.reply_to(), "reply@example.com");
+        assert_eq!(handle.message_id(), "msg123@example.com");
+    }
+
+    static EMAIL_WITH_ATTACHMENT: Lazy<&'static str> = Lazy::new(|| {
+        "Subject: With Attachment\r\n\
+         From: sender@example.com\r\n\
+         To: recipient@example.com\r\n\
+         MIME-Version: 1.0\r\n\
+         Content-Type: multipart/mixed; boundary=\"mixed-boundary\"\r\n\
+         \r\n\
+         --mixed-boundary\r\n\
+         Content-Type: text/plain\r\n\
+         \r\n\
+         Body text\r\n\
+         --mixed-boundary\r\n\
+         Content-Type: application/pdf\r\n\
+         Content-Disposition: attachment; filename=\"test.pdf\"\r\n\
+         Content-Transfer-Encoding: base64\r\n\
+         \r\n\
+         SGVsbG8gV29ybGQh\r\n\
+         --mixed-boundary--\r\n"
+    });
+
+    #[test]
+    fn parses_attachment() {
+        let handle = parse_eml(EMAIL_WITH_ATTACHMENT.as_bytes().to_vec()).expect("should parse");
+        let attachments = handle.get_attachments();
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].name, "test.pdf");
+        assert_eq!(attachments[0].content_type, "application/pdf");
+        assert_eq!(handle.attachment_count(), 1);
+        // Content should be available
+        let content = handle.get_attachment_content(0);
+        assert!(content.is_some());
     }
 }

@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.btreemap.letterbox.ffi.EmailHandle
 import com.btreemap.letterbox.ffi.ParseException
 import com.btreemap.letterbox.ffi.parseEml
+import com.btreemap.letterbox.ui.AttachmentData
 import com.btreemap.letterbox.ui.EmailContent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +22,8 @@ import kotlinx.coroutines.withContext
 data class EmailUiState(
     val history: List<HistoryEntry> = emptyList(),
     val currentEmail: EmailContent? = null,
+    val currentEntryId: Long? = null,
+    val currentEmailBytes: ByteArray? = null,
     val isLoading: Boolean = false,
     val errorMessage: String? = null
 )
@@ -60,7 +63,9 @@ class EmailViewModel(
                 if (parsed != null) {
                     _uiState.update { it.copy(
                         isLoading = false,
-                        currentEmail = parsed
+                        currentEmail = parsed,
+                        currentEntryId = entry.id,
+                        currentEmailBytes = bytes
                     ) }
                 } else {
                     _uiState.update { it.copy(
@@ -97,7 +102,9 @@ class EmailViewModel(
                     if (parsed != null) {
                         _uiState.update { it.copy(
                             isLoading = false,
-                            currentEmail = parsed
+                            currentEmail = parsed,
+                            currentEntryId = entry.id,
+                            currentEmailBytes = bytes
                         ) }
                     } else {
                         _uiState.update { it.copy(
@@ -118,6 +125,28 @@ class EmailViewModel(
                 ) }
             }
         }
+    }
+
+    /**
+     * Remove the current email from history and close the viewer.
+     */
+    fun removeCurrentFromHistory() {
+        val entryId = _uiState.value.currentEntryId ?: return
+        viewModelScope.launch {
+            repository.delete(entryId)
+            _uiState.update { it.copy(
+                currentEmail = null,
+                currentEntryId = null,
+                currentEmailBytes = null
+            ) }
+        }
+    }
+
+    /**
+     * Get the current email bytes for sharing.
+     */
+    fun getCurrentEmailBytes(): ByteArray? {
+        return _uiState.value.currentEmailBytes
     }
 
     /**
@@ -142,7 +171,11 @@ class EmailViewModel(
      * Close the currently viewed email and return to history.
      */
     fun closeEmail() {
-        _uiState.update { it.copy(currentEmail = null) }
+        _uiState.update { it.copy(
+            currentEmail = null,
+            currentEntryId = null,
+            currentEmailBytes = null
+        ) }
     }
 
     /**
@@ -173,13 +206,28 @@ class EmailViewModel(
             try {
                 val handle: EmailHandle = parseEml(bytes)
                 
+                // Convert FFI attachments to UI attachment data
+                val attachments = handle.getAttachments().mapIndexed { index, info ->
+                    AttachmentData(
+                        name = info.name,
+                        contentType = info.contentType,
+                        size = info.size.toLong(),
+                        index = index
+                    )
+                }
+                
                 EmailContent(
                     subject = handle.subject(),
                     from = handle.from(),
                     to = handle.to(),
+                    cc = handle.cc(),
+                    replyTo = handle.replyTo(),
+                    messageId = handle.messageId(),
                     date = handle.date(),
                     bodyHtml = handle.bodyHtml(),
-                    getResource = { cid -> handle.getResource(cid) }
+                    attachments = attachments,
+                    getResource = { cid -> handle.getResource(cid) },
+                    getAttachmentContent = { index -> handle.getAttachmentContent(index.toUInt()) }
                 )
             } catch (e: ParseException) {
                 // Rust parser returned a parse error - fall back to Kotlin parser
@@ -206,6 +254,9 @@ class EmailViewModel(
             val subject = headers["subject"] ?: "Untitled"
             val from = headers["from"] ?: ""
             val to = headers["to"] ?: ""
+            val cc = headers["cc"] ?: ""
+            val replyTo = headers["reply-to"] ?: ""
+            val messageId = headers["message-id"] ?: ""
             val date = headers["date"] ?: ""
             
             // Convert plain text to basic HTML if needed
@@ -219,9 +270,14 @@ class EmailViewModel(
                 subject = subject,
                 from = from,
                 to = to,
+                cc = cc,
+                replyTo = replyTo,
+                messageId = messageId,
                 date = date,
                 bodyHtml = bodyHtml,
-                getResource = { _ -> null }
+                attachments = emptyList(), // Fallback parser doesn't extract attachments
+                getResource = { _ -> null },
+                getAttachmentContent = { _ -> null }
             )
         } catch (e: Exception) {
             null
