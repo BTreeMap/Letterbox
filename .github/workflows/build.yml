@@ -1,21 +1,26 @@
-name: Main Branch Build
+name: Build
 
 on:
   push:
     branches: ["main", "copilot/**"]
-    # Note: copilot/** branches run tests/builds but do NOT create pre-releases
-    # Only main branch creates pre-releases (see conditional in pre-release job)
+  pull_request:
+    branches: ["main"]
+  workflow_call:
+    outputs:
+      debug-artifact-name:
+        description: "Name of the debug APK artifact"
+        value: ${{ jobs.build.outputs.debug-artifact-name }}
+      release-artifact-name:
+        description: "Name of the release APK artifact"
+        value: ${{ jobs.build.outputs.release-artifact-name }}
 
-# Minimal permissions: only what's needed for pre-releases
 permissions:
-  contents: write  # Required for creating pre-releases
+  contents: read
 
 jobs:
   lint-and-test:
     name: Lint and Test
     runs-on: ubuntu-latest
-    permissions:
-      contents: read  # Override: this job only needs read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -99,11 +104,12 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/rust/letterbox-core/target/release
 
   build:
-    name: Build APK
+    name: Build APKs
     runs-on: ubuntu-latest
     needs: lint-and-test
-    permissions:
-      contents: read  # Override: this job only needs read
+    outputs:
+      debug-artifact-name: ${{ steps.artifact-names.outputs.debug }}
+      release-artifact-name: ${{ steps.artifact-names.outputs.release }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -132,8 +138,16 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked || true
 
+      - name: Install and pin NDK
+        run: |
+          sdkmanager --install "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
+
       - name: Gradle permissions
         run: chmod +x gradlew
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1  # v4.4.4
 
       - name: Build Android native libraries
         run: |
@@ -162,52 +176,30 @@ jobs:
           echo "Checking for .so files in release APK:"
           unzip -l app/build/outputs/apk/release/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in release APK!" && exit 1)
 
+      - name: Set artifact names
+        id: artifact-names
+        run: |
+          echo "debug=letterbox-debug-apk" >> $GITHUB_OUTPUT
+          echo "release=letterbox-release-apk" >> $GITHUB_OUTPUT
+
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: letterbox-debug-apk
+          name: ${{ steps.artifact-names.outputs.debug }}
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
 
       - name: Upload release APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: letterbox-release-apk
+          name: ${{ steps.artifact-names.outputs.release }}
           path: app/build/outputs/apk/release/*.apk
           retention-days: 30
 
-  pre-release:
-    name: Create Pre-release
-    needs: build
-    runs-on: ubuntu-latest
-    # Only create pre-releases for main branch (not copilot/** branches)
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      contents: write  # Required for creating releases
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download release APK
-        uses: actions/download-artifact@v4
+      - name: Upload debug test APK artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: letterbox-release-apk
-          path: ./artifacts
-
-      - name: Get short SHA
-        id: sha
-        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Create pre-release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: pre-release-${{ steps.sha.outputs.short }}
-          name: Pre-release ${{ steps.sha.outputs.short }}
-          prerelease: true
-          files: ./artifacts/*.apk
-          body: |
-            Automated pre-release from commit ${{ github.sha }}
-            
-            This is an unsigned APK for testing purposes.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: letterbox-debug-androidTest-apk
+          path: app/build/outputs/apk/androidTest/debug/*.apk
+          retention-days: 30
+          if-no-files-found: ignore
