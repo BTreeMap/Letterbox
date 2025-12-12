@@ -34,31 +34,39 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import com.btreemap.letterbox.ui.EmailContent
 import com.btreemap.letterbox.ui.EmailDetailScreen
 import com.btreemap.letterbox.ui.theme.LetterboxTheme
 import kotlinx.coroutines.launch
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -78,6 +86,13 @@ private object TimeConstants {
     const val WEEK_MS = 604_800_000L
 }
 
+/**
+ * File sharing constants.
+ */
+private object FileConstants {
+    const val MAX_FILENAME_LENGTH = 50
+}
+
 class MainActivity : ComponentActivity() {
     private val viewModel: EmailViewModel by viewModels {
         EmailViewModelFactory(InMemoryHistoryRepository(filesDir))
@@ -88,8 +103,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Track if launched from external VIEW intent
-        launchedFromExternalIntent = intent?.action == Intent.ACTION_VIEW
+        // Track if launched from external VIEW or SEND intent
+        launchedFromExternalIntent = intent?.action == Intent.ACTION_VIEW || 
+            intent?.action == Intent.ACTION_SEND
         
         // Handle incoming intent
         handleIntent(intent)
@@ -116,6 +132,9 @@ class MainActivity : ComponentActivity() {
                             LoadingScreen()
                         }
                         uiState.currentEmail != null -> {
+                            val context = LocalContext.current
+                            val scope = rememberCoroutineScope()
+                            
                             EmailDetailScreen(
                                 email = uiState.currentEmail!!,
                                 onNavigateBack = { 
@@ -124,6 +143,17 @@ class MainActivity : ComponentActivity() {
                                     } else {
                                         viewModel.closeEmail()
                                     }
+                                },
+                                onRemoveFromHistory = if (!launchedFromExternalIntent) {
+                                    {
+                                        viewModel.removeCurrentFromHistory()
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("Removed from history")
+                                        }
+                                    }
+                                } else null,
+                                onShareEml = {
+                                    shareCurrentEmail(context, uiState.currentEmail!!.subject)
                                 }
                             )
                         }
@@ -153,14 +183,27 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        launchedFromExternalIntent = intent.action == Intent.ACTION_VIEW
+        launchedFromExternalIntent = intent.action == Intent.ACTION_VIEW ||
+            intent.action == Intent.ACTION_SEND
         handleIntent(intent)
     }
 
     private fun handleIntent(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_VIEW) {
-            intent.data?.let { uri ->
-                loadEmailFromUri(uri, intent.type)
+        when (intent?.action) {
+            Intent.ACTION_VIEW -> {
+                intent.data?.let { uri ->
+                    loadEmailFromUri(uri, intent.type)
+                }
+            }
+            Intent.ACTION_SEND -> {
+                // Handle "Share" / "Send" intents - get URI from EXTRA_STREAM
+                @Suppress("DEPRECATION")
+                val uri = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+                uri?.let { loadEmailFromUri(it, intent.type) }
             }
         }
     }
@@ -183,6 +226,36 @@ class MainActivity : ComponentActivity() {
                 val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
                 if (nameIndex >= 0) cursor.getString(nameIndex) else null
             } else null
+        }
+    }
+
+    private fun shareCurrentEmail(context: android.content.Context, subject: String) {
+        val bytes = viewModel.getCurrentEmailBytes() ?: return
+        
+        try {
+            // Save to cache directory
+            val cacheDir = File(context.cacheDir, "shared")
+            cacheDir.mkdirs()
+            val filename = "${subject.take(FileConstants.MAX_FILENAME_LENGTH).replace(Regex("[^a-zA-Z0-9]"), "_")}.eml"
+            val file = File(cacheDir, filename)
+            file.writeBytes(bytes)
+            
+            // Create content URI via FileProvider
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+            
+            // Create share intent
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "message/rfc822"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(shareIntent, "Share email"))
+        } catch (e: Exception) {
+            viewModel.setError("Failed to share email: ${e.message}")
         }
     }
 }
@@ -210,7 +283,15 @@ private fun LetterboxScaffold(
     var showMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var showClearHistoryDialog by remember { mutableStateOf(false) }
+    var showSettingsSheet by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val settingsSheetState = rememberModalBottomSheetState()
+    
+    // Settings state
+    // TODO: Implement proper persistence using DataStore or SharedPreferences
+    // For now, settings are stored in memory and reset on app restart
+    var historyLimitIndex by remember { mutableIntStateOf(0) } // 0=10, 1=20, 2=50, 3=100, 4=Unlimited
+    var storeLocalCopies by remember { mutableStateOf(true) }
     
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -233,6 +314,13 @@ private fun LetterboxScaffold(
                         expanded = showMenu,
                         onDismissRequest = { showMenu = false }
                     ) {
+                        DropdownMenuItem(
+                            text = { Text("Settings") },
+                            onClick = {
+                                showMenu = false
+                                showSettingsSheet = true
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("Clear history") },
                             onClick = {
@@ -276,6 +364,25 @@ private fun LetterboxScaffold(
                 onEntryClick = onEntryClick,
                 onEntryDelete = onEntryDelete,
                 modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+    
+    // Settings bottom sheet
+    if (showSettingsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showSettingsSheet = false },
+            sheetState = settingsSheetState
+        ) {
+            SettingsContent(
+                historyLimitIndex = historyLimitIndex,
+                onHistoryLimitChange = { historyLimitIndex = it },
+                storeLocalCopies = storeLocalCopies,
+                onStoreLocalCopiesChange = { storeLocalCopies = it },
+                onClearHistory = {
+                    showSettingsSheet = false
+                    showClearHistoryDialog = true
+                }
             )
         }
     }
@@ -326,6 +433,93 @@ private fun LetterboxScaffold(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun SettingsContent(
+    historyLimitIndex: Int,
+    onHistoryLimitChange: (Int) -> Unit,
+    storeLocalCopies: Boolean,
+    onStoreLocalCopiesChange: (Boolean) -> Unit,
+    onClearHistory: () -> Unit
+) {
+    val historyLimitOptions = listOf("10", "20", "50", "100", "Unlimited")
+    
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = "Settings",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+        
+        // History limit setting
+        Column(modifier = Modifier.padding(vertical = 8.dp)) {
+            Text(
+                text = "History limit",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = "Maximum number of recent emails to keep: ${historyLimitOptions[historyLimitIndex]}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Slider(
+                value = historyLimitIndex.toFloat(),
+                onValueChange = { onHistoryLimitChange(it.toInt()) },
+                valueRange = 0f..4f,
+                steps = 3,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        
+        // Store local copies toggle
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Store local copies",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = "Keep copies of emails for reliable history access",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = storeLocalCopies,
+                onCheckedChange = onStoreLocalCopiesChange
+            )
+        }
+        
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        
+        // Clear history button
+        TextButton(
+            onClick = onClearHistory,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "Clear history",
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+        
+        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 

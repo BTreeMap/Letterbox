@@ -73,6 +73,10 @@ android {
             }
         }
     }
+
+    lint {
+        lintConfig = file("lint.xml")
+    }
 }
 
 val rustBuildEnabled = project.findProperty("rustBuild") == "true"
