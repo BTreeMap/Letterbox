@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -35,7 +34,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -43,7 +41,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -65,6 +62,21 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/**
+ * MIME types accepted by the file picker for email files.
+ */
+private val EMAIL_MIME_TYPES = arrayOf("message/rfc822", "application/eml", "*/*")
+
+/**
+ * Time constants for relative timestamp formatting (in milliseconds).
+ */
+private object TimeConstants {
+    const val MINUTE_MS = 60_000L
+    const val HOUR_MS = 3_600_000L
+    const val DAY_MS = 86_400_000L
+    const val WEEK_MS = 604_800_000L
+}
 
 class MainActivity : ComponentActivity() {
     private val viewModel: EmailViewModel by viewModels {
@@ -249,7 +261,7 @@ private fun LetterboxScaffold(
             // Open file button
             Button(
                 onClick = {
-                    filePickerLauncher.launch(arrayOf("message/rfc822", "application/eml", "*/*"))
+                    filePickerLauncher.launch(EMAIL_MIME_TYPES)
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -412,10 +424,10 @@ private fun formatTimestamp(timestamp: Long): String {
     val diff = now - timestamp
     
     return when {
-        diff < 60_000 -> "Just now"
-        diff < 3600_000 -> "${diff / 60_000}m ago"
-        diff < 86400_000 -> "${diff / 3600_000}h ago"
-        diff < 604800_000 -> "${diff / 86400_000}d ago"
+        diff < TimeConstants.MINUTE_MS -> "Just now"
+        diff < TimeConstants.HOUR_MS -> "${diff / TimeConstants.MINUTE_MS}m ago"
+        diff < TimeConstants.DAY_MS -> "${diff / TimeConstants.HOUR_MS}h ago"
+        diff < TimeConstants.WEEK_MS -> "${diff / TimeConstants.DAY_MS}d ago"
         else -> {
             val sdf = SimpleDateFormat("MMM d", Locale.getDefault())
             sdf.format(Date(timestamp))
