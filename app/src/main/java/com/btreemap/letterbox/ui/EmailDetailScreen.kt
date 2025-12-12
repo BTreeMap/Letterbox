@@ -378,7 +378,16 @@ private fun openAttachment(
         // Save attachment to cache directory
         val cacheDir = File(context.cacheDir, "attachments")
         cacheDir.mkdirs()
-        val file = File(cacheDir, attachment.name)
+        
+        // Sanitize filename to prevent path traversal attacks
+        val safeFilename = sanitizeFilename(attachment.name)
+        val file = File(cacheDir, safeFilename)
+        
+        // Verify the file is actually within the cache directory
+        if (!file.canonicalPath.startsWith(cacheDir.canonicalPath)) {
+            throw SecurityException("Invalid attachment filename")
+        }
+        
         file.writeBytes(content)
         
         // Create content URI via FileProvider
@@ -394,9 +403,38 @@ private fun openAttachment(
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(Intent.createChooser(intent, "Open with"))
+    } catch (e: SecurityException) {
+        android.widget.Toast.makeText(
+            context,
+            "Cannot open attachment: invalid filename",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
     } catch (e: Exception) {
-        // Handle error silently for now
-        e.printStackTrace()
+        android.widget.Toast.makeText(
+            context,
+            "Failed to open attachment: ${e.message}",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
+    }
+}
+
+/**
+ * Sanitize filename to prevent path traversal attacks.
+ * Removes path separators and other dangerous characters.
+ */
+private fun sanitizeFilename(name: String): String {
+    // Remove path separators and null bytes
+    val sanitized = name
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace("\u0000", "")
+        .trim()
+    
+    // If filename is empty or just dots, use a default name
+    return if (sanitized.isBlank() || sanitized.all { it == '.' }) {
+        "attachment"
+    } else {
+        sanitized
     }
 }
 

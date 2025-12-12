@@ -86,6 +86,13 @@ private object TimeConstants {
     const val WEEK_MS = 604_800_000L
 }
 
+/**
+ * File sharing constants.
+ */
+private object FileConstants {
+    const val MAX_FILENAME_LENGTH = 50
+}
+
 class MainActivity : ComponentActivity() {
     private val viewModel: EmailViewModel by viewModels {
         EmailViewModelFactory(InMemoryHistoryRepository(filesDir))
@@ -229,7 +236,7 @@ class MainActivity : ComponentActivity() {
             // Save to cache directory
             val cacheDir = File(context.cacheDir, "shared")
             cacheDir.mkdirs()
-            val filename = "${subject.take(50).replace(Regex("[^a-zA-Z0-9]"), "_")}.eml"
+            val filename = "${subject.take(FileConstants.MAX_FILENAME_LENGTH).replace(Regex("[^a-zA-Z0-9]"), "_")}.eml"
             val file = File(cacheDir, filename)
             file.writeBytes(bytes)
             
@@ -280,7 +287,9 @@ private fun LetterboxScaffold(
     val scope = rememberCoroutineScope()
     val settingsSheetState = rememberModalBottomSheetState()
     
-    // Settings state (in a real app, these would be persisted)
+    // Settings state
+    // TODO: Implement proper persistence using DataStore or SharedPreferences
+    // For now, settings are stored in memory and reset on app restart
     var historyLimitIndex by remember { mutableIntStateOf(0) } // 0=10, 1=20, 2=50, 3=100, 4=Unlimited
     var storeLocalCopies by remember { mutableStateOf(true) }
     

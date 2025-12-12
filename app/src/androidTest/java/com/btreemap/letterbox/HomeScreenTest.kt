@@ -144,4 +144,27 @@ class HomeScreenTest {
         // Snackbar should show "History cleared"
         composeTestRule.onNodeWithText("History cleared").assertIsDisplayed()
     }
+
+    @Test
+    fun homeScreen_overflowMenuOpensAndShowsSettings() {
+        // Click overflow menu
+        composeTestRule.onNodeWithContentDescription("More options").performClick()
+
+        // Verify "Settings" menu item is shown
+        composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
+    }
+
+    @Test
+    fun homeScreen_settingsBottomSheetOpensAndCloses() {
+        // Open overflow menu
+        composeTestRule.onNodeWithContentDescription("More options").performClick()
+
+        // Click Settings
+        composeTestRule.onNodeWithText("Settings").performClick()
+
+        // Verify Settings bottom sheet is shown with expected content
+        composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
+        composeTestRule.onNodeWithText("History limit").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Store local copies").assertIsDisplayed()
+    }
 }
