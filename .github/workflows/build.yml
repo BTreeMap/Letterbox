@@ -179,8 +179,8 @@ jobs:
       - name: Set artifact names
         id: artifact-names
         run: |
-          echo "debug=letterbox-debug-apk-${{ github.run_number }}" >> $GITHUB_OUTPUT
-          echo "release=letterbox-release-apk-${{ github.run_number }}" >> $GITHUB_OUTPUT
+          echo "debug=letterbox-debug-apk" >> $GITHUB_OUTPUT
+          echo "release=letterbox-release-apk" >> $GITHUB_OUTPUT
 
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
@@ -199,7 +199,7 @@ jobs:
       - name: Upload debug test APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: letterbox-debug-androidTest-apk-${{ github.run_number }}
+          name: letterbox-debug-androidTest-apk
           path: app/build/outputs/apk/androidTest/debug/*.apk
           retention-days: 30
           if-no-files-found: ignore
