@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -18,7 +21,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import java.io.ByteArrayInputStream
@@ -45,15 +53,44 @@ fun EmailDetailScreen(
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showDetailsDialog by remember { mutableStateOf(false) }
+    
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(text = email.subject, maxLines = 1) },
+                title = { 
+                    Text(
+                        text = email.subject, 
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    ) 
+                },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showMenu = !showMenu }) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "More options"
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Details") },
+                            onClick = {
+                                showMenu = false
+                                showDetailsDialog = true
+                            }
                         )
                     }
                 }
@@ -85,6 +122,27 @@ fun EmailDetailScreen(
                     .weight(1f)
             )
         }
+    }
+    
+    // Details dialog
+    if (showDetailsDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showDetailsDialog = false },
+            title = { Text("Email Details") },
+            text = { 
+                Column {
+                    Text("Subject: ${email.subject}")
+                    Text("From: ${email.from}")
+                    Text("To: ${email.to}")
+                    Text("Date: ${email.date}")
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { showDetailsDialog = false }) {
+                    Text("OK")
+                }
+            }
+        )
     }
 }
 

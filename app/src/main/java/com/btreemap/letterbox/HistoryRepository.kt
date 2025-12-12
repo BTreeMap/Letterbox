@@ -222,6 +222,40 @@ class InMemoryHistoryRepository(
 
     fun blobMeta(hash: String): BlobMeta? = blobs[hash]
 
+    /**
+     * Delete a single history entry by ID.
+     */
+    @Synchronized
+    fun delete(entryId: Long) {
+        val entry = _items.value.find { it.id == entryId } ?: return
+        val remaining = _items.value.filter { it.id != entryId }
+        _items.value = remaining
+        
+        // Check if blob is still referenced
+        val remainingRefs = remaining.count { it.blobHash == entry.blobHash }
+        if (remainingRefs == 0) {
+            blobs.remove(entry.blobHash)
+            File(casDir, entry.blobHash).delete()
+        } else {
+            blobs[entry.blobHash]?.let { meta ->
+                blobs[entry.blobHash] = meta.copy(refCount = remainingRefs)
+            }
+        }
+    }
+
+    /**
+     * Clear all history entries.
+     */
+    @Synchronized
+    fun clearAll() {
+        _items.value = emptyList()
+        // Delete all blob files
+        blobs.keys.toList().forEach { hash ->
+            File(casDir, hash).delete()
+        }
+        blobs.clear()
+    }
+
     private fun enforceLimit() {
         if (historyLimit <= 0) return
         val items = _items.value

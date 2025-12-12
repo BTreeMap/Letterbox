@@ -5,6 +5,7 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -52,5 +53,54 @@ class HistoryRepositoryTest {
         assertFalse(items.any { it.displayName == "one" })
 
         assertEquals(null, repository.blobMeta(first.blobHash))
+    }
+
+    @Test
+    fun `delete removes single entry and cleans up orphan blob`() {
+        val entry = repository.ingest("Test content".toByteArray(), "test", null)
+        val blobHash = entry.blobHash
+        
+        // Verify entry exists
+        assertEquals(1, repository.items.value.size)
+        assertNotNull(repository.blobMeta(blobHash))
+        assertTrue(repository.blobFor(blobHash)?.exists() == true)
+        
+        // Delete the entry
+        repository.delete(entry.id)
+        
+        // Verify entry is removed
+        assertEquals(0, repository.items.value.size)
+        assertNull(repository.blobMeta(blobHash))
+        assertFalse(repository.blobFor(blobHash)?.exists() == true)
+    }
+
+    @Test
+    fun `delete preserves blob when other entries reference it`() {
+        val bytes = "Shared content".toByteArray()
+        val first = repository.ingest(bytes, "first", null)
+        val second = repository.ingest(bytes, "second", null)
+        
+        val blobHash = first.blobHash
+        assertEquals(second.blobHash, blobHash)
+        
+        // Delete first entry
+        repository.delete(first.id)
+        
+        // Blob should still exist for second entry
+        assertEquals(1, repository.items.value.size)
+        assertNotNull(repository.blobMeta(blobHash))
+        assertTrue(repository.blobFor(blobHash)?.exists() == true)
+    }
+
+    @Test
+    fun `clearAll removes all entries and blobs`() {
+        repository.ingest("One".toByteArray(), "one", null)
+        repository.ingest("Two".toByteArray(), "two", null)
+        
+        assertEquals(2, repository.items.value.size)
+        
+        repository.clearAll()
+        
+        assertEquals(0, repository.items.value.size)
     }
 }
