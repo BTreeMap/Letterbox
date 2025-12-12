@@ -121,6 +121,24 @@ class EmailViewModel(
     }
 
     /**
+     * Delete a history entry.
+     */
+    fun deleteHistoryEntry(entry: HistoryEntry) {
+        viewModelScope.launch {
+            repository.delete(entry.id)
+        }
+    }
+
+    /**
+     * Clear all history entries.
+     */
+    fun clearHistory() {
+        viewModelScope.launch {
+            repository.clearAll()
+        }
+    }
+
+    /**
      * Close the currently viewed email and return to history.
      */
     fun closeEmail() {

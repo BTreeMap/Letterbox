@@ -4,50 +4,80 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.btreemap.letterbox.ui.EmailContent
 import com.btreemap.letterbox.ui.EmailDetailScreen
 import com.btreemap.letterbox.ui.theme.LetterboxTheme
-import java.io.InputStream
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private val viewModel: EmailViewModel by viewModels {
         EmailViewModelFactory(InMemoryHistoryRepository(filesDir))
     }
+    
+    private var launchedFromExternalIntent = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Track if launched from external VIEW intent
+        launchedFromExternalIntent = intent?.action == Intent.ACTION_VIEW
         
         // Handle incoming intent
         handleIntent(intent)
@@ -76,7 +106,13 @@ class MainActivity : ComponentActivity() {
                         uiState.currentEmail != null -> {
                             EmailDetailScreen(
                                 email = uiState.currentEmail!!,
-                                onNavigateBack = { viewModel.closeEmail() }
+                                onNavigateBack = { 
+                                    if (launchedFromExternalIntent) {
+                                        finish()
+                                    } else {
+                                        viewModel.closeEmail()
+                                    }
+                                }
                             )
                         }
                         else -> {
@@ -84,6 +120,15 @@ class MainActivity : ComponentActivity() {
                                 history = uiState.history,
                                 onEntryClick = { entry ->
                                     viewModel.openHistoryEntry(entry)
+                                },
+                                onEntryDelete = { entry ->
+                                    viewModel.deleteHistoryEntry(entry)
+                                },
+                                onOpenFile = { uri ->
+                                    loadEmailFromUri(uri, null)
+                                },
+                                onClearHistory = {
+                                    viewModel.clearHistory()
                                 },
                                 snackbarHostState = snackbarHostState
                             )
@@ -96,6 +141,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        launchedFromExternalIntent = intent.action == Intent.ACTION_VIEW
         handleIntent(intent)
     }
 
@@ -144,18 +190,129 @@ private fun LoadingScreen() {
 private fun LetterboxScaffold(
     history: List<HistoryEntry>,
     onEntryClick: (HistoryEntry) -> Unit,
+    onEntryDelete: (HistoryEntry) -> Unit,
+    onOpenFile: (Uri) -> Unit,
+    onClearHistory: () -> Unit,
     snackbarHostState: SnackbarHostState
 ) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showAboutDialog by remember { mutableStateOf(false) }
+    var showClearHistoryDialog by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let { onOpenFile(it) }
+    }
+    
     Scaffold(
-        topBar = { TopAppBar(title = { Text(text = "Letterbox") }) },
+        topBar = { 
+            TopAppBar(
+                title = { Text(text = "Letterbox") },
+                actions = {
+                    IconButton(onClick = { showMenu = !showMenu }) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "More options"
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Clear history") },
+                            onClick = {
+                                showMenu = false
+                                showClearHistoryDialog = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("About") },
+                            onClick = {
+                                showMenu = false
+                                showAboutDialog = true
+                            }
+                        )
+                    }
+                }
+            )
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        HistoryList(
-            entries = history,
-            onEntryClick = onEntryClick,
+        Column(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
+        ) {
+            // Open file button
+            Button(
+                onClick = {
+                    filePickerLauncher.launch(arrayOf("message/rfc822", "application/eml", "*/*"))
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text("Open file")
+            }
+            
+            // History list
+            HistoryList(
+                entries = history,
+                onEntryClick = onEntryClick,
+                onEntryDelete = onEntryDelete,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+    
+    // About dialog
+    if (showAboutDialog) {
+        AlertDialog(
+            onDismissRequest = { showAboutDialog = false },
+            title = { Text("About Letterbox") },
+            text = { 
+                Text(
+                    "Letterbox is a privacy-focused .eml and .msg file viewer.\n\n" +
+                    "• Zero network permissions\n" +
+                    "• Secure sandboxed rendering\n" +
+                    "• Powered by Rust mail-parser"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showAboutDialog = false }) {
+                    Text("OK")
+                }
+            }
+        )
+    }
+    
+    // Clear history confirmation dialog
+    if (showClearHistoryDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearHistoryDialog = false },
+            title = { Text("Clear history?") },
+            text = { Text("This will remove all items from your history. This action cannot be undone.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearHistoryDialog = false
+                        onClearHistory()
+                        scope.launch {
+                            snackbarHostState.showSnackbar("History cleared")
+                        }
+                    }
+                ) {
+                    Text("Clear")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearHistoryDialog = false }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }
@@ -164,12 +321,17 @@ private fun LetterboxScaffold(
 private fun HistoryList(
     entries: List<HistoryEntry>,
     onEntryClick: (HistoryEntry) -> Unit,
+    onEntryDelete: (HistoryEntry) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (entries.isEmpty()) {
-        Column(modifier = modifier, verticalArrangement = Arrangement.Center) {
+        Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Text(
-                text = "No history yet. Open an .eml or .msg file to get started.",
+                text = "Open an .eml or .msg file to get started.",
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.padding(16.dp)
             )
@@ -182,7 +344,8 @@ private fun HistoryList(
             items(entries) { entry ->
                 HistoryRow(
                     entry = entry,
-                    onClick = { onEntryClick(entry) }
+                    onClick = { onEntryClick(entry) },
+                    onDelete = { onEntryDelete(entry) }
                 )
                 HorizontalDivider()
             }
@@ -191,22 +354,82 @@ private fun HistoryList(
 }
 
 @Composable
-private fun HistoryRow(entry: HistoryEntry, onClick: () -> Unit) {
-    Column(
+private fun HistoryRow(
+    entry: HistoryEntry, 
+    onClick: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = entry.displayName,
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-        )
-        Text(
-            text = entry.originalUri ?: "Local file",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.outline
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = entry.displayName,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Row {
+                Text(
+                    text = formatTimestamp(entry.lastAccessed),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                entry.originalUri?.let { uri ->
+                    Text(
+                        text = " • ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = extractSourceName(uri),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
+            }
+        }
+        IconButton(onClick = onDelete) {
+            Icon(
+                imageVector = Icons.Default.Delete,
+                contentDescription = "Delete",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun formatTimestamp(timestamp: Long): String {
+    val now = System.currentTimeMillis()
+    val diff = now - timestamp
+    
+    return when {
+        diff < 60_000 -> "Just now"
+        diff < 3600_000 -> "${diff / 60_000}m ago"
+        diff < 86400_000 -> "${diff / 3600_000}h ago"
+        diff < 604800_000 -> "${diff / 86400_000}d ago"
+        else -> {
+            val sdf = SimpleDateFormat("MMM d", Locale.getDefault())
+            sdf.format(Date(timestamp))
+        }
+    }
+}
+
+private fun extractSourceName(uri: String): String {
+    return when {
+        uri.startsWith("content://com.google.android.gm") -> "Gmail"
+        uri.startsWith("content://com.google.android.apps.docs") -> "Drive"
+        uri.startsWith("content://com.android.providers.downloads") -> "Downloads"
+        uri.startsWith("content://media/") -> "Files"
+        else -> "External"
     }
 }
 
@@ -224,7 +447,8 @@ private fun PreviewHistoryList() {
                     lastAccessed = System.currentTimeMillis()
                 )
             ),
-            onEntryClick = {}
+            onEntryClick = {},
+            onEntryDelete = {}
         )
     }
 }
