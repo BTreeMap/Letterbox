@@ -63,7 +63,7 @@ android {
                 create("pixel7Api34") {
                     device = "Pixel 7"
                     apiLevel = 34
-                    systemImageSource = "aosp"
+                    systemImageSource = "google"
                 }
             }
             groups {

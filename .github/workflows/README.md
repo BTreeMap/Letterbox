@@ -1,46 +1,47 @@
 # GitHub Actions Workflows
 
-This directory contains the CI/CD workflows for the Letterbox project. The workflows have been split into three separate files following security best practices and the principle of least privilege.
+This directory contains the CI/CD workflows for the Letterbox project. The workflows follow security best practices with principle of least privilege and consolidated build steps for efficiency.
 
 ## Workflows Overview
 
-### 1. `pull-request.yml` - Pull Request Checks
-**Trigger:** When a pull request is opened or updated targeting the `main` branch.
+### 1. `build.yml` - Unified Build Workflow
+**Trigger:** Push to `main`/`copilot/**` branches, pull requests to `main`, or called by other workflows.
 
 **Permissions:** `contents: read` (read-only)
 
-**Purpose:** Validates code quality and functionality for pull requests without granting write permissions.
+**Purpose:** Central build workflow that handles linting, testing, and APK compilation. Other workflows can trigger on its completion to avoid rebuilding.
 
 **Jobs:**
 - **lint-and-test**: Runs Rust format checks, Rust tests, Android lint, and Android unit tests
-- **build**: Builds a debug APK for verification
+- **build**: Builds debug and release APKs with native libraries for all architectures
 
-**Security Notes:**
-- No `contents: write` permission - follows security best practice for PR workflows
-- Artifacts are retained for 7 days only (shorter retention for PR builds)
-- APK artifacts are namespaced with PR number to avoid conflicts
+**Outputs:**
+- `debug-artifact-name`: Name of the uploaded debug APK artifact
+- `release-artifact-name`: Name of the uploaded release APK artifact
 
-### 2. `main-branch.yml` - Main Branch Build
-**Trigger:** When code is pushed to `main` or `copilot/**` branches.
+### 2. `android-ui.yml` - Android UI Tests
+**Trigger:** On completion of the Build workflow (via `workflow_run`).
 
-**Permissions:** `contents: write` (scoped to pre-release job only)
+**Permissions:** `contents: read`, `actions: read`
 
-**Purpose:** Builds and tests code on main branch, creates pre-releases for testing.
+**Purpose:** Runs instrumented UI tests using Gradle Managed Devices with hardware acceleration (KVM).
 
 **Jobs:**
-- **lint-and-test**: Full validation suite (overrides permission to `contents: read`)
-- **build**: Builds both debug and release APKs (overrides permission to `contents: read`)
-- **pre-release**: Creates automated pre-releases (uses `contents: write`)
+- **ui-tests**: Runs comprehensive UI tests on an emulated Pixel 7 (API 34)
 
-**Security Notes:**
-- Global `contents: write` permission, but individual jobs override to `read` where possible
-- Only the `pre-release` job actually needs write permissions
-- Pre-releases are only created from the `main` branch (not copilot branches)
-  - `copilot/**` branches trigger lint/test/build for validation but skip pre-release creation
-  - This allows development branches to be tested without creating unnecessary releases
-- Artifacts retained for 30 days
+**Test Coverage:**
+- Home screen validation (title, buttons, dialogs)
+- Navigation flows (menu interactions, state consistency)
+- Accessibility checks (content descriptions, element counts)
 
-### 3. `release.yml` - Release Publication
+### 3. `pre-release.yml` - Pre-release Creation
+**Trigger:** On successful completion of Build workflow (main branch only).
+
+**Permissions:** `contents: write`, `actions: read`
+
+**Purpose:** Creates automated pre-releases from main branch builds by downloading APK artifacts from the build workflow.
+
+### 4. `release.yml` - Release Publication
 **Trigger:** When a GitHub release is published.
 
 **Permissions:** `contents: write` (scoped to publish job only)
@@ -51,28 +52,38 @@ This directory contains the CI/CD workflows for the Letterbox project. The workf
 - **build**: Compiles the release APK (overrides permission to `contents: read`)
 - **publish**: Uploads APK to the release (uses `contents: write`)
 
-**Security Notes:**
-- Global `contents: write` permission, but build job overrides to `read`
-- Only the `publish` job actually needs write permissions
-- Artifacts retained for 90 days (longer retention for releases)
+## Workflow Dependencies
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Push / Pull Request                       │
+└─────────────────────────┬───────────────────────────────────┘
+                          │
+                          ▼
+              ┌───────────────────────┐
+              │      build.yml        │
+              │  (lint, test, build)  │
+              └───────────┬───────────┘
+                          │
+          ┌───────────────┼───────────────┐
+          │               │               │
+          ▼               ▼               ▼
+┌─────────────────┐ ┌───────────────┐ ┌─────────────────┐
+│ android-ui.yml  │ │pre-release.yml│ │  (other future  │
+│   (UI tests)    │ │ (main only)   │ │   consumers)    │
+└─────────────────┘ └───────────────┘ └─────────────────┘
+```
 
 ## Security Improvements
 
-The workflow separation provides the following security benefits:
-
-1. **Least Privilege for PRs**: Pull request workflows have no write permissions, preventing malicious PRs from modifying repository contents or creating releases.
-
-2. **Scoped Permissions**: Each workflow has the minimum permissions needed for its specific purpose.
-
-3. **Job-Level Permission Overrides**: Within workflows that need some write permissions, individual jobs override to read-only where possible.
-
+1. **Least Privilege for PRs**: Build workflow has no write permissions.
+2. **Consolidated Building**: APKs are built once and shared via artifacts.
+3. **Job-Level Permission Overrides**: Within workflows that need write permissions, individual jobs override to read-only where possible.
 4. **Clear Separation of Concerns**: Different workflows for different purposes makes it easier to audit and maintain security policies.
-
-5. **Reduced Attack Surface**: Compromised PR builds cannot escalate privileges or modify the repository.
 
 ## Build Process
 
-All workflows follow a similar build process:
+All builds follow a similar process:
 
 1. **Setup**: Install JDK, Android SDK, Rust toolchain, and cargo-ndk
 2. **Lint**: Run format checks on Rust code and Android lint
@@ -81,25 +92,36 @@ All workflows follow a similar build process:
 5. **Build APK**: Assemble debug and/or release APK files
 6. **Artifact Upload**: Store APKs as GitHub Actions artifacts
 
+## UI Testing
+
+The `android-ui.yml` workflow runs instrumented tests using Gradle Managed Devices:
+
+```bash
+# Run UI tests locally
+./gradlew pixel7Api34DebugAndroidTest
+```
+
+Test files are located in `app/src/androidTest/java/com/btreemap/letterbox/`:
+- `HomeScreenTest.kt` - Core UI element tests
+- `NavigationTest.kt` - Navigation flow tests
+- `AccessibilityTest.kt` - Accessibility compliance tests
+
 ## Artifact Retention Policies
 
-- **PR builds**: 7 days (short-lived, for immediate verification)
-- **Main branch builds**: 30 days (for ongoing testing)
-- **Release builds**: 90 days (for long-term availability)
+- **Build artifacts**: 30 days
+- **UI test artifacts**: 14 days
+- **Release builds**: 90 days
 
 ## Testing Locally
 
 To test changes to these workflows locally, you can use [act](https://github.com/nektos/act):
 
 ```bash
-# Test PR workflow
-act pull_request -W .github/workflows/pull-request.yml
-
-# Test main branch workflow
-act push -W .github/workflows/main-branch.yml
+# Test build workflow
+act push -W .github/workflows/build.yml
 
 # Test release workflow
 act release -W .github/workflows/release.yml
 ```
 
-Note: Local testing requires Docker and may not perfectly replicate the GitHub Actions environment.
+Note: Local testing requires Docker and may not perfectly replicate the GitHub Actions environment. UI tests require KVM which is not available in Docker.

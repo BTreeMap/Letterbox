@@ -1,23 +1,28 @@
 name: Android UI Tests
 
 on:
-  pull_request:
-    branches: ["main"]
-  push:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
     branches: ["main", "copilot/**"]
 
 permissions:
   contents: read
+  actions: read  # Required to download artifacts from triggering workflow
 
 jobs:
   ui-tests:
     name: Instrumented UI Tests
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Only run if the build workflow succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Enable KVM group perms
         run: |
@@ -37,7 +42,7 @@ jobs:
       - name: Install Android components
         run: |
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-          sdkmanager "system-images;android-34;aosp;x86_64"
+          sdkmanager "system-images;android-34;google_apis;x86_64"
           sdkmanager "emulator"
 
       - name: Accept Android licenses
@@ -46,18 +51,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
-
-      - name: Cache Gradle dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-ui-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-ui-
-            gradle-${{ runner.os }}-
+          targets: x86_64-linux-android
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v4
@@ -88,7 +82,7 @@ jobs:
       - name: Gradle permissions
         run: chmod +x gradlew
 
-      - name: Build Android native libraries
+      - name: Build Android native libraries for x86_64
         run: |
           cargo ndk -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --release
         working-directory: rust/letterbox-core
@@ -103,7 +97,7 @@ jobs:
           fi
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1  # v4.4.4 - SHA pinned for security
+        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1  # v4.4.4
 
       - name: Run instrumented UI tests (Gradle Managed Devices)
         run: |

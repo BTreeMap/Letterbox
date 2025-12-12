@@ -1,0 +1,53 @@
+name: Pre-release
+
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
+    branches: ["main"]
+
+permissions:
+  contents: write  # Required for creating releases
+  actions: read    # Required to download artifacts
+
+jobs:
+  pre-release:
+    name: Create Pre-release
+    runs-on: ubuntu-latest
+    # Only run if build succeeded and on main branch
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Download release APK from build workflow
+        uses: actions/download-artifact@v4
+        with:
+          pattern: letterbox-release-apk-*
+          path: ./artifacts
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -la ./artifacts
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Create pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pre-release-${{ steps.sha.outputs.short }}
+          name: Pre-release ${{ steps.sha.outputs.short }}
+          prerelease: true
+          files: ./artifacts/*.apk
+          body: |
+            Automated pre-release from commit ${{ github.event.workflow_run.head_sha }}
+            
+            This is an unsigned APK for testing purposes.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
