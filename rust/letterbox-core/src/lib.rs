@@ -125,39 +125,41 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
         if part_idx == 0 {
             continue;
         }
-        
+
         // Check if this part is an attachment (has Content-Disposition: attachment)
         // or has a filename and is not already an inline CID reference
         let is_inline_cid = part.content_id().is_some();
-        let content_type = part.content_type().map(|ct| {
-            if let Some(subtype) = ct.subtype() {
-                format!("{}/{}", ct.ctype(), subtype)
-            } else {
-                ct.ctype().to_string()
-            }
-        }).unwrap_or_else(|| "application/octet-stream".to_string());
-        
+        let content_type = part
+            .content_type()
+            .map(|ct| {
+                if let Some(subtype) = ct.subtype() {
+                    format!("{}/{}", ct.ctype(), subtype)
+                } else {
+                    ct.ctype().to_string()
+                }
+            })
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+
         // Skip text/plain and text/html parts that are the main body
         let is_body_part = content_type == "text/plain" || content_type == "text/html";
-        
+
         // Get the attachment name
-        let attachment_name = part.attachment_name()
-            .map(|s| s.to_string())
-            .or_else(|| {
-                // Fallback to Content-Type name parameter
-                part.content_type()
-                    .and_then(|ct| ct.attribute("name"))
-                    .map(|s| s.to_string())
-            });
-        
+        let attachment_name = part.attachment_name().map(|s| s.to_string()).or_else(|| {
+            // Fallback to Content-Type name parameter
+            part.content_type()
+                .and_then(|ct| ct.attribute("name"))
+                .map(|s| s.to_string())
+        });
+
         // Determine if this is an attachment:
         // - Has a filename
         // - Or is explicitly marked as attachment
         // - And is not an inline CID or body part
-        let has_content_disposition_attachment = part.content_disposition()
+        let has_content_disposition_attachment = part
+            .content_disposition()
             .map(|cd| cd.ctype() == "attachment")
             .unwrap_or(false);
-        
+
         if attachment_name.is_some() || has_content_disposition_attachment {
             if !is_inline_cid && !(is_body_part && attachment_name.is_none()) {
                 let bytes = part.contents();
@@ -349,10 +351,11 @@ impl EmailHandle {
 
     /// Get attachment content by index.
     pub fn get_attachment_content(&self, index: u32) -> Option<Vec<u8>> {
-        self.inner
-            .lock()
-            .ok()
-            .and_then(|msg| msg.attachments.get(index as usize).map(|a| a.content.clone()))
+        self.inner.lock().ok().and_then(|msg| {
+            msg.attachments
+                .get(index as usize)
+                .map(|a| a.content.clone())
+        })
     }
 }
 
