@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.btreemap.letterbox.ffi.EmailHandle
 import com.btreemap.letterbox.ffi.ParseException
 import com.btreemap.letterbox.ffi.parseEml
+import com.btreemap.letterbox.ffi.parseEmlFromPath
 import com.btreemap.letterbox.ui.AttachmentData
 import com.btreemap.letterbox.ui.EmailContent
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * UI State for the main screen.
@@ -84,6 +86,7 @@ class EmailViewModel(
 
     /**
      * Open a history entry for viewing.
+     * Uses path-based parsing when available to avoid copying file into JVM heap.
      */
     fun openHistoryEntry(entry: HistoryEntry) {
         viewModelScope.launch {
@@ -96,10 +99,13 @@ class EmailViewModel(
                 // Load the file content
                 val file = repository.blobFor(entry.blobHash)
                 if (file != null && file.exists()) {
-                    val bytes = file.readBytes()
-                    val parsed = parseEmailBytes(bytes)
+                    // Use path-based parsing to avoid JVM heap allocation during parsing
+                    val parsed = parseEmailFromPath(file)
                     
                     if (parsed != null) {
+                        // Read bytes for sharing functionality
+                        // Note: This could be optimized to load lazily only when sharing
+                        val bytes = file.readBytes()
                         _uiState.update { it.copy(
                             isLoading = false,
                             currentEmail = parsed,
@@ -238,6 +244,53 @@ class EmailViewModel(
             } catch (e: ExceptionInInitializerError) {
                 // Library initialization failed - fall back to Kotlin parser
                 parseEmailBytesKotlin(bytes)
+            }
+        }
+    }
+
+    /**
+     * Parse email from a file path using the Rust FFI via UniFFI bindings.
+     * 
+     * This is the preferred method for large emails as it avoids copying the entire
+     * file into the JVM heap. Rust reads/mmaps the file directly.
+     */
+    private suspend fun parseEmailFromPath(file: File): EmailContent? {
+        return withContext(Dispatchers.Default) {
+            try {
+                val handle: EmailHandle = parseEmlFromPath(file.absolutePath)
+                
+                // Convert FFI attachments to UI attachment data
+                val attachments = handle.getAttachments().mapIndexed { index, info ->
+                    AttachmentData(
+                        name = info.name,
+                        contentType = info.contentType,
+                        size = info.size.toLong(),
+                        index = index
+                    )
+                }
+                
+                EmailContent(
+                    subject = handle.subject(),
+                    from = handle.from(),
+                    to = handle.to(),
+                    cc = handle.cc(),
+                    replyTo = handle.replyTo(),
+                    messageId = handle.messageId(),
+                    date = handle.date(),
+                    bodyHtml = handle.bodyHtml(),
+                    attachments = attachments,
+                    getResource = { cid -> handle.getResource(cid) },
+                    getAttachmentContent = { index -> handle.getAttachmentContent(index.toUInt()) }
+                )
+            } catch (e: ParseException) {
+                // Rust parser returned a parse error - fall back to Kotlin parser
+                parseEmailBytesKotlin(file.readBytes())
+            } catch (e: UnsatisfiedLinkError) {
+                // Native library not available - fall back to Kotlin parser
+                parseEmailBytesKotlin(file.readBytes())
+            } catch (e: ExceptionInInitializerError) {
+                // Library initialization failed - fall back to Kotlin parser
+                parseEmailBytesKotlin(file.readBytes())
             }
         }
     }
