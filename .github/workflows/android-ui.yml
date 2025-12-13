@@ -112,10 +112,14 @@ jobs:
         run: |
           mkdir -p artifacts
 
-          # Capture device state if any device is still connected
-          adb devices || true
-          adb logcat -d > artifacts/logcat.txt 2>&1 || true
-          adb exec-out screencap -p > artifacts/final-screen.png 2>&1 || true
+          # Restart adb server to prevent hangs (best-effort)
+          timeout 20s adb kill-server || true
+          timeout 20s adb start-server || true
+
+          # Capture device state if any device is still connected (with timeout to prevent hangs)
+          timeout 10s adb devices || true
+          timeout 30s adb logcat -d > artifacts/logcat.txt 2>&1 || true
+          timeout 10s adb exec-out screencap -p > artifacts/final-screen.png 2>&1 || true
 
           # Collect Gradle test reports
           cp -r app/build/reports artifacts/ 2>/dev/null || true
