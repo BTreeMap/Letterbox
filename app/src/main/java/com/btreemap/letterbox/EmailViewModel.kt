@@ -99,11 +99,12 @@ class EmailViewModel(
                 // Load the file content
                 val file = repository.blobFor(entry.blobHash)
                 if (file != null && file.exists()) {
-                    // Use path-based parsing to avoid JVM heap allocation
+                    // Use path-based parsing to avoid JVM heap allocation during parsing
                     val parsed = parseEmailFromPath(file)
                     
                     if (parsed != null) {
-                        // Only read bytes if needed for sharing (lazy load)
+                        // Read bytes for sharing functionality
+                        // Note: This could be optimized to load lazily only when sharing
                         val bytes = file.readBytes()
                         _uiState.update { it.copy(
                             isLoading = false,

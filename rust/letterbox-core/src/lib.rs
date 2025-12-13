@@ -697,8 +697,6 @@ Content-Type: text/html
 
     #[test]
     fn parse_eml_from_path_works_with_valid_file() {
-        use std::io::Write;
-
         // Create a temp file
         let temp_dir = std::env::temp_dir();
         let temp_file = temp_dir.join("test_email.eml");
