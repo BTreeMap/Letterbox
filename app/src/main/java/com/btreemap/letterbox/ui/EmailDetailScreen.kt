@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -105,7 +106,8 @@ fun EmailDetailScreen(
                     Text(
                         text = email.subject, 
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("topBarTitle")
                     ) 
                 },
                 navigationIcon = {
@@ -219,7 +221,7 @@ private fun EmailDetailsDialog(
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
-                DetailRow("Subject", email.subject)
+                DetailRow("Subject", email.subject, valueTestTag = "dialogSubject")
                 DetailRow("From", email.from)
                 DetailRow("To", email.to)
                 if (email.cc.isNotBlank()) {
@@ -239,7 +241,8 @@ private fun EmailDetailsDialog(
                     Text(
                         text = "Attachments (${email.attachments.size})",
                         style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.testTag("dialogAttachmentsCount")
                     )
                     email.attachments.forEach { attachment ->
                         Text(
@@ -260,7 +263,7 @@ private fun EmailDetailsDialog(
 }
 
 @Composable
-private fun DetailRow(label: String, value: String) {
+private fun DetailRow(label: String, value: String, valueTestTag: String? = null) {
     if (value.isNotBlank()) {
         Column(modifier = Modifier.padding(vertical = 2.dp)) {
             Text(
@@ -270,7 +273,8 @@ private fun DetailRow(label: String, value: String) {
             )
             Text(
                 text = value,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = if (valueTestTag != null) Modifier.testTag(valueTestTag) else Modifier
             )
         }
     }

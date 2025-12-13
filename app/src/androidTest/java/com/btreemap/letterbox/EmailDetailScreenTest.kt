@@ -3,6 +3,7 @@ package com.btreemap.letterbox
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -130,11 +131,13 @@ class EmailDetailScreenTest {
 
         // Verify extended details are shown
         composeTestRule.onNodeWithText("Email Details").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Test Subject").assertIsDisplayed()
+        // Use testTag for subject since it appears in both TopAppBar and dialog
+        composeTestRule.onNodeWithTag("dialogSubject").assertIsDisplayed()
         composeTestRule.onNodeWithText("cc@example.com").assertIsDisplayed()
         composeTestRule.onNodeWithText("reply@example.com").assertIsDisplayed()
         composeTestRule.onNodeWithText("msg123@example.com").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Attachments (1)").assertIsDisplayed()
+        // Use testTag for attachments count since it appears in both main screen and dialog
+        composeTestRule.onNodeWithTag("dialogAttachmentsCount").assertIsDisplayed()
         composeTestRule.onNodeWithText("• test.pdf (1 KB)", substring = true).assertIsDisplayed()
     }
 
