@@ -284,4 +284,248 @@ class RustFfiIntegrationTest {
         
         handle.destroy()
     }
+
+    // Tests for optimized FFI functions
+
+    @Test
+    fun `parse email from path works with valid file`() {
+        requireLibrary()
+        
+        val emlContent = """
+            Subject: Path Test
+            From: sender@example.com
+            To: recipient@example.com
+            
+            Body content
+        """.trimIndent()
+        
+        // Create temp file
+        val tempFile = java.io.File.createTempFile("test_email", ".eml")
+        tempFile.writeBytes(emlContent.toByteArray())
+        
+        try {
+            val handle = parseEmlFromPath(tempFile.absolutePath)
+            assertEquals("Path Test", handle.subject())
+            assertEquals("sender@example.com", handle.from())
+            handle.destroy()
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
+    fun `parse email from path throws for missing file`() {
+        requireLibrary()
+        
+        assertFailsWith<ParseException.FileNotFound> {
+            parseEmlFromPath("/nonexistent/path/email.eml")
+        }
+    }
+
+    @Test
+    fun `get resource metadata returns inline asset info`() {
+        requireLibrary()
+        
+        val emlContent = """
+            Subject: Email with Image
+            From: sender@example.com
+            To: recipient@example.com
+            MIME-Version: 1.0
+            Content-Type: multipart/related; boundary="boundary456"
+            
+            --boundary456
+            Content-Type: text/html
+            
+            <html><body><img src="cid:image001"></body></html>
+            --boundary456
+            Content-Type: image/png
+            Content-ID: <image001>
+            Content-Transfer-Encoding: base64
+            
+            iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==
+            --boundary456--
+        """.trimIndent()
+        
+        val handle = parseEml(emlContent.toByteArray())
+        
+        val metadata = handle.getResourceMetadata()
+        // Verify we can call the API without error
+        assertNotNull(metadata)
+        
+        handle.destroy()
+    }
+
+    @Test
+    fun `get resource content type returns mime type`() {
+        requireLibrary()
+        
+        val emlContent = """
+            Subject: Email with Image
+            From: sender@example.com
+            To: recipient@example.com
+            MIME-Version: 1.0
+            Content-Type: multipart/related; boundary="boundary456"
+            
+            --boundary456
+            Content-Type: text/html
+            
+            <html><body><img src="cid:image001"></body></html>
+            --boundary456
+            Content-Type: image/png
+            Content-ID: <image001>
+            Content-Transfer-Encoding: base64
+            
+            iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==
+            --boundary456--
+        """.trimIndent()
+        
+        val handle = parseEml(emlContent.toByteArray())
+        
+        // Try to get content type for an inline image
+        val resourceIds = handle.getResourceIds()
+        if (resourceIds.isNotEmpty()) {
+            val contentType = handle.getResourceContentType(resourceIds.first())
+            assertNotNull(contentType)
+        }
+        
+        // Non-existent CID should return null
+        assertNull(handle.getResourceContentType("nonexistent-cid"))
+        
+        handle.destroy()
+    }
+
+    @Test
+    fun `write attachment to path creates file`() {
+        requireLibrary()
+        
+        val emlContent = """
+            Subject: With Attachment
+            From: sender@example.com
+            To: recipient@example.com
+            MIME-Version: 1.0
+            Content-Type: multipart/mixed; boundary="mixed-boundary"
+            
+            --mixed-boundary
+            Content-Type: text/plain
+            
+            Body text
+            --mixed-boundary
+            Content-Type: application/pdf
+            Content-Disposition: attachment; filename="test.pdf"
+            Content-Transfer-Encoding: base64
+            
+            SGVsbG8gV29ybGQh
+            --mixed-boundary--
+        """.trimIndent()
+        
+        val handle = parseEml(emlContent.toByteArray())
+        
+        // Verify attachment exists
+        val attachments = handle.getAttachments()
+        assertTrue(attachments.isNotEmpty())
+        
+        // Write to temp file
+        val tempFile = java.io.File.createTempFile("test_attachment", ".pdf")
+        try {
+            val result = handle.writeAttachmentToPath(0u, tempFile.absolutePath)
+            assertTrue(result)
+            assertTrue(tempFile.exists())
+            assertTrue(tempFile.length() > 0)
+        } finally {
+            tempFile.delete()
+        }
+        
+        handle.destroy()
+    }
+
+    @Test
+    fun `write attachment to path returns false for invalid index`() {
+        requireLibrary()
+        
+        val emlContent = """
+            Subject: Simple
+            From: test@test.com
+            
+            Body
+        """.trimIndent()
+        
+        val handle = parseEml(emlContent.toByteArray())
+        
+        val tempFile = java.io.File.createTempFile("nonexistent_attachment", ".pdf")
+        try {
+            val result = handle.writeAttachmentToPath(99u, tempFile.absolutePath)
+            // Should return false for missing attachment
+            assertEquals(false, result)
+        } finally {
+            tempFile.delete()
+        }
+        
+        handle.destroy()
+    }
+
+    @Test
+    fun `write resource to path creates file`() {
+        requireLibrary()
+        
+        val emlContent = """
+            Subject: Email with Image
+            From: sender@example.com
+            To: recipient@example.com
+            MIME-Version: 1.0
+            Content-Type: multipart/related; boundary="boundary456"
+            
+            --boundary456
+            Content-Type: text/html
+            
+            <html><body><img src="cid:image001"></body></html>
+            --boundary456
+            Content-Type: image/png
+            Content-ID: <image001>
+            Content-Transfer-Encoding: base64
+            
+            iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==
+            --boundary456--
+        """.trimIndent()
+        
+        val handle = parseEml(emlContent.toByteArray())
+        
+        val resourceIds = handle.getResourceIds()
+        if (resourceIds.isNotEmpty()) {
+            val tempFile = java.io.File.createTempFile("test_resource", ".png")
+            try {
+                val result = handle.writeResourceToPath(resourceIds.first(), tempFile.absolutePath)
+                assertTrue(result)
+                assertTrue(tempFile.exists())
+            } finally {
+                tempFile.delete()
+            }
+        }
+        
+        handle.destroy()
+    }
+
+    @Test
+    fun `write resource to path returns false for missing cid`() {
+        requireLibrary()
+        
+        val emlContent = """
+            Subject: Simple
+            From: test@test.com
+            
+            Body
+        """.trimIndent()
+        
+        val handle = parseEml(emlContent.toByteArray())
+        
+        val tempFile = java.io.File.createTempFile("missing_resource", ".png")
+        try {
+            val result = handle.writeResourceToPath("nonexistent-cid", tempFile.absolutePath)
+            // Should return false for missing CID
+            assertEquals(false, result)
+        } finally {
+            tempFile.delete()
+        }
+        
+        handle.destroy()
+    }
 }

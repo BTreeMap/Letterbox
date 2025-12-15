@@ -636,6 +636,8 @@ internal object IntegrityCheckingUniffiLib {
     }
     external fun uniffi_letterbox_core_checksum_func_parse_eml(
     ): Short
+    external fun uniffi_letterbox_core_checksum_func_parse_eml_from_path(
+    ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_attachment_count(
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_body_html(
@@ -654,7 +656,11 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_get_resource(
     ): Short
+    external fun uniffi_letterbox_core_checksum_method_emailhandle_get_resource_content_type(
+    ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_get_resource_ids(
+    ): Short
+    external fun uniffi_letterbox_core_checksum_method_emailhandle_get_resource_metadata(
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_message_id(
     ): Short
@@ -663,6 +669,10 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_letterbox_core_checksum_method_emailhandle_subject(
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_to(
+    ): Short
+    external fun uniffi_letterbox_core_checksum_method_emailhandle_write_attachment_to_path(
+    ): Short
+    external fun uniffi_letterbox_core_checksum_method_emailhandle_write_resource_to_path(
     ): Short
     external fun ffi_letterbox_core_uniffi_contract_version(
     ): Int
@@ -704,7 +714,11 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_method_emailhandle_get_resource(`ptr`: Long,`cid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_letterbox_core_fn_method_emailhandle_get_resource_content_type(`ptr`: Long,`cid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_method_emailhandle_get_resource_ids(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_letterbox_core_fn_method_emailhandle_get_resource_metadata(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_method_emailhandle_message_id(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -714,7 +728,13 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_method_emailhandle_to(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_letterbox_core_fn_method_emailhandle_write_attachment_to_path(`ptr`: Long,`index`: Int,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_letterbox_core_fn_method_emailhandle_write_resource_to_path(`ptr`: Long,`cid`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_letterbox_core_fn_func_parse_eml(`data`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    external fun uniffi_letterbox_core_fn_func_parse_eml_from_path(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun ffi_letterbox_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -838,6 +858,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_core_checksum_func_parse_eml() != 48112.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_letterbox_core_checksum_func_parse_eml_from_path() != 22339.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_attachment_count() != 2946.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -856,16 +879,22 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_from() != 17732.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_attachment_content() != 43260.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_attachment_content() != 16894.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_attachments() != 4360.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource() != 56316.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource() != 30043.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_content_type() != 29102.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_ids() != 36234.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_metadata() != 14885.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_message_id() != 52741.toShort()) {
@@ -878,6 +907,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_to() != 837.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_attachment_to_path() != 47618.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_resource_to_path() != 60863.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1080,6 +1115,29 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
 
     override fun write(value: ULong, buf: ByteBuffer) {
         buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1.toByte() else 0.toByte()
+    }
+
+    override fun allocationSize(value: Boolean) = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
     }
 }
 
@@ -1294,6 +1352,7 @@ public interface EmailHandleInterface {
     
     /**
      * Get attachment content by index.
+     * Note: For large attachments, consider using write_attachment_to_path instead.
      */
     fun `getAttachmentContent`(`index`: kotlin.UInt): kotlin.ByteArray?
     
@@ -1304,13 +1363,27 @@ public interface EmailHandleInterface {
     
     /**
      * Get an inline resource by Content-ID for cid: URL resolution.
+     * Note: For large resources (>64KB), consider using write_resource_to_path instead.
      */
     fun `getResource`(`cid`: kotlin.String): kotlin.ByteArray?
+    
+    /**
+     * Get the content type of an inline resource without returning the bytes.
+     * Useful for setting MIME types in WebResourceResponse without loading content.
+     */
+    fun `getResourceContentType`(`cid`: kotlin.String): kotlin.String?
     
     /**
      * Get the list of all inline asset Content-IDs.
      */
     fun `getResourceIds`(): List<kotlin.String>
+    
+    /**
+     * Get metadata for all inline resources in a single call.
+     * This allows Kotlin to efficiently map cid: URLs and decide the retrieval strategy
+     * (inline for small resources, file-based for large ones).
+     */
+    fun `getResourceMetadata`(): List<ResourceMeta>
     
     /**
      * Get the "Message-ID" header.
@@ -1331,6 +1404,20 @@ public interface EmailHandleInterface {
      * Get the "To" field formatted as a string.
      */
     fun `to`(): kotlin.String
+    
+    /**
+     * Write an attachment directly to a file path.
+     * This avoids copying large attachments across the FFI boundary.
+     * Returns true on success, false if attachment not found.
+     */
+    fun `writeAttachmentToPath`(`index`: kotlin.UInt, `path`: kotlin.String): kotlin.Boolean
+    
+    /**
+     * Write an inline resource directly to a file path.
+     * This avoids copying large resources across the FFI boundary.
+     * Returns true on success.
+     */
+    fun `writeResourceToPath`(`cid`: kotlin.String, `path`: kotlin.String): kotlin.Boolean
     
     companion object
 }
@@ -1534,6 +1621,7 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     
     /**
      * Get attachment content by index.
+     * Note: For large attachments, consider using write_attachment_to_path instead.
      */override fun `getAttachmentContent`(`index`: kotlin.UInt): kotlin.ByteArray? {
             return FfiConverterOptionalByteArray.lift(
     callWithHandle {
@@ -1566,11 +1654,29 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     
     /**
      * Get an inline resource by Content-ID for cid: URL resolution.
+     * Note: For large resources (>64KB), consider using write_resource_to_path instead.
      */override fun `getResource`(`cid`: kotlin.String): kotlin.ByteArray? {
             return FfiConverterOptionalByteArray.lift(
     callWithHandle {
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_get_resource(
+        it,
+        FfiConverterString.lower(`cid`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get the content type of an inline resource without returning the bytes.
+     * Useful for setting MIME types in WebResourceResponse without loading content.
+     */override fun `getResourceContentType`(`cid`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_get_resource_content_type(
         it,
         FfiConverterString.lower(`cid`),_status)
 }
@@ -1587,6 +1693,24 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     callWithHandle {
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_get_resource_ids(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get metadata for all inline resources in a single call.
+     * This allows Kotlin to efficiently map cid: URLs and decide the retrieval strategy
+     * (inline for small resources, file-based for large ones).
+     */override fun `getResourceMetadata`(): List<ResourceMeta> {
+            return FfiConverterSequenceTypeResourceMeta.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_get_resource_metadata(
         it,
         _status)
 }
@@ -1653,6 +1777,44 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_to(
         it,
         _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Write an attachment directly to a file path.
+     * This avoids copying large attachments across the FFI boundary.
+     * Returns true on success, false if attachment not found.
+     */
+    @Throws(ParseException::class)override fun `writeAttachmentToPath`(`index`: kotlin.UInt, `path`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithHandle {
+    uniffiRustCallWithError(ParseException) { _status ->
+    UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_write_attachment_to_path(
+        it,
+        FfiConverterUInt.lower(`index`),FfiConverterString.lower(`path`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Write an inline resource directly to a file path.
+     * This avoids copying large resources across the FFI boundary.
+     * Returns true on success.
+     */
+    @Throws(ParseException::class)override fun `writeResourceToPath`(`cid`: kotlin.String, `path`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithHandle {
+    uniffiRustCallWithError(ParseException) { _status ->
+    UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_write_resource_to_path(
+        it,
+        FfiConverterString.lower(`cid`),FfiConverterString.lower(`path`),_status)
 }
     }
     )
@@ -1743,6 +1905,64 @@ public object FfiConverterTypeAttachmentInfo: FfiConverterRustBuffer<AttachmentI
 
 
 
+data class ResourceMeta (
+    /**
+     * Content-ID (without angle brackets)
+     */
+    var `cid`: kotlin.String
+    , 
+    /**
+     * MIME type of the resource
+     */
+    var `contentType`: kotlin.String
+    , 
+    /**
+     * Size in bytes
+     */
+    var `size`: kotlin.ULong
+    , 
+    /**
+     * True if resource is small enough to be returned inline (< 64KB)
+     */
+    var `isSmall`: kotlin.Boolean
+    
+){
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeResourceMeta: FfiConverterRustBuffer<ResourceMeta> {
+    override fun read(buf: ByteBuffer): ResourceMeta {
+        return ResourceMeta(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ResourceMeta) = (
+            FfiConverterString.allocationSize(value.`cid`) +
+            FfiConverterString.allocationSize(value.`contentType`) +
+            FfiConverterULong.allocationSize(value.`size`) +
+            FfiConverterBoolean.allocationSize(value.`isSmall`)
+    )
+
+    override fun write(value: ResourceMeta, buf: ByteBuffer) {
+            FfiConverterString.write(value.`cid`, buf)
+            FfiConverterString.write(value.`contentType`, buf)
+            FfiConverterULong.write(value.`size`, buf)
+            FfiConverterBoolean.write(value.`isSmall`, buf)
+    }
+}
+
+
+
 
 
 /**
@@ -1760,6 +1980,22 @@ sealed class ParseException: kotlin.Exception() {
         ) : ParseException() {
         override val message
             get() = ""
+    }
+    
+    class FileNotFound(
+        
+        val `path`: kotlin.String
+        ) : ParseException() {
+        override val message
+            get() = "path=${ `path` }"
+    }
+    
+    class IoException(
+        
+        val `details`: kotlin.String
+        ) : ParseException() {
+        override val message
+            get() = "details=${ `details` }"
     }
     
 
@@ -1780,6 +2016,12 @@ public object FfiConverterTypeParseError : FfiConverterRustBuffer<ParseException
         return when(buf.getInt()) {
             1 -> ParseException.Invalid()
             2 -> ParseException.Empty()
+            3 -> ParseException.FileNotFound(
+                FfiConverterString.read(buf),
+                )
+            4 -> ParseException.IoException(
+                FfiConverterString.read(buf),
+                )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -1794,6 +2036,16 @@ public object FfiConverterTypeParseError : FfiConverterRustBuffer<ParseException
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
                 4UL
             )
+            is ParseException.FileNotFound -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`path`)
+            )
+            is ParseException.IoException -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`details`)
+            )
         }
     }
 
@@ -1805,6 +2057,16 @@ public object FfiConverterTypeParseError : FfiConverterRustBuffer<ParseException
             }
             is ParseException.Empty -> {
                 buf.putInt(2)
+                Unit
+            }
+            is ParseException.FileNotFound -> {
+                buf.putInt(3)
+                FfiConverterString.write(value.`path`, buf)
+                Unit
+            }
+            is ParseException.IoException -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`details`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -1931,6 +2193,34 @@ public object FfiConverterSequenceTypeAttachmentInfo: FfiConverterRustBuffer<Lis
         }
     }
 }
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeResourceMeta: FfiConverterRustBuffer<List<ResourceMeta>> {
+    override fun read(buf: ByteBuffer): List<ResourceMeta> {
+        val len = buf.getInt()
+        return List<ResourceMeta>(len) {
+            FfiConverterTypeResourceMeta.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ResourceMeta>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeResourceMeta.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ResourceMeta>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeResourceMeta.write(it, buf)
+        }
+    }
+}
         /**
          * Parse an EML file from raw bytes.
          * Returns an opaque handle that stays in Rust memory.
@@ -1941,6 +2231,23 @@ public object FfiConverterSequenceTypeAttachmentInfo: FfiConverterRustBuffer<Lis
     UniffiLib.uniffi_letterbox_core_fn_func_parse_eml(
     
         FfiConverterByteArray.lower(`data`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Parse an EML file from a file path.
+         * This is the preferred method for large emails as it avoids copying the entire
+         * file into the JVM heap first. Rust reads/mmaps the file directly.
+         * Returns an opaque handle that stays in Rust memory.
+         */
+    @Throws(ParseException::class) fun `parseEmlFromPath`(`path`: kotlin.String): EmailHandle {
+            return FfiConverterTypeEmailHandle.lift(
+    uniffiRustCallWithError(ParseException) { _status ->
+    UniffiLib.uniffi_letterbox_core_fn_func_parse_eml_from_path(
+    
+        FfiConverterString.lower(`path`),_status)
 }
     )
     }

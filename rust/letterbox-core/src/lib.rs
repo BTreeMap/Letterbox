@@ -1,5 +1,8 @@
 use mail_parser::{MessageParser, MimeHeaders};
 use std::collections::HashMap;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -12,6 +15,10 @@ pub enum ParseError {
     Invalid,
     #[error("Empty payload")]
     Empty,
+    #[error("File not found: {path}")]
+    FileNotFound { path: String },
+    #[error("IO error: {details}")]
+    IoError { details: String },
 }
 
 /// Holds parsed email content in Rust memory.
@@ -32,8 +39,15 @@ struct ParsedMessage {
     date: String,
     body_html: Option<String>,
     body_text: Option<String>,
-    inline_assets: HashMap<String, Vec<u8>>,
+    inline_assets: HashMap<String, InlineAsset>,
     attachments: Vec<Attachment>,
+}
+
+/// Internal representation of an inline asset with metadata.
+#[derive(Clone)]
+struct InlineAsset {
+    content_type: String,
+    content: Vec<u8>,
 }
 
 /// Represents an email attachment.
@@ -51,6 +65,23 @@ pub struct AttachmentInfo {
     pub name: String,
     pub content_type: String,
     pub size: u64,
+}
+
+/// Inline resource metadata for batch queries.
+/// Allows Kotlin to efficiently map cid: URLs without probing Rust repeatedly.
+/// Size threshold constant for determining small vs large resources.
+pub const SMALL_RESOURCE_THRESHOLD: u64 = 64 * 1024; // 64 KB
+
+#[derive(Clone, uniffi::Record)]
+pub struct ResourceMeta {
+    /// Content-ID (without angle brackets)
+    pub cid: String,
+    /// MIME type of the resource
+    pub content_type: String,
+    /// Size in bytes
+    pub size: u64,
+    /// True if resource is small enough to be returned inline (< 64KB)
+    pub is_small: bool,
 }
 
 /// Parse an EML file from raw bytes.
@@ -113,7 +144,23 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
                 .to_string();
             let bytes = part.contents();
             if !bytes.is_empty() {
-                inline_assets.insert(cid, bytes.to_vec());
+                let content_type = part
+                    .content_type()
+                    .map(|ct| {
+                        if let Some(subtype) = ct.subtype() {
+                            format!("{}/{}", ct.ctype(), subtype)
+                        } else {
+                            ct.ctype().to_string()
+                        }
+                    })
+                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                inline_assets.insert(
+                    cid,
+                    InlineAsset {
+                        content_type,
+                        content: bytes.to_vec(),
+                    },
+                );
             }
         }
     }
@@ -202,6 +249,24 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
     Ok(Arc::new(EmailHandle {
         inner: Mutex::new(parsed),
     }))
+}
+
+/// Parse an EML file from a file path.
+/// This is the preferred method for large emails as it avoids copying the entire
+/// file into the JVM heap first. Rust reads/mmaps the file directly.
+/// Returns an opaque handle that stays in Rust memory.
+#[uniffi::export]
+pub fn parse_eml_from_path(path: String) -> Result<Arc<EmailHandle>, ParseError> {
+    let file_path = Path::new(&path);
+    if !file_path.exists() {
+        return Err(ParseError::FileNotFound { path });
+    }
+
+    let data = fs::read(file_path).map_err(|e| ParseError::IoError {
+        details: e.to_string(),
+    })?;
+
+    parse_eml(data)
 }
 
 fn format_addresses(addresses: &mail_parser::Address) -> String {
@@ -309,11 +374,13 @@ impl EmailHandle {
     }
 
     /// Get an inline resource by Content-ID for cid: URL resolution.
+    /// Note: For large resources (>64KB), consider using write_resource_to_path instead.
     pub fn get_resource(&self, cid: String) -> Option<Vec<u8>> {
-        self.inner
-            .lock()
-            .ok()
-            .and_then(|msg| msg.inline_assets.get(&cid).cloned())
+        self.inner.lock().ok().and_then(|msg| {
+            msg.inline_assets
+                .get(&cid)
+                .map(|asset| asset.content.clone())
+        })
     }
 
     /// Get the list of all inline asset Content-IDs.
@@ -322,6 +389,70 @@ impl EmailHandle {
             .lock()
             .map(|msg| msg.inline_assets.keys().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Get metadata for all inline resources in a single call.
+    /// This allows Kotlin to efficiently map cid: URLs and decide the retrieval strategy
+    /// (inline for small resources, file-based for large ones).
+    pub fn get_resource_metadata(&self) -> Vec<ResourceMeta> {
+        self.inner
+            .lock()
+            .map(|msg| {
+                msg.inline_assets
+                    .iter()
+                    .map(|(cid, asset)| {
+                        let size = asset.content.len() as u64;
+                        ResourceMeta {
+                            cid: cid.clone(),
+                            content_type: asset.content_type.clone(),
+                            size,
+                            is_small: size <= SMALL_RESOURCE_THRESHOLD,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get the content type of an inline resource without returning the bytes.
+    /// Useful for setting MIME types in WebResourceResponse without loading content.
+    pub fn get_resource_content_type(&self, cid: String) -> Option<String> {
+        self.inner.lock().ok().and_then(|msg| {
+            msg.inline_assets
+                .get(&cid)
+                .map(|asset| asset.content_type.clone())
+        })
+    }
+
+    /// Write an inline resource directly to a file path.
+    /// This avoids copying large resources across the FFI boundary.
+    /// Returns true on success.
+    pub fn write_resource_to_path(&self, cid: String, path: String) -> Result<bool, ParseError> {
+        let content = self.inner.lock().ok().and_then(|msg| {
+            msg.inline_assets
+                .get(&cid)
+                .map(|asset| asset.content.clone())
+        });
+
+        match content {
+            Some(bytes) => {
+                let path = Path::new(&path);
+                // Create parent directories if needed
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).map_err(|e| ParseError::IoError {
+                        details: e.to_string(),
+                    })?;
+                }
+                let mut file = fs::File::create(path).map_err(|e| ParseError::IoError {
+                    details: e.to_string(),
+                })?;
+                file.write_all(&bytes).map_err(|e| ParseError::IoError {
+                    details: e.to_string(),
+                })?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 
     /// Get a list of all attachments with their metadata.
@@ -350,12 +481,44 @@ impl EmailHandle {
     }
 
     /// Get attachment content by index.
+    /// Note: For large attachments, consider using write_attachment_to_path instead.
     pub fn get_attachment_content(&self, index: u32) -> Option<Vec<u8>> {
         self.inner.lock().ok().and_then(|msg| {
             msg.attachments
                 .get(index as usize)
                 .map(|a| a.content.clone())
         })
+    }
+
+    /// Write an attachment directly to a file path.
+    /// This avoids copying large attachments across the FFI boundary.
+    /// Returns true on success, false if attachment not found.
+    pub fn write_attachment_to_path(&self, index: u32, path: String) -> Result<bool, ParseError> {
+        let content = self.inner.lock().ok().and_then(|msg| {
+            msg.attachments
+                .get(index as usize)
+                .map(|a| a.content.clone())
+        });
+
+        match content {
+            Some(bytes) => {
+                let path = Path::new(&path);
+                // Create parent directories if needed
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).map_err(|e| ParseError::IoError {
+                        details: e.to_string(),
+                    })?;
+                }
+                let mut file = fs::File::create(path).map_err(|e| ParseError::IoError {
+                    details: e.to_string(),
+                })?;
+                file.write_all(&bytes).map_err(|e| ParseError::IoError {
+                    details: e.to_string(),
+                })?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 }
 
@@ -484,5 +647,158 @@ Content-Type: text/html
         // Content should be available
         let content = handle.get_attachment_content(0);
         assert!(content.is_some());
+    }
+
+    // Tests for new optimized FFI functions
+
+    static EMAIL_WITH_INLINE_IMAGE: Lazy<&'static str> = Lazy::new(|| {
+        "Subject: Email with Inline Image\r\n\
+         From: sender@example.com\r\n\
+         To: recipient@example.com\r\n\
+         MIME-Version: 1.0\r\n\
+         Content-Type: multipart/related; boundary=\"related-boundary\"\r\n\
+         \r\n\
+         --related-boundary\r\n\
+         Content-Type: text/html\r\n\
+         \r\n\
+         <html><body><img src=\"cid:image001\"></body></html>\r\n\
+         --related-boundary\r\n\
+         Content-Type: image/png\r\n\
+         Content-ID: <image001>\r\n\
+         Content-Transfer-Encoding: base64\r\n\
+         \r\n\
+         iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\n\
+         --related-boundary--\r\n"
+    });
+
+    #[test]
+    fn get_resource_metadata_returns_inline_assets_info() {
+        let handle = parse_eml(EMAIL_WITH_INLINE_IMAGE.as_bytes().to_vec()).expect("should parse");
+
+        let metadata = handle.get_resource_metadata();
+        assert_eq!(metadata.len(), 1);
+
+        let meta = &metadata[0];
+        assert_eq!(meta.cid, "image001");
+        assert_eq!(meta.content_type, "image/png");
+        assert!(meta.size > 0);
+        assert!(meta.is_small); // Small test image should be under 64KB threshold
+    }
+
+    #[test]
+    fn get_resource_content_type_returns_mime_type() {
+        let handle = parse_eml(EMAIL_WITH_INLINE_IMAGE.as_bytes().to_vec()).expect("should parse");
+
+        let content_type = handle.get_resource_content_type("image001".to_string());
+        assert_eq!(content_type, Some("image/png".to_string()));
+
+        // Non-existent CID should return None
+        let missing = handle.get_resource_content_type("nonexistent".to_string());
+        assert_eq!(missing, None);
+    }
+
+    #[test]
+    fn parse_eml_from_path_works_with_valid_file() {
+        // Create a temp file
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join("test_email.eml");
+
+        let mut file = fs::File::create(&temp_file).expect("create temp file");
+        file.write_all(SIMPLE_EMAIL.as_bytes())
+            .expect("write temp file");
+
+        // Parse from path
+        let handle =
+            parse_eml_from_path(temp_file.to_str().unwrap().to_string()).expect("should parse");
+        assert_eq!(handle.subject(), "Hello");
+        assert_eq!(handle.from(), "sender@example.com");
+
+        // Cleanup
+        let _ = fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn parse_eml_from_path_returns_error_for_missing_file() {
+        let result = parse_eml_from_path("/nonexistent/path/email.eml".to_string());
+        assert!(matches!(result, Err(ParseError::FileNotFound { .. })));
+    }
+
+    #[test]
+    fn write_attachment_to_path_creates_file() {
+        let handle = parse_eml(EMAIL_WITH_ATTACHMENT.as_bytes().to_vec()).expect("should parse");
+
+        let temp_dir = std::env::temp_dir();
+        let output_path = temp_dir.join("test_attachment.pdf");
+
+        // Write attachment to file
+        let result = handle.write_attachment_to_path(0, output_path.to_str().unwrap().to_string());
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+
+        // Verify file exists and has content
+        assert!(output_path.exists());
+        let written = fs::read(&output_path).expect("read written file");
+        assert!(!written.is_empty());
+
+        // Cleanup
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn write_attachment_to_path_returns_false_for_invalid_index() {
+        let handle = parse_eml(SIMPLE_EMAIL.as_bytes().to_vec()).expect("should parse");
+
+        let temp_dir = std::env::temp_dir();
+        let output_path = temp_dir.join("nonexistent_attachment.pdf");
+
+        // Try to write non-existent attachment
+        let result = handle.write_attachment_to_path(99, output_path.to_str().unwrap().to_string());
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Should return false for missing attachment
+    }
+
+    #[test]
+    fn write_resource_to_path_creates_file() {
+        let handle = parse_eml(EMAIL_WITH_INLINE_IMAGE.as_bytes().to_vec()).expect("should parse");
+
+        let temp_dir = std::env::temp_dir();
+        let output_path = temp_dir.join("test_resource.png");
+
+        // Write resource to file
+        let result = handle.write_resource_to_path(
+            "image001".to_string(),
+            output_path.to_str().unwrap().to_string(),
+        );
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+
+        // Verify file exists and has content
+        assert!(output_path.exists());
+        let written = fs::read(&output_path).expect("read written file");
+        assert!(!written.is_empty());
+
+        // Cleanup
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn write_resource_to_path_returns_false_for_missing_cid() {
+        let handle = parse_eml(SIMPLE_EMAIL.as_bytes().to_vec()).expect("should parse");
+
+        let temp_dir = std::env::temp_dir();
+        let output_path = temp_dir.join("missing_resource.png");
+
+        // Try to write non-existent resource
+        let result = handle.write_resource_to_path(
+            "nonexistent".to_string(),
+            output_path.to_str().unwrap().to_string(),
+        );
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Should return false for missing CID
+    }
+
+    #[test]
+    fn small_resource_threshold_is_64kb() {
+        assert_eq!(SMALL_RESOURCE_THRESHOLD, 64 * 1024);
     }
 }
