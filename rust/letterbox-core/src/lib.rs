@@ -376,10 +376,11 @@ impl EmailHandle {
     /// Get an inline resource by Content-ID for cid: URL resolution.
     /// Note: For large resources (>64KB), consider using write_resource_to_path instead.
     pub fn get_resource(&self, cid: String) -> Option<Vec<u8>> {
-        self.inner
-            .lock()
-            .ok()
-            .and_then(|msg| msg.inline_assets.get(&cid).map(|asset| asset.content.clone()))
+        self.inner.lock().ok().and_then(|msg| {
+            msg.inline_assets
+                .get(&cid)
+                .map(|asset| asset.content.clone())
+        })
     }
 
     /// Get the list of all inline asset Content-IDs.
@@ -416,21 +417,22 @@ impl EmailHandle {
     /// Get the content type of an inline resource without returning the bytes.
     /// Useful for setting MIME types in WebResourceResponse without loading content.
     pub fn get_resource_content_type(&self, cid: String) -> Option<String> {
-        self.inner
-            .lock()
-            .ok()
-            .and_then(|msg| msg.inline_assets.get(&cid).map(|asset| asset.content_type.clone()))
+        self.inner.lock().ok().and_then(|msg| {
+            msg.inline_assets
+                .get(&cid)
+                .map(|asset| asset.content_type.clone())
+        })
     }
 
     /// Write an inline resource directly to a file path.
     /// This avoids copying large resources across the FFI boundary.
     /// Returns true on success.
     pub fn write_resource_to_path(&self, cid: String, path: String) -> Result<bool, ParseError> {
-        let content = self
-            .inner
-            .lock()
-            .ok()
-            .and_then(|msg| msg.inline_assets.get(&cid).map(|asset| asset.content.clone()));
+        let content = self.inner.lock().ok().and_then(|msg| {
+            msg.inline_assets
+                .get(&cid)
+                .map(|asset| asset.content.clone())
+        });
 
         match content {
             Some(bytes) => {
@@ -729,8 +731,7 @@ Content-Type: text/html
         let output_path = temp_dir.join("test_attachment.pdf");
 
         // Write attachment to file
-        let result =
-            handle.write_attachment_to_path(0, output_path.to_str().unwrap().to_string());
+        let result = handle.write_attachment_to_path(0, output_path.to_str().unwrap().to_string());
         assert!(result.is_ok());
         assert!(result.unwrap());
 
@@ -751,8 +752,7 @@ Content-Type: text/html
         let output_path = temp_dir.join("nonexistent_attachment.pdf");
 
         // Try to write non-existent attachment
-        let result =
-            handle.write_attachment_to_path(99, output_path.to_str().unwrap().to_string());
+        let result = handle.write_attachment_to_path(99, output_path.to_str().unwrap().to_string());
         assert!(result.is_ok());
         assert!(!result.unwrap()); // Should return false for missing attachment
     }
@@ -765,8 +765,10 @@ Content-Type: text/html
         let output_path = temp_dir.join("test_resource.png");
 
         // Write resource to file
-        let result = handle
-            .write_resource_to_path("image001".to_string(), output_path.to_str().unwrap().to_string());
+        let result = handle.write_resource_to_path(
+            "image001".to_string(),
+            output_path.to_str().unwrap().to_string(),
+        );
         assert!(result.is_ok());
         assert!(result.unwrap());
 
