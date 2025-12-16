@@ -1,4 +1,4 @@
-package com.btreemap.letterbox
+package org.joefang.letterbox
 
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed

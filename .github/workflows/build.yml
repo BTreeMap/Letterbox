@@ -7,12 +7,12 @@ on:
     branches: ["main"]
   workflow_call:
     outputs:
-      debug-artifact-name:
-        description: "Name of the debug APK artifact"
-        value: ${{ jobs.build.outputs.debug-artifact-name }}
-      release-artifact-name:
-        description: "Name of the release APK artifact"
-        value: ${{ jobs.build.outputs.release-artifact-name }}
+      test-artifact-name:
+        description: "Name of the test APK artifact (unsigned)"
+        value: ${{ jobs.build.outputs.test-artifact-name }}
+      prod-release-artifact-name:
+        description: "Name of the prod release APK artifact (unsigned)"
+        value: ${{ jobs.build.outputs.prod-release-artifact-name }}
 
 permissions:
   contents: read
@@ -108,8 +108,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: lint-and-test
     outputs:
-      debug-artifact-name: ${{ steps.artifact-names.outputs.debug }}
-      release-artifact-name: ${{ steps.artifact-names.outputs.release }}
+      test-artifact-name: ${{ steps.artifact-names.outputs.test }}
+      prod-release-artifact-name: ${{ steps.artifact-names.outputs.prod-release }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -163,43 +163,43 @@ jobs:
             exit 1
           fi
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon
+      - name: Build test debug APK
+        run: ./gradlew assembleStagingDebug --no-daemon
 
-      - name: Build release APK
-        run: ./gradlew assembleRelease --no-daemon
+      - name: Build prod release APK
+        run: ./gradlew assembleProdRelease --no-daemon
 
       - name: Verify native libraries in APKs
         run: |
-          echo "Checking for .so files in debug APK:"
-          unzip -l app/build/outputs/apk/debug/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in debug APK!" && exit 1)
-          echo "Checking for .so files in release APK:"
-          unzip -l app/build/outputs/apk/release/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in release APK!" && exit 1)
+          echo "Checking for .so files in test debug APK:"
+          unzip -l app/build/outputs/apk/staging/debug/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in test debug APK!" && exit 1)
+          echo "Checking for .so files in prod release APK:"
+          unzip -l app/build/outputs/apk/prod/release/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in prod release APK!" && exit 1)
 
       - name: Set artifact names
         id: artifact-names
         run: |
-          echo "debug=letterbox-debug-apk" >> $GITHUB_OUTPUT
-          echo "release=letterbox-release-apk" >> $GITHUB_OUTPUT
+          echo "test=letterbox-staging-apk" >> $GITHUB_OUTPUT
+          echo "prod-release=letterbox-prod-release-unsigned-apk" >> $GITHUB_OUTPUT
 
-      - name: Upload debug APK artifact
+      - name: Upload test APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.artifact-names.outputs.debug }}
-          path: app/build/outputs/apk/debug/*.apk
+          name: ${{ steps.artifact-names.outputs.test }}
+          path: app/build/outputs/apk/staging/debug/*.apk
           retention-days: 30
 
-      - name: Upload release APK artifact
+      - name: Upload prod release APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.artifact-names.outputs.release }}
-          path: app/build/outputs/apk/release/*.apk
+          name: ${{ steps.artifact-names.outputs.prod-release }}
+          path: app/build/outputs/apk/prod/release/*.apk
           retention-days: 30
 
-      - name: Upload debug test APK artifact
+      - name: Upload test androidTest APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: letterbox-debug-androidTest-apk
-          path: app/build/outputs/apk/androidTest/debug/*.apk
+          name: letterbox-staging-androidTest-apk
+          path: app/build/outputs/apk/androidTest/staging/debug/*.apk
           retention-days: 30
           if-no-files-found: ignore

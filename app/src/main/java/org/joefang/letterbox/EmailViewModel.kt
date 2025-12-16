@@ -1,14 +1,14 @@
-package com.btreemap.letterbox
+package org.joefang.letterbox
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.btreemap.letterbox.ffi.EmailHandle
-import com.btreemap.letterbox.ffi.ParseException
-import com.btreemap.letterbox.ffi.parseEml
-import com.btreemap.letterbox.ffi.parseEmlFromPath
-import com.btreemap.letterbox.ui.AttachmentData
-import com.btreemap.letterbox.ui.EmailContent
+import org.joefang.letterbox.ffi.EmailHandle
+import org.joefang.letterbox.ffi.ParseException
+import org.joefang.letterbox.ffi.parseEml
+import org.joefang.letterbox.ffi.parseEmlFromPath
+import org.joefang.letterbox.ui.AttachmentData
+import org.joefang.letterbox.ui.EmailContent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

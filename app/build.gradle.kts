@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.btreemap.letterbox"
+    namespace = "org.joefang.letterbox"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.btreemap.letterbox"
+        applicationId = "org.joefang.letterbox"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -28,6 +28,20 @@ android {
         }
         debug {
             isDebuggable = true
+        }
+    }
+
+    flavorDimensions += "channel"
+    productFlavors {
+        create("prod") {
+            dimension = "channel"
+            // Production variant uses default applicationId
+        }
+        create("staging") {
+            dimension = "channel"
+            applicationIdSuffix = ".test"
+            versionNameSuffix = "-test"
+            resValue("string", "app_name", "Letterbox (Test)")
         }
     }
 

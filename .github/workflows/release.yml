@@ -92,33 +92,69 @@ jobs:
             exit 1
           fi
 
-      - name: Build release APK
-        run: ./gradlew assembleRelease --no-daemon
+      - name: Build prod release APK
+        run: ./gradlew assembleProdRelease --no-daemon
 
       - name: Verify native libraries in APK
         run: |
-          echo "Checking for .so files in release APK:"
-          unzip -l app/build/outputs/apk/release/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in release APK!" && exit 1)
+          echo "Checking for .so files in prod release APK:"
+          unzip -l app/build/outputs/apk/prod/release/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in prod release APK!" && exit 1)
 
       - name: Upload release APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: letterbox-release-apk
-          path: app/build/outputs/apk/release/*.apk
+          name: letterbox-prod-release-unsigned-apk
+          path: app/build/outputs/apk/prod/release/*.apk
           retention-days: 90
 
   publish:
-    name: Upload to Release
+    name: Sign and Upload to Release
     needs: build
     runs-on: ubuntu-latest
+    environment: ci:release
     permissions:
       contents: write  # Required for uploading to release
     steps:
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: |
+          sdkmanager "build-tools;34.0.0"
+
       - name: Download release APK
         uses: actions/download-artifact@v4
         with:
-          name: letterbox-release-apk
+          name: letterbox-prod-release-unsigned-apk
           path: ./artifacts
+
+      - name: Sign APK
+        run: |
+          set -euo pipefail
+          umask 077
+
+          # Rehydrate keystore
+          printf '%s' "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 --decode > signing.jks
+          chmod 600 signing.jks
+
+          # Select APK paths
+          UNSIGNED_APK="$(ls -1 ./artifacts/*.apk | head -n 1)"
+          SIGNED_APK="./artifacts/signed-$(basename "$UNSIGNED_APK")"
+
+          # Sign + verify
+          $ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner sign \
+            --ks signing.jks \
+            --ks-key-alias "${{ vars.ANDROID_KEY_ALIAS }}" \
+            --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            --key-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            --out "$SIGNED_APK" \
+            "$UNSIGNED_APK"
+
+          $ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner verify --verbose "$SIGNED_APK"
+
+          # Cleanup
+          rm -f signing.jks
+          rm -f "$UNSIGNED_APK"
 
       - name: Upload release APK to release
         uses: softprops/action-gh-release@v2

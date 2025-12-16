@@ -101,7 +101,7 @@ jobs:
 
       - name: Run instrumented UI tests (Gradle Managed Devices)
         run: |
-          ./gradlew pixel7Api34DebugAndroidTest \
+          ./gradlew pixel7Api34StagingDebugAndroidTest \
             --no-daemon \
             -Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader_indirect \
             -Pandroid.experimental.testOptions.managedDevices.setupTimeoutMinutes=30 \

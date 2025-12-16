@@ -1,4 +1,4 @@
-package com.btreemap.letterbox.ui
+package org.joefang.letterbox.ui
 
 import android.content.Context
 import android.content.Intent

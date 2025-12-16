@@ -1,4 +1,4 @@
-package com.btreemap.letterbox
+package org.joefang.letterbox
 
 import java.io.File
 import kotlin.io.path.createTempDirectory
