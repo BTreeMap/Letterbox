@@ -1,4 +1,4 @@
-package com.btreemap.letterbox
+package org.joefang.letterbox
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -7,10 +7,10 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.btreemap.letterbox.ui.AttachmentData
-import com.btreemap.letterbox.ui.EmailContent
-import com.btreemap.letterbox.ui.EmailDetailScreen
-import com.btreemap.letterbox.ui.theme.LetterboxTheme
+import org.joefang.letterbox.ui.AttachmentData
+import org.joefang.letterbox.ui.EmailContent
+import org.joefang.letterbox.ui.EmailDetailScreen
+import org.joefang.letterbox.ui.theme.LetterboxTheme
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith

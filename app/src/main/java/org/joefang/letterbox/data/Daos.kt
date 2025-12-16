@@ -1,4 +1,4 @@
-package com.btreemap.letterbox.data
+package org.joefang.letterbox.data
 
 import androidx.room.Dao
 import androidx.room.Insert

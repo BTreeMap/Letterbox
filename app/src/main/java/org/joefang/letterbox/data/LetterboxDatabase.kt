@@ -1,4 +1,4 @@
-package com.btreemap.letterbox.data
+package org.joefang.letterbox.data
 
 import android.content.Context
 import androidx.room.Database

@@ -1,27 +1,24 @@
-name: Pre-release
+name: Sign Test APK
 
 on:
   workflow_run:
     workflows: ["Build"]
     types: [completed]
-    branches: ["main"]
 
 permissions:
-  contents: write  # Required for creating releases
-  actions: read    # Required to download artifacts
+  contents: read
+  actions: read  # Required to download artifacts
 
 jobs:
-  pre-release:
-    name: Create Pre-release
+  sign-test:
+    name: Sign Test APK
     runs-on: ubuntu-latest
-    environment: ci:release
-    # Only run if build succeeded and on main branch
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    environment: test:ci
+    # Only run if build succeeded and is from a pull request
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+      # NOTE: Intentionally NOT checking out PR code to prevent untrusted code execution
+      # This job operates on artifacts only
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -30,10 +27,10 @@ jobs:
         run: |
           sdkmanager "build-tools;34.0.0"
 
-      - name: Download prod release APK from build workflow
+      - name: Download test APK from build workflow
         uses: actions/download-artifact@v4
         with:
-          name: letterbox-prod-release-unsigned-apk
+          name: letterbox-staging-apk
           path: ./artifacts
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
@@ -69,18 +66,9 @@ jobs:
           rm -f signing.jks
           rm -f "$UNSIGNED_APK"
 
-      - name: Get short SHA
-        id: sha
-        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
-      - name: Create pre-release
-        uses: softprops/action-gh-release@v2
+      - name: Upload signed test APK artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: pre-release-${{ steps.sha.outputs.short }}
-          name: Pre-release ${{ steps.sha.outputs.short }}
-          prerelease: true
-          files: ./artifacts/*.apk
-          body: |
-            Automated pre-release from commit ${{ github.event.workflow_run.head_sha }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: letterbox-staging-signed-apk
+          path: ./artifacts/*.apk
+          retention-days: 14

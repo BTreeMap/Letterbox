@@ -1,4 +1,4 @@
-package com.btreemap.letterbox.ui.theme
+package org.joefang.letterbox.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme

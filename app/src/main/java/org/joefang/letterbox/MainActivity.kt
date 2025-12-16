@@ -1,4 +1,4 @@
-package com.btreemap.letterbox
+package org.joefang.letterbox
 
 import android.content.Intent
 import android.net.Uri
@@ -62,9 +62,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
-import com.btreemap.letterbox.ui.EmailContent
-import com.btreemap.letterbox.ui.EmailDetailScreen
-import com.btreemap.letterbox.ui.theme.LetterboxTheme
+import org.joefang.letterbox.ui.EmailContent
+import org.joefang.letterbox.ui.EmailDetailScreen
+import org.joefang.letterbox.ui.theme.LetterboxTheme
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat

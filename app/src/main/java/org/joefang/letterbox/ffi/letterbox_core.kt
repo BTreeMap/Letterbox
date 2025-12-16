@@ -3,7 +3,7 @@
 
 @file:Suppress("NAME_SHADOWING")
 
-package com.btreemap.letterbox.ffi
+package org.joefang.letterbox.ffi
 
 // Common helper code.
 //

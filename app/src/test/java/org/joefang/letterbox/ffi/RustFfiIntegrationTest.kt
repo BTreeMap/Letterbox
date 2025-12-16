@@ -1,4 +1,4 @@
-package com.btreemap.letterbox.ffi
+package org.joefang.letterbox.ffi
 
 import org.junit.BeforeClass
 import org.junit.Test
