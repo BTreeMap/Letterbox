@@ -13,7 +13,7 @@ jobs:
   sign-test:
     name: Sign Test APK
     runs-on: ubuntu-latest
-    environment: test:ci
+    environment: ci:test
     # Only run if build succeeded and is from a pull request
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' }}
     steps:
