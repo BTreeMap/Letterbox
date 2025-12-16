@@ -1,21 +1,9 @@
-Evidence used
-- Cargo.toml
-- rust/letterbox-core/Cargo.toml
-- rust/letterbox-core/src/lib.rs
-- app/build.gradle.kts
-- app/src/main/AndroidManifest.xml
-- app/src/main/java/org/joefang/letterbox/MainActivity.kt
-- app/src/main/java/org/joefang/letterbox/EmailViewModel.kt
-- app/src/main/java/org/joefang/letterbox/HistoryRepository.kt
-- app/src/main/java/org/joefang/letterbox/data/LetterboxDatabase.kt
-- app/src/test/java/org/joefang/letterbox/ffi/RustFfiIntegrationTest.kt
-- settings.gradle.kts
-- LICENSE
-
 # Overview
+
 Letterbox is an Android application built with Jetpack Compose that opens and inspects `.eml` email files. It delegates parsing to a Rust core library (exposed via UniFFI and JNA), renders message bodies and attachments, and keeps a local, deduplicated history backed by Room or an in-memory store for tests.
 
 ## Key capabilities
+
 - Opens `.eml` files shared via `ACTION_VIEW` and `ACTION_SEND` intents declared in `app/src/main/AndroidManifest.xml`.
 - Parses messages through the `letterbox-core` Rust crate using UniFFI bindings (`parseEml`, `parseEmlFromPath`) to extract headers, bodies, inline resources, and attachments.
 - Displays message content with Jetpack Compose screens (`MainActivity`, `EmailDetailScreen`) and supports sharing the currently opened email via a FileProvider.
@@ -23,6 +11,7 @@ Letterbox is an Android application built with Jetpack Compose that opens and in
 - Provides product flavors (`prod`, `staging`) and hooks to build native libraries for multiple ABIs with `cargo ndk` when enabled via a Gradle property.
 
 ## Repository layout
+
 - `app/`: Android application module, Compose UI, Room data layer, UniFFI bindings, and Gradle tasks to build native artifacts.
 - `rust/letterbox-core/`: Rust library that parses emails with `mail-parser` and exposes UniFFI bindings for Kotlin/Android.
 - `gradle/`, `build.gradle.kts`, `settings.gradle.kts`: Gradle wrapper and version catalog configuration for the Android project.
@@ -30,6 +19,7 @@ Letterbox is an Android application built with Jetpack Compose that opens and in
 - `LICENSE`: MIT license for the project.
 
 ## Quickstart
+
 ```bash
 # Run Rust tests for the core library
 cargo test
@@ -45,22 +35,27 @@ cargo test
 ```
 
 ## Development
+
 - The `rustBuild` Gradle property controls whether `cargo ndk` runs (`cargoNdkBuild` task) to emit `.so` files into `app/src/main/jniLibs`; enable it when producing device-ready builds with native parsing.
 - Unit tests depend on `cargoHostBuild`, which compiles a host `libletterbox_core.so` and sets `uniffi.component.letterbox_core.libraryOverride` and `jna.library.path` so JNA can load it.
 - Product flavors (`prod`, `staging`) exist under the `channel` dimension; assemble the desired variant (e.g., `:app:assembleStagingDebug`) as needed.
 
 ## Configuration
+
 - Override the native library path for tests with `LETTERBOX_CORE_LIB_PATH` or the `uniffi.component.letterbox_core.libraryOverride` system property (used by `RustFfiIntegrationTest`).
 - Gradle uses `gradle.properties` defaults (`org.gradle.jvmargs`, `android.useAndroidX`, Kotlin code style) and `gradle/libs.versions.toml` for dependency versions.
 
 ## Testing
+
 - Rust core: `cargo test`.
 - Android unit tests (all flavors): `./gradlew test`.
 - Instrumented tests are present under `app/src/androidTest` and can be executed with an emulator/device via `./gradlew :app:connectedAndroidTest`.
 
 ## Troubleshooting
+
 - If Android builds cannot find the native library, ensure `cargo-ndk` is installed and rebuild with `-PrustBuild=true` so `cargoNdkBuild` emits ABI-specific `.so` files.
 - If host-side FFI tests cannot load the library, verify `target/release/libletterbox_core.so` exists (built by `cargoHostBuild`) or set `LETTERBOX_CORE_LIB_PATH` to the compiled library.
 
 ## License
+
 This project is licensed under the MIT License (see `LICENSE`).
