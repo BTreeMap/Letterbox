@@ -19,3 +19,4 @@ Letterbox pairs an Android/Jetpack Compose client with a Rust email parsing core
 - Gradle task `cargoHostBuild` compiles a host `libletterbox_core.so` and sets `jna.library.path` for unit tests.
 - When `-PrustBuild=true` is provided, `cargoNdkBuild` cross-compiles `letterbox_core` for `arm64-v8a`, `armeabi-v7a`, and `x86_64`, placing `.so` files under `app/src/main/jniLibs`.
 - Product flavors (`prod`, `staging`) are defined in `app/build.gradle.kts`; assemble the desired variant (e.g., `:app:assembleProdDebug`).
+- Flavor differences: `prod` uses the base `applicationId`, while `staging` appends `.test`, adds a `-test` version suffix, and overrides `app_name` to “Letterbox (Test)`.
