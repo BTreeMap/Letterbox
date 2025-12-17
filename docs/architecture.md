@@ -24,3 +24,4 @@ Letterbox pairs an Android/Jetpack Compose client with a Rust email parsing core
 - When `-PrustBuild=true` is provided, `cargoNdkBuild` cross-compiles `letterbox_core` for `arm64-v8a`, `armeabi-v7a`, and `x86_64`, placing `.so` files under `app/src/main/jniLibs`.
 - Product flavors (`prod`, `staging`) are defined in `app/build.gradle.kts`; assemble the desired variant (e.g., `:app:assembleProdDebug`).
 - Flavor differences: `prod` uses the base `applicationId`, while `staging` appends `.test`, adds a `-test` version suffix, and overrides `app_name` to “Letterbox (Test)`.
+- Version codes are automatically derived from Git tags using a 30-bit schema; see [versioning.md](versioning.md) for details.

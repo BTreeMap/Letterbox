@@ -102,10 +102,13 @@ jobs:
           SHORT_SHA=$(git rev-parse --short HEAD)
           
           # Generate version name (matches Gradle logic)
+          # For dev builds, increment patch to ensure version code is higher than last release
           if [ "$COMMITS_SINCE_TAG" -eq 0 ]; then
             VERSION_NAME="${MAJOR}.${MINOR}.${PATCH}"
           else
-            VERSION_NAME="${MAJOR}.${MINOR}.${PATCH}-dev.${COMMITS_SINCE_TAG}+${SHORT_SHA}"
+            # Increment patch for dev builds (working towards next version)
+            EFFECTIVE_PATCH=$((PATCH + 1))
+            VERSION_NAME="${MAJOR}.${MINOR}.${EFFECTIVE_PATCH}-dev.${COMMITS_SINCE_TAG}+${SHORT_SHA}"
           fi
           
           echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
