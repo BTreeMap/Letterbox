@@ -23,6 +23,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0  # Full git history for version calculation
+          fetch-tags: true
 
       - name: Enable KVM group perms
         run: |

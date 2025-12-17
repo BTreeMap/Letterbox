@@ -5,6 +5,161 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose") version libs.versions.kotlin.get()
 }
 
+/**
+ * Versioning schema using 30-bit version code (7-7-7-9 bits for major-minor-patch-qualifier).
+ * 
+ * This schema ensures version codes always increase monotonically:
+ * - Stable releases use qualifier=511 (max), so v1.2.3 = (1<<23)|(2<<16)|(3<<9)|511
+ * - Dev builds increment the patch version and use commits-since-tag as qualifier
+ *   so commits after v1.2.3 become v1.2.4-dev.N = (1<<23)|(2<<16)|(4<<9)|N
+ * 
+ * This guarantees: v1.2.3 < v1.2.4-dev.1 < v1.2.4-dev.2 < ... < v1.2.4 (or v1.3.0, v2.0.0)
+ * 
+ * | Component   | Bits | Range    | Shift Position | Description                           |
+ * |-------------|------|----------|----------------|---------------------------------------|
+ * | Major       | 7    | 0 – 127  | << 23          | Up to v127                            |
+ * | Minor       | 7    | 0 – 127  | << 16          | Up to v127                            |
+ * | Patch       | 7    | 0 – 127  | << 9           | Up to v127                            |
+ * | Qualifier   | 9    | 0 – 511  | << 0           | 511 for stable, 0-510 for dev builds  |
+ * 
+ * See docs/versioning.md for full documentation.
+ */
+object Versioning {
+    private const val MAX_MAJOR = 127
+    private const val MAX_MINOR = 127
+    private const val MAX_PATCH = 127
+    private const val MAX_QUALIFIER = 511
+    private const val STABLE_QUALIFIER = MAX_QUALIFIER
+    
+    data class VersionInfo(
+        val major: Int,
+        val minor: Int,
+        val patch: Int,
+        val isStable: Boolean,
+        val commitsSinceTag: Int,
+        val versionName: String,
+        val versionCode: Int
+    )
+    
+    /**
+     * Calculates the version code using the 30-bit schema.
+     */
+    private fun calculateVersionCode(major: Int, minor: Int, patch: Int, qualifier: Int): Int {
+        require(major in 0..MAX_MAJOR) { "Major version $major exceeds max $MAX_MAJOR" }
+        require(minor in 0..MAX_MINOR) { "Minor version $minor exceeds max $MAX_MINOR" }
+        require(patch in 0..MAX_PATCH) { "Patch version $patch exceeds max $MAX_PATCH" }
+        require(qualifier in 0..MAX_QUALIFIER) { "Qualifier $qualifier exceeds max $MAX_QUALIFIER" }
+        
+        return (major shl 23) or (minor shl 16) or (patch shl 9) or qualifier
+    }
+    
+    /**
+     * Resolves version info from git state using ProcessBuilder.
+     * - Finds the latest v*.*.* tag
+     * - Determines if HEAD is exactly on the tag (stable) or ahead (dev build)
+     * - Calculates versionCode and versionName accordingly
+     */
+    fun resolveFromGit(projectDir: java.io.File): VersionInfo {
+        fun exec(vararg args: String): String {
+            return try {
+                val process = ProcessBuilder(*args)
+                    .directory(projectDir)
+                    .redirectErrorStream(true)
+                    .start()
+                process.inputStream.bufferedReader().readText().trim()
+            } catch (e: Exception) {
+                ""
+            }
+        }
+        
+        // Get the latest version tag matching v*.*.*
+        val describeOutput = exec("git", "describe", "--tags", "--match", "v[0-9]*.[0-9]*.[0-9]*", "--abbrev=0")
+        
+        // Parse the version tag (format: vMAJOR.MINOR.PATCH)
+        val versionRegex = Regex("""^v(\d+)\.(\d+)\.(\d+)$""")
+        val match = versionRegex.matchEntire(describeOutput)
+        
+        val (major, minor, patch) = if (match != null) {
+            Triple(
+                match.groupValues[1].toInt(),
+                match.groupValues[2].toInt(),
+                match.groupValues[3].toInt()
+            )
+        } else {
+            // Fallback to 0.0.0 if no valid tag found
+            Triple(0, 0, 0)
+        }
+        
+        // Count commits since the last tag
+        val commitsSinceTag = if (describeOutput.isNotEmpty()) {
+            val countOutput = exec("git", "rev-list", "--count", "HEAD", "^$describeOutput")
+            countOutput.toIntOrNull() ?: 0
+        } else {
+            // If no tag exists, count all commits
+            val countOutput = exec("git", "rev-list", "--count", "HEAD")
+            countOutput.toIntOrNull() ?: 0
+        }
+        
+        // Determine if this is a stable release (exactly on the tag)
+        val isStable = commitsSinceTag == 0
+        
+        // For dev builds, increment patch to ensure version code is higher than last release
+        // This way, commits after v1.2.3 become v1.2.4-dev.N (working towards v1.2.4)
+        val effectivePatch = if (isStable) patch else patch + 1
+        
+        // Calculate qualifier
+        val qualifier = if (isStable) {
+            STABLE_QUALIFIER
+        } else {
+            // Ensure commits since tag doesn't exceed max qualifier
+            if (commitsSinceTag > MAX_QUALIFIER) {
+                throw GradleException(
+                    "Commits since tag ($commitsSinceTag) exceeds max qualifier ($MAX_QUALIFIER). " +
+                    "Please create a new version tag."
+                )
+            }
+            commitsSinceTag
+        }
+        
+        // Validate effective patch doesn't overflow (can happen if base patch is 127)
+        if (effectivePatch > MAX_PATCH) {
+            throw GradleException(
+                "Patch version overflow: base patch is $patch, but dev builds require incrementing to ${patch + 1}. " +
+                "Please create a new minor/major version tag."
+            )
+        }
+        
+        // Calculate version code using effective patch for dev builds
+        val versionCode = calculateVersionCode(major, minor, effectivePatch, qualifier)
+        
+        // Generate version name showing the version being worked towards
+        val versionName = if (isStable) {
+            "$major.$minor.$patch"
+        } else {
+            // Get short commit hash for dev builds
+            val shortHash = exec("git", "rev-parse", "--short", "HEAD")
+            // Show effective patch in version name (the version being worked towards)
+            "$major.$minor.$effectivePatch-dev.$commitsSinceTag+$shortHash"
+        }
+        
+        return VersionInfo(
+            major = major,
+            minor = minor,
+            patch = effectivePatch,  // Use effective patch (incremented for dev builds)
+            isStable = isStable,
+            commitsSinceTag = commitsSinceTag,
+            versionName = versionName,
+            versionCode = versionCode
+        )
+    }
+}
+
+// Resolve version info from git
+val versionInfo = Versioning.resolveFromGit(rootProject.projectDir)
+
+// Log version info during configuration
+logger.lifecycle("Version Info: name=${versionInfo.versionName}, code=${versionInfo.versionCode}, stable=${versionInfo.isStable}")
+
 android {
     namespace = "org.joefang.letterbox"
     compileSdk = 34
@@ -13,8 +168,8 @@ android {
         applicationId = "org.joefang.letterbox"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = versionInfo.versionCode
+        versionName = versionInfo.versionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
