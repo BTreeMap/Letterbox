@@ -3,9 +3,16 @@ name: Build
 on:
   push:
     branches: ["main", "copilot/**"]
+    tags: ["v*"]
   pull_request:
     branches: ["main"]
   workflow_call:
+    inputs:
+      build_type:
+        description: "Build type override (release, prerelease, test)"
+        required: false
+        type: string
+        default: ""
     outputs:
       test-artifact-name:
         description: "Name of the test APK artifact (unsigned)"
@@ -27,6 +34,26 @@ jobs:
         with:
           fetch-depth: 0  # Full git history for version calculation
           fetch-tags: true
+
+      - name: Determine Build Type
+        id: build-type
+        run: |
+          # Determine CI_BUILD_TYPE based on the event that triggered the workflow
+          # - release: tagged release (v*)
+          # - prerelease: main branch push
+          # - test: pull request
+          if [[ -n "${{ inputs.build_type }}" ]]; then
+            echo "CI_BUILD_TYPE=${{ inputs.build_type }}" >> $GITHUB_ENV
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "CI_BUILD_TYPE=release" >> $GITHUB_ENV
+          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            echo "CI_BUILD_TYPE=prerelease" >> $GITHUB_ENV
+          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            echo "CI_BUILD_TYPE=test" >> $GITHUB_ENV
+          else
+            echo "CI_BUILD_TYPE=local" >> $GITHUB_ENV
+          fi
+          echo "Build type: $CI_BUILD_TYPE"
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -119,6 +146,23 @@ jobs:
         with:
           fetch-depth: 0  # Full git history for version calculation
           fetch-tags: true
+
+      - name: Determine Build Type
+        id: build-type
+        run: |
+          # Determine CI_BUILD_TYPE based on the event that triggered the workflow
+          if [[ -n "${{ inputs.build_type }}" ]]; then
+            echo "CI_BUILD_TYPE=${{ inputs.build_type }}" >> $GITHUB_ENV
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "CI_BUILD_TYPE=release" >> $GITHUB_ENV
+          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            echo "CI_BUILD_TYPE=prerelease" >> $GITHUB_ENV
+          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            echo "CI_BUILD_TYPE=test" >> $GITHUB_ENV
+          else
+            echo "CI_BUILD_TYPE=local" >> $GITHUB_ENV
+          fi
+          echo "Build type: $CI_BUILD_TYPE"
 
       - name: Set up JDK
         uses: actions/setup-java@v4

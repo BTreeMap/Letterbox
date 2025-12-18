@@ -42,18 +42,28 @@ This is safely under Google Play's 2.1 billion limit.
 
 When the build is exactly on a Git tag matching `v*.*.*`:
 
-- **Version Name**: `MAJOR.MINOR.PATCH` (e.g., `1.2.3`)
+- **Version Name**: `vMAJOR.MINOR.PATCH` (e.g., `v1.2.3`)
 - **Qualifier**: 511 (maximum)
 - **Example**: `v1.2.3` → versionCode = `(1 << 23) | (2 << 16) | (3 << 9) | 511`
 
-### Development Builds
+### Pre-release Builds (Main Branch)
 
-When there are commits after the latest release tag:
+When there are commits after the latest release tag on the main branch:
 
 - **Patch Increment**: The patch version is incremented by 1
-- **Version Name**: `MAJOR.MINOR.PATCH-dev.N+HASH` (e.g., `1.2.4-dev.5+abc1234`)
+- **Version Name**: `vMAJOR.MINOR.PATCH-dev.N+HASH` (e.g., `v1.2.4-dev.5+abc1234`)
 - **Qualifier**: Number of commits since the last tag
 - **Example**: 5 commits after `v1.2.3` → versionCode = `(1 << 23) | (2 << 16) | (4 << 9) | 5`
+
+### Test Builds (Pull Requests)
+
+For pull request builds (untrusted code):
+
+- **Version Name**: `ci-test-untrusted-MAJOR.MINOR.PATCH-dev.N+HASH` (e.g., `ci-test-untrusted-1.2.4-dev.5+abc1234`)
+- **Application ID**: `org.joefang.letterbox.test` (can co-install with production)
+- **Note**: The `ci-test-untrusted-` prefix is explicitly non-SemVer to clearly indicate untrusted status
+
+See [signing.md](signing.md) for details on test build security considerations.
 
 ### Why Increment Patch for Dev Builds?
 
@@ -120,27 +130,39 @@ The qualifier field allows up to 511 commits between releases. If you exceed thi
 
 - Fetches full Git history (`fetch-depth: 0`)
 - Fetches all tags (`fetch-tags: true`)
+- Sets `CI_BUILD_TYPE` environment variable based on trigger:
+  - `release` for tag pushes (`v*`)
+  - `prerelease` for main branch pushes
+  - `test` for pull requests
 - Version is automatically derived during Gradle configuration
 
 ### Release Workflow (`release.yml`)
 
 - Validates that the release tag matches `v*.*.*` pattern
 - Builds with the release version (qualifier = 511)
+- Version name format: `v1.2.3`
 
 ### Pre-release Workflow (`pre-release.yml`)
 
 - Creates pre-releases for main branch builds
-- Version name includes dev build info (e.g., `1.2.4-dev.5+abc1234`)
+- Version name includes dev build info (e.g., `v1.2.4-dev.5+abc1234`)
 - Pre-release tags use format `pre-release-{short-sha}`
+
+### Sign Test Workflow (`sign-test.yml`)
+
+- Signs PR builds with a separate test signing key
+- Uses `ci:test` environment (separate from `ci:release`)
+- Version name format: `ci-test-untrusted-1.2.4-dev.5+abc1234`
 
 ## Implementation
 
 The versioning logic is implemented in:
 
-1. **`app/build.gradle.kts`**: `Versioning` object that resolves version from Git state
+1. **`app/build.gradle.kts`**: `Versioning` object that resolves version from Git state and `CI_BUILD_TYPE`
 2. **`.github/workflows/pre-release.yml`**: Shell script for pre-release version naming
+3. **`.github/workflows/build.yml`**: Sets `CI_BUILD_TYPE` based on trigger event
 
-Both implementations follow the same algorithm to ensure consistency.
+All implementations follow the same algorithm to ensure consistency.
 
 ## Troubleshooting
 

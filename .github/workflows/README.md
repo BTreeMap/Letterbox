@@ -34,17 +34,36 @@ This directory contains the CI/CD workflows for the Letterbox project. The workf
 - Navigation flows (menu interactions, state consistency)
 - Accessibility checks (content descriptions, element counts)
 
-### 3. `pre-release.yml` - Pre-release Creation
+### 3. `sign-test.yml` - Sign Test APK
+**Trigger:** On successful completion of Build workflow (PRs only).
+
+**Permissions:** `contents: read`, `actions: read`
+
+**Environment:** `ci:test` (uses separate test signing key)
+
+**Purpose:** Signs PR test builds with a separate, untrusted test signing key. This allows testers to download and install test builds from PRs without giving malicious PR code access to production signing keys.
+
+**Security Notes:**
+- Uses a completely separate signing keypair from production releases
+- Version name includes `ci-test-untrusted-` prefix to clearly indicate untrusted status
+- Signed APKs are uploaded as artifacts for testers to download
+- See [docs/signing.md](../../docs/signing.md) for full security documentation
+
+### 4. `pre-release.yml` - Pre-release Creation
 **Trigger:** On successful completion of Build workflow (main branch only).
 
 **Permissions:** `contents: write`, `actions: read`
 
+**Environment:** `ci:release` (uses production signing key)
+
 **Purpose:** Creates automated pre-releases from main branch builds by downloading APK artifacts from the build workflow.
 
-### 4. `release.yml` - Release Publication
+### 5. `release.yml` - Release Publication
 **Trigger:** When a GitHub release is published.
 
 **Permissions:** `contents: write` (scoped to publish job only)
+
+**Environment:** `ci:release` (uses production signing key)
 
 **Purpose:** Builds and uploads the final release APK to the GitHub release.
 
@@ -63,21 +82,24 @@ This directory contains the CI/CD workflows for the Letterbox project. The workf
               ┌───────────────────────┐
               │      build.yml        │
               │  (lint, test, build)  │
+              │  Sets CI_BUILD_TYPE   │
               └───────────┬───────────┘
                           │
-          ┌───────────────┼───────────────┐
-          │               │               │
-          ▼               ▼               ▼
-┌─────────────────┐ ┌───────────────┐ ┌─────────────────┐
-│ android-ui.yml  │ │pre-release.yml│ │  (other future  │
-│   (UI tests)    │ │ (main only)   │ │   consumers)    │
-└─────────────────┘ └───────────────┘ └─────────────────┘
+          ┌───────────────┼───────────────┬───────────────┐
+          │               │               │               │
+          ▼               ▼               ▼               ▼
+┌─────────────────┐ ┌───────────────┐ ┌───────────────┐ ┌─────────────────┐
+│ android-ui.yml  │ │sign-test.yml  │ │pre-release.yml│ │  (other future  │
+│   (UI tests)    │ │ (PRs only)    │ │ (main only)   │ │   consumers)    │
+│                 │ │ ci:test env   │ │ ci:release env│ │                 │
+└─────────────────┘ └───────────────┘ └───────────────┘ └─────────────────┘
 ```
 
 ## Security Improvements
 
 1. **Least Privilege for PRs**: Build workflow has no write permissions.
-2. **Consolidated Building**: APKs are built once and shared via artifacts.
+2. **Separate Signing Keys**: Test builds use `ci:test` environment with separate key, releases use `ci:release`.
+3. **Consolidated Building**: APKs are built once and shared via artifacts.
 3. **Job-Level Permission Overrides**: Within workflows that need write permissions, individual jobs override to read-only where possible.
 4. **Clear Separation of Concerns**: Different workflows for different purposes makes it easier to audit and maintain security policies.
 
