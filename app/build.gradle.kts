@@ -31,6 +31,20 @@ object Versioning {
     private const val MAX_QUALIFIER = 511
     private const val STABLE_QUALIFIER = MAX_QUALIFIER
     
+    /**
+     * Build type determined by CI_BUILD_TYPE environment variable.
+     * - "release": Official tagged release (vX.Y.Z)
+     * - "prerelease": Main branch build (vX.Y.Z-dev.N+hash)
+     * - "test": PR/untrusted build (ci-test-untrusted-X.Y.Z-dev.N+hash)
+     * - "local": Local development build (same as prerelease format)
+     */
+    enum class BuildType {
+        RELEASE,      // Tagged releases: v1.2.3
+        PRERELEASE,   // Main branch: v1.2.3-dev.N+hash
+        TEST,         // PRs: ci-test-untrusted-1.2.3-dev.N+hash
+        LOCAL         // Local builds: same as prerelease
+    }
+    
     data class VersionInfo(
         val major: Int,
         val minor: Int,
@@ -38,7 +52,8 @@ object Versioning {
         val isStable: Boolean,
         val commitsSinceTag: Int,
         val versionName: String,
-        val versionCode: Int
+        val versionCode: Int,
+        val buildType: BuildType
     )
     
     /**
@@ -54,9 +69,10 @@ object Versioning {
     }
     
     /**
-     * Resolves version info from git state using ProcessBuilder.
+      * Resolves version info from git state using ProcessBuilder.
      * - Finds the latest v*.*.* tag
      * - Determines if HEAD is exactly on the tag (stable) or ahead (dev build)
+     * - Uses CI_BUILD_TYPE env var to determine version name format
      * - Calculates versionCode and versionName accordingly
      */
     fun resolveFromGit(projectDir: java.io.File): VersionInfo {
@@ -70,6 +86,15 @@ object Versioning {
             } catch (e: Exception) {
                 ""
             }
+        }
+        
+        // Determine build type from CI_BUILD_TYPE env var
+        val ciBuildTypeEnv = System.getenv("CI_BUILD_TYPE") ?: "local"
+        val buildType = when (ciBuildTypeEnv.lowercase()) {
+            "release" -> BuildType.RELEASE
+            "prerelease" -> BuildType.PRERELEASE
+            "test" -> BuildType.TEST
+            else -> BuildType.LOCAL
         }
         
         // Get the latest version tag matching v*.*.*
@@ -132,14 +157,37 @@ object Versioning {
         // Calculate version code using effective patch for dev builds
         val versionCode = calculateVersionCode(major, minor, effectivePatch, qualifier)
         
-        // Generate version name showing the version being worked towards
-        val versionName = if (isStable) {
-            "$major.$minor.$patch"
-        } else {
-            // Get short commit hash for dev builds
-            val shortHash = exec("git", "rev-parse", "--short", "HEAD")
-            // Show effective patch in version name (the version being worked towards)
-            "$major.$minor.$effectivePatch-dev.$commitsSinceTag+$shortHash"
+        // Get short commit hash for dev builds
+        val shortHash = exec("git", "rev-parse", "--short", "HEAD")
+        
+        // Generate version name based on build type
+        // Design doc specifies:
+        // - Release: v1.2.3
+        // - Pre-release: v1.2.3-dev.N+hash
+        // - Test (PR): ci-test-untrusted-1.2.3-dev.N+hash (explicitly non-SemVer)
+        val versionName = when (buildType) {
+            BuildType.RELEASE -> {
+                // Official release: vMAJOR.MINOR.PATCH
+                "v$major.$minor.$patch"
+            }
+            BuildType.PRERELEASE, BuildType.LOCAL -> {
+                if (isStable) {
+                    // Exactly on a tag
+                    "v$major.$minor.$patch"
+                } else {
+                    // Development build: vMAJOR.MINOR.PATCH-dev.N+hash
+                    "v$major.$minor.$effectivePatch-dev.$commitsSinceTag+$shortHash"
+                }
+            }
+            BuildType.TEST -> {
+                // Untrusted PR build: ci-test-untrusted-MAJOR.MINOR.PATCH-dev.N+hash
+                // Explicitly non-SemVer to make it clear this is an untrusted test build
+                if (isStable) {
+                    "ci-test-untrusted-$major.$minor.$patch+$shortHash"
+                } else {
+                    "ci-test-untrusted-$major.$minor.$effectivePatch-dev.$commitsSinceTag+$shortHash"
+                }
+            }
         }
         
         return VersionInfo(
@@ -149,7 +197,8 @@ object Versioning {
             isStable = isStable,
             commitsSinceTag = commitsSinceTag,
             versionName = versionName,
-            versionCode = versionCode
+            versionCode = versionCode,
+            buildType = buildType
         )
     }
 }
@@ -158,7 +207,7 @@ object Versioning {
 val versionInfo = Versioning.resolveFromGit(rootProject.projectDir)
 
 // Log version info during configuration
-logger.lifecycle("Version Info: name=${versionInfo.versionName}, code=${versionInfo.versionCode}, stable=${versionInfo.isStable}")
+logger.lifecycle("Version Info: name=${versionInfo.versionName}, code=${versionInfo.versionCode}, stable=${versionInfo.isStable}, buildType=${versionInfo.buildType}")
 
 android {
     namespace = "org.joefang.letterbox"
@@ -190,12 +239,14 @@ android {
     productFlavors {
         create("prod") {
             dimension = "channel"
-            // Production variant uses default applicationId
+            // Production variant uses default applicationId (org.joefang.letterbox)
         }
         create("staging") {
             dimension = "channel"
+            // Test variant uses .test suffix for co-installation with prod
+            // applicationId: org.joefang.letterbox.test
             applicationIdSuffix = ".test"
-            versionNameSuffix = "-test"
+            // Note: versionName already includes "ci-test-untrusted-" prefix when CI_BUILD_TYPE=test
             resValue("string", "app_name", "Letterbox (Test)")
         }
     }
