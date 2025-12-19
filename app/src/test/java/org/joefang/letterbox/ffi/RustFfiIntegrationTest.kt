@@ -43,6 +43,8 @@ class RustFfiIntegrationTest {
                 libraryLoaded = true
             } catch (e: UnsatisfiedLinkError) {
                 loadError = "Native library not found: ${e.message}"
+            } catch (e: ExceptionInInitializerError) {
+                loadError = "Library initialization failed: ${e.cause?.message ?: e.message}"
             } catch (e: Exception) {
                 loadError = "Failed to load native library: ${e.message}"
             }

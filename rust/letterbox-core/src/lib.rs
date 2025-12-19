@@ -260,8 +260,13 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
 
 /// Parse an EML file from a file path.
 /// This is the preferred method for large emails as it avoids copying the entire
-/// file into the JVM heap first. Rust reads/mmaps the file directly.
+/// file into the JVM heap first. Rust reads the file directly.
 /// Returns an opaque handle that stays in Rust memory.
+///
+/// # Security
+/// The caller should ensure the path points to an untrusted EML file that is safe to parse.
+/// The mail-parser library handles malformed input gracefully, but the caller should still
+/// validate that the file exists in an expected location.
 #[uniffi::export]
 pub fn parse_eml_from_path(path: String) -> Result<Arc<EmailHandle>, ParseError> {
     let file_path = Path::new(&path);
@@ -434,6 +439,12 @@ impl EmailHandle {
     /// Write an inline resource directly to a file path.
     /// This avoids copying large resources across the FFI boundary.
     /// Returns true on success.
+    ///
+    /// # Security
+    /// The caller is responsible for validating that `path` is a safe, sandboxed location.
+    /// This function will create parent directories and write to the specified path without
+    /// additional path validation. Use only with paths constructed from trusted sources
+    /// (e.g., application cache directories).
     pub fn write_resource_to_path(&self, cid: String, path: String) -> Result<bool, ParseError> {
         let content = self.inner.lock().ok().and_then(|msg| {
             msg.inline_assets
@@ -500,6 +511,12 @@ impl EmailHandle {
     /// Write an attachment directly to a file path.
     /// This avoids copying large attachments across the FFI boundary.
     /// Returns true on success, false if attachment not found.
+    ///
+    /// # Security
+    /// The caller is responsible for validating that `path` is a safe, sandboxed location.
+    /// This function will create parent directories and write to the specified path without
+    /// additional path validation. Use only with paths constructed from trusted sources
+    /// (e.g., application cache directories).
     pub fn write_attachment_to_path(&self, index: u32, path: String) -> Result<bool, ParseError> {
         let content = self.inner.lock().ok().and_then(|msg| {
             msg.attachments
