@@ -11,11 +11,6 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Layer 1: Container Base (Dark Azure) -->
-    <path
-        android:fillColor="#003366"
-        android:pathData="M34,22 L74,22 A12,12 0 0 1 86,34 L86,74 A12,12 0 0 1 74,86 L34,86 A12,12 0 0 1 22,74 L22,34 A12,12 0 0 1 34,22 Z"/>
-
     <!-- Layer 3: Active File (Electric Sky) -->
     <path
         android:fillColor="#3399FF"
