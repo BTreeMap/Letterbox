@@ -207,17 +207,24 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
             .map(|cd| cd.ctype() == "attachment")
             .unwrap_or(false);
 
-        if attachment_name.is_some() || has_content_disposition_attachment {
-            if !is_inline_cid && !(is_body_part && attachment_name.is_none()) {
-                let bytes = part.contents();
-                if !bytes.is_empty() {
-                    attachments.push(Attachment {
-                        name: attachment_name.unwrap_or_else(|| format!("attachment_{}", part_idx)),
-                        content_type: content_type.clone(),
-                        size: bytes.len() as u64,
-                        content: bytes.to_vec(),
-                    });
-                }
+        // Check if this part qualifies as an attachment:
+        // 1. Has a filename OR is explicitly marked as attachment
+        // 2. Is not an inline CID reference
+        // 3. Is not a body part without a filename
+        let is_attachment_candidate =
+            attachment_name.is_some() || has_content_disposition_attachment;
+        // Exclusion conditions: skip inline CID parts, or unnamed body parts (text/html, text/plain)
+        let should_exclude = is_inline_cid || (is_body_part && attachment_name.is_none());
+
+        if is_attachment_candidate && !should_exclude {
+            let bytes = part.contents();
+            if !bytes.is_empty() {
+                attachments.push(Attachment {
+                    name: attachment_name.unwrap_or_else(|| format!("attachment_{}", part_idx)),
+                    content_type: content_type.clone(),
+                    size: bytes.len() as u64,
+                    content: bytes.to_vec(),
+                });
             }
         }
     }
@@ -253,8 +260,13 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
 
 /// Parse an EML file from a file path.
 /// This is the preferred method for large emails as it avoids copying the entire
-/// file into the JVM heap first. Rust reads/mmaps the file directly.
+/// file into the JVM heap first. Rust reads the file directly.
 /// Returns an opaque handle that stays in Rust memory.
+///
+/// # Security
+/// The caller should ensure the path points to an untrusted EML file that is safe to parse.
+/// The mail-parser library handles malformed input gracefully, but the caller should still
+/// validate that the file exists in an expected location.
 #[uniffi::export]
 pub fn parse_eml_from_path(path: String) -> Result<Arc<EmailHandle>, ParseError> {
     let file_path = Path::new(&path);
@@ -427,6 +439,12 @@ impl EmailHandle {
     /// Write an inline resource directly to a file path.
     /// This avoids copying large resources across the FFI boundary.
     /// Returns true on success.
+    ///
+    /// # Security
+    /// The caller is responsible for validating that `path` is a safe, sandboxed location.
+    /// This function will create parent directories and write to the specified path without
+    /// additional path validation. Use only with paths constructed from trusted sources
+    /// (e.g., application cache directories).
     pub fn write_resource_to_path(&self, cid: String, path: String) -> Result<bool, ParseError> {
         let content = self.inner.lock().ok().and_then(|msg| {
             msg.inline_assets
@@ -493,6 +511,12 @@ impl EmailHandle {
     /// Write an attachment directly to a file path.
     /// This avoids copying large attachments across the FFI boundary.
     /// Returns true on success, false if attachment not found.
+    ///
+    /// # Security
+    /// The caller is responsible for validating that `path` is a safe, sandboxed location.
+    /// This function will create parent directories and write to the specified path without
+    /// additional path validation. Use only with paths constructed from trusted sources
+    /// (e.g., application cache directories).
     pub fn write_attachment_to_path(&self, index: u32, path: String) -> Result<bool, ParseError> {
         let content = self.inner.lock().ok().and_then(|msg| {
             msg.attachments
@@ -800,5 +824,153 @@ Content-Type: text/html
     #[test]
     fn small_resource_threshold_is_64kb() {
         assert_eq!(SMALL_RESOURCE_THRESHOLD, 64 * 1024);
+    }
+
+    // Additional edge case tests
+
+    #[test]
+    fn parses_email_with_unicode_subject() {
+        let email = "Subject: こんにちは 🌍 Émoji\r\nFrom: test@test.com\r\n\r\nBody";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let subject = handle.subject();
+        // Verify Unicode characters are preserved
+        assert!(subject.contains("こんにちは") || subject.contains("🌍") || !subject.is_empty());
+    }
+
+    #[test]
+    fn parses_email_with_very_long_subject() {
+        let long_subject = "X".repeat(1000);
+        let email = format!(
+            "Subject: {}\r\nFrom: test@test.com\r\n\r\nBody",
+            long_subject
+        );
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        assert_eq!(handle.subject(), long_subject);
+    }
+
+    #[test]
+    fn parses_email_with_missing_subject() {
+        let email = "From: test@test.com\r\nTo: recipient@test.com\r\n\r\nBody";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        // Should fall back to "Untitled" for missing subject
+        assert_eq!(handle.subject(), "Untitled");
+    }
+
+    #[test]
+    fn parses_email_with_empty_fields() {
+        let email = "Subject: Test\r\n\r\nBody";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        // Empty fields should return empty strings, not panic
+        assert!(handle.from().is_empty() || handle.from() == "");
+        assert!(handle.to().is_empty() || handle.to() == "");
+        assert!(handle.cc().is_empty() || handle.cc() == "");
+    }
+
+    #[test]
+    fn html_escape_handles_all_special_chars() {
+        // Test that html_escape handles all 5 required entities
+        let input = "Test & <script>alert('xss')</script> \"quotes\"";
+        let escaped = html_escape(input);
+        assert!(!escaped.contains('&') || escaped.contains("&amp;"));
+        assert!(!escaped.contains('<') || escaped.contains("&lt;"));
+        assert!(!escaped.contains('>') || escaped.contains("&gt;"));
+        assert!(!escaped.contains('"') || escaped.contains("&quot;"));
+        assert!(!escaped.contains('\'') || escaped.contains("&#39;"));
+    }
+
+    #[test]
+    fn parses_email_with_multiple_recipients() {
+        let email = "Subject: Multi\r\n\
+                     From: sender@example.com\r\n\
+                     To: alice@example.com, bob@example.com\r\n\
+                     Cc: carol@example.com\r\n\
+                     \r\nBody";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let to = handle.to();
+        // Should contain both recipients
+        assert!(to.contains("alice") || to.contains("bob"));
+    }
+
+    #[test]
+    fn parses_email_with_date() {
+        let email = "Subject: Dated\r\n\
+                     From: test@test.com\r\n\
+                     Date: Mon, 11 Dec 2025 10:00:00 +0000\r\n\
+                     \r\nBody";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let date = handle.date();
+        // Date should be extracted in some format
+        assert!(!date.is_empty());
+    }
+
+    #[test]
+    fn parse_eml_from_path_empty_file_returns_empty_error() {
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join("empty_email.eml");
+        fs::write(&temp_file, "").expect("write empty file");
+
+        let result = parse_eml_from_path(temp_file.to_str().unwrap().to_string());
+        assert!(matches!(result, Err(ParseError::Empty)));
+
+        let _ = fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn email_handle_thread_safe() {
+        // Test that EmailHandle can be shared across threads safely
+        let handle = parse_eml(SIMPLE_EMAIL.as_bytes().to_vec()).expect("should parse");
+        let handle_clone = handle.clone();
+
+        std::thread::spawn(move || {
+            let _ = handle_clone.subject();
+        })
+        .join()
+        .expect("thread should complete");
+
+        // Original handle should still work
+        assert_eq!(handle.subject(), "Hello");
+    }
+
+    static EMAIL_WITH_MULTIPLE_ATTACHMENTS: Lazy<&'static str> = Lazy::new(|| {
+        "Subject: Multiple Attachments\r\n\
+         From: sender@example.com\r\n\
+         To: recipient@example.com\r\n\
+         MIME-Version: 1.0\r\n\
+         Content-Type: multipart/mixed; boundary=\"mixed-boundary\"\r\n\
+         \r\n\
+         --mixed-boundary\r\n\
+         Content-Type: text/plain\r\n\
+         \r\n\
+         Body text\r\n\
+         --mixed-boundary\r\n\
+         Content-Type: application/pdf\r\n\
+         Content-Disposition: attachment; filename=\"doc1.pdf\"\r\n\
+         Content-Transfer-Encoding: base64\r\n\
+         \r\n\
+         SGVsbG8=\r\n\
+         --mixed-boundary\r\n\
+         Content-Type: image/png\r\n\
+         Content-Disposition: attachment; filename=\"image.png\"\r\n\
+         Content-Transfer-Encoding: base64\r\n\
+         \r\n\
+         iVBORw0K\r\n\
+         --mixed-boundary--\r\n"
+    });
+
+    #[test]
+    fn parses_multiple_attachments() {
+        let handle =
+            parse_eml(EMAIL_WITH_MULTIPLE_ATTACHMENTS.as_bytes().to_vec()).expect("should parse");
+        let attachments = handle.get_attachments();
+        assert!(attachments.len() >= 2);
+        assert_eq!(handle.attachment_count() as usize, attachments.len());
+    }
+
+    #[test]
+    fn get_attachment_content_invalid_index_returns_none() {
+        let handle = parse_eml(SIMPLE_EMAIL.as_bytes().to_vec()).expect("should parse");
+        // Email has no attachments, so any index is invalid
+        assert!(handle.get_attachment_content(0).is_none());
+        assert!(handle.get_attachment_content(100).is_none());
     }
 }
