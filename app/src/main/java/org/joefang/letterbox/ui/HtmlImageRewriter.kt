@@ -51,11 +51,6 @@ object HtmlImageRewriter {
             val originalUrl = matchResult.groupValues[3]
             val suffix = matchResult.groupValues[4]
             
-            // Don't proxy cid: URLs (inline resources)
-            if (originalUrl.startsWith("cid:", ignoreCase = true)) {
-                return@replace matchResult.value
-            }
-            
             // URL-encode the target URL
             val encodedUrl = try {
                 URLEncoder.encode(originalUrl, "UTF-8")

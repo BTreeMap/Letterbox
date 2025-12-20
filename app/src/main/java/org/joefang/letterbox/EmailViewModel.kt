@@ -9,6 +9,7 @@ import org.joefang.letterbox.ffi.parseEml
 import org.joefang.letterbox.ffi.parseEmlFromPath
 import org.joefang.letterbox.ui.AttachmentData
 import org.joefang.letterbox.ui.EmailContent
+import org.joefang.letterbox.ui.HtmlImageRewriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -65,7 +66,7 @@ class EmailViewModel(
                 
                 // If successfully parsed, show the email
                 if (parsed != null) {
-                    val hasRemoteImages = org.joefang.letterbox.ui.HtmlImageRewriter.containsRemoteImages(
+                    val hasRemoteImages = HtmlImageRewriter.containsRemoteImages(
                         parsed.bodyHtml ?: ""
                     )
                     _uiState.update { it.copy(
@@ -113,7 +114,7 @@ class EmailViewModel(
                         // Read bytes for sharing functionality
                         // Note: This could be optimized to load lazily only when sharing
                         val bytes = file.readBytes()
-                        val hasRemoteImages = org.joefang.letterbox.ui.HtmlImageRewriter.containsRemoteImages(
+                        val hasRemoteImages = HtmlImageRewriter.containsRemoteImages(
                             parsed.bodyHtml ?: ""
                         )
                         _uiState.update { it.copy(
@@ -230,7 +231,7 @@ class EmailViewModel(
         val currentEmail = _uiState.value.currentEmail ?: return null
         val bodyHtml = currentEmail.bodyHtml ?: return null
         
-        return org.joefang.letterbox.ui.HtmlImageRewriter.rewriteImageUrls(bodyHtml, useProxy)
+        return HtmlImageRewriter.rewriteImageUrls(bodyHtml, useProxy)
     }
 
     /**
