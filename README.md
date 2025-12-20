@@ -1,5 +1,15 @@
 # Overview
 
+<p align="center">
+  <img src="docs/letterbox_icon.svg" alt="Letterbox Icon" width="128" height="128"/>
+</p>
+
+<p align="center">
+  <strong>Letterbox</strong> – An Android app for opening and inspecting <code>.eml</code> email files
+</p>
+
+---
+
 Letterbox is an Android application built with Jetpack Compose that opens and inspects `.eml` email files. It delegates parsing to a Rust core library (exposed via UniFFI and JNA), renders message bodies and attachments, and keeps a local, deduplicated history backed by Room or an in-memory store for tests.
 
 ## Key capabilities
@@ -59,3 +69,5 @@ cargo test
 ## License
 
 This project is licensed under the MIT License (see `LICENSE`).
+
+**Note:** The Letterbox app icon is **not** covered by the MIT License and remains proprietary. See the [LICENSE](LICENSE) file for details.

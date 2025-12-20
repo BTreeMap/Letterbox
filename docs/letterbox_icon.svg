@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Letterbox App Icon
+  Copyright (c) 2025 Joe Fang. All rights reserved.
+  This icon is NOT covered by the MIT License. See LICENSE for details.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
+  <!-- NOTE: Background removed for transparency. 
+       This allows the icon to float freely or adapt to system themes. -->
+
+  <!-- Layer 1: Container Base (Dark Azure) 
+       Acts as the stable foundation/back of the letterbox. -->
+  <rect x="22" y="22" width="64" height="64" rx="12" fill="#003366"/>
+
+  <!-- Layer 3: Active File (Electric Sky) 
+       The brightest element representing the email content.
+       Placed vertically higher (y=30) so it appears to be 'behind' the front lip. -->
+  <rect x="30" y="30" width="48" height="40" rx="4" fill="#3399FF"/>
+
+  <!-- Detail: Header Data Line 
+       A subtle technical mark (White with 30% Opacity) on the file. -->
+  <rect x="36" y="38" width="16" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.3"/>
+
+  <!-- Layer 2: Front Lip / Slot Mechanism (True Azure) 
+       This shape covers the bottom half of the file, creating the physical 'pocket' depth. -->
+  <path d="M22,54 L86,54 L86,74 A12,12 0 0 1 74,86 L34,86 A12,12 0 0 1 22,74 Z" fill="#0055AA"/>
+</svg>

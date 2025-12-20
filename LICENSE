@@ -19,3 +19,17 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+## Icon License Exemption
+
+The Letterbox app icon (`app/src/main/res/drawable/ic_letterbox_foreground.xml`
+and related files in `app/src/main/res/mipmap-anydpi-v26/`) is **NOT** covered
+by the MIT License above.
+
+**Copyright (c) 2025 Joe Fang. All rights reserved.**
+
+The icon remains proprietary to the author. No permission is granted to use,
+copy, modify, distribute, or create derivative works of the icon without
+explicit written permission from the copyright holder.
