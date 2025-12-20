@@ -92,7 +92,11 @@ fun EmailDetailScreen(
     onNavigateBack: () -> Unit,
     onRemoveFromHistory: (() -> Unit)? = null,
     onShareEml: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    hasRemoteImages: Boolean = false,
+    sessionLoadImages: Boolean = false,
+    onShowImages: (() -> Unit)? = null,
+    useProxy: Boolean = true
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showDetailsDialog by remember { mutableStateOf(false) }
@@ -165,6 +169,14 @@ fun EmailDetailScreen(
                 .padding(padding)
                 .fillMaxSize()
         ) {
+            // Remote images banner
+            if (hasRemoteImages && !sessionLoadImages && onShowImages != null) {
+                RemoteImagesBanner(
+                    onShowImages = onShowImages,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            
             // Header section
             EmailHeader(
                 from = email.from,
@@ -190,9 +202,16 @@ fun EmailDetailScreen(
             }
 
             // WebView for HTML content
+            val processedHtml = if (sessionLoadImages) {
+                HtmlImageRewriter.rewriteImageUrls(email.bodyHtml ?: "", useProxy)
+            } else {
+                email.bodyHtml ?: "<p>No content available</p>"
+            }
+            
             EmailWebView(
-                html = email.bodyHtml ?: "<p>No content available</p>",
+                html = processedHtml,
                 getResource = email.getResource,
+                allowNetworkLoads = sessionLoadImages,
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f)
@@ -443,6 +462,40 @@ private fun sanitizeFilename(name: String): String {
 }
 
 @Composable
+private fun RemoteImagesBanner(
+    onShowImages: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Remote images are hidden",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Images will be loaded through DuckDuckGo proxy to protect your privacy",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            TextButton(onClick = onShowImages) {
+                Text("Show")
+            }
+        }
+    }
+}
+
+@Composable
 private fun EmailHeader(
     from: String,
     to: String,
@@ -483,12 +536,14 @@ private fun EmailHeader(
  * Secure WebView that only loads content we provide.
  * - Disables file access for security
  * - Intercepts cid: URLs to load inline images from email attachments
+ * - Optionally allows network loads for remote images (when proxied)
  */
 @Composable
 private fun EmailWebView(
     html: String,
     getResource: (String) -> ByteArray?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    allowNetworkLoads: Boolean = false
 ) {
     AndroidView(
         factory = { context ->
@@ -498,8 +553,8 @@ private fun EmailWebView(
                     allowFileAccess = false
                     allowContentAccess = false
                     javaScriptEnabled = false // Disable JS for security
-                    blockNetworkLoads = true // Block all network requests
-                    blockNetworkImage = true
+                    blockNetworkLoads = !allowNetworkLoads // Allow network loads when images should be shown
+                    blockNetworkImage = !allowNetworkLoads
                 }
 
                 // Custom WebViewClient to intercept cid: URLs

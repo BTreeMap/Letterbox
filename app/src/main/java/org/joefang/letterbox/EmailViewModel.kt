@@ -27,7 +27,9 @@ data class EmailUiState(
     val currentEntryId: Long? = null,
     val currentEmailBytes: ByteArray? = null,
     val isLoading: Boolean = false,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val sessionLoadImages: Boolean = false,
+    val hasRemoteImages: Boolean = false
 )
 
 class EmailViewModel(
@@ -63,11 +65,16 @@ class EmailViewModel(
                 
                 // If successfully parsed, show the email
                 if (parsed != null) {
+                    val hasRemoteImages = org.joefang.letterbox.ui.HtmlImageRewriter.containsRemoteImages(
+                        parsed.bodyHtml ?: ""
+                    )
                     _uiState.update { it.copy(
                         isLoading = false,
                         currentEmail = parsed,
                         currentEntryId = entry.id,
-                        currentEmailBytes = bytes
+                        currentEmailBytes = bytes,
+                        sessionLoadImages = false,
+                        hasRemoteImages = hasRemoteImages
                     ) }
                 } else {
                     _uiState.update { it.copy(
@@ -106,11 +113,16 @@ class EmailViewModel(
                         // Read bytes for sharing functionality
                         // Note: This could be optimized to load lazily only when sharing
                         val bytes = file.readBytes()
+                        val hasRemoteImages = org.joefang.letterbox.ui.HtmlImageRewriter.containsRemoteImages(
+                            parsed.bodyHtml ?: ""
+                        )
                         _uiState.update { it.copy(
                             isLoading = false,
                             currentEmail = parsed,
                             currentEntryId = entry.id,
-                            currentEmailBytes = bytes
+                            currentEmailBytes = bytes,
+                            sessionLoadImages = false,
+                            hasRemoteImages = hasRemoteImages
                         ) }
                     } else {
                         _uiState.update { it.copy(
@@ -180,7 +192,9 @@ class EmailViewModel(
         _uiState.update { it.copy(
             currentEmail = null,
             currentEntryId = null,
-            currentEmailBytes = null
+            currentEmailBytes = null,
+            sessionLoadImages = false,
+            hasRemoteImages = false
         ) }
     }
 
@@ -196,6 +210,27 @@ class EmailViewModel(
      */
     fun setError(message: String) {
         _uiState.update { it.copy(errorMessage = message) }
+    }
+    
+    /**
+     * Enable image loading for the current session.
+     * This is a one-time action that persists until the email is closed.
+     */
+    fun enableSessionImageLoading() {
+        _uiState.update { it.copy(sessionLoadImages = true) }
+    }
+    
+    /**
+     * Get the processed HTML for display based on current image loading settings.
+     * 
+     * @param useProxy Whether to use DuckDuckGo proxy for remote images
+     * @return HTML with images rewritten if needed
+     */
+    fun getDisplayHtml(useProxy: Boolean): String? {
+        val currentEmail = _uiState.value.currentEmail ?: return null
+        val bodyHtml = currentEmail.bodyHtml ?: return null
+        
+        return org.joefang.letterbox.ui.HtmlImageRewriter.rewriteImageUrls(bodyHtml, useProxy)
     }
 
     /**

@@ -7,6 +7,7 @@ composeBom = "2024.12.01"
 activityCompose = "1.9.3"
 lifecycleRuntimeKtx = "2.8.6"
 room = "2.6.1"
+datastore = "1.1.1"
 junit4 = "4.13.2"
 androidxTestExt = "1.1.5"
 espressoCore = "3.5.1"
@@ -31,6 +32,7 @@ lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", v
 room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
 junit4 = { module = "junit:junit", version.ref = "junit4" }
 androidx-test-ext = { module = "androidx.test.ext:junit", version.ref = "androidxTestExt" }
 espresso-core = { module = "androidx.test.espresso:espresso-core", version.ref = "espressoCore" }

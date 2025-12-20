@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import org.joefang.letterbox.data.UserPreferencesRepository
 import org.joefang.letterbox.ui.EmailContent
 import org.joefang.letterbox.ui.EmailDetailScreen
 import org.joefang.letterbox.ui.theme.LetterboxTheme
@@ -73,8 +74,9 @@ import java.util.Locale
 
 /**
  * MIME types accepted by the file picker for email files.
+ * Restricted to specific types to reduce user error.
  */
-private val EMAIL_MIME_TYPES = arrayOf("message/rfc822", "application/eml", "*/*")
+private val EMAIL_MIME_TYPES = arrayOf("message/rfc822", "application/octet-stream", "text/plain")
 
 /**
  * Time constants for relative timestamp formatting (in milliseconds).
@@ -98,10 +100,14 @@ class MainActivity : ComponentActivity() {
         EmailViewModelFactory(InMemoryHistoryRepository(filesDir))
     }
     
+    private lateinit var preferencesRepository: UserPreferencesRepository
     private var launchedFromExternalIntent = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Initialize preferences repository
+        preferencesRepository = UserPreferencesRepository(this)
         
         // Track if launched from external VIEW or SEND intent
         launchedFromExternalIntent = intent?.action == Intent.ACTION_VIEW || 
@@ -118,6 +124,10 @@ class MainActivity : ComponentActivity() {
                 ) {
                     val uiState by viewModel.uiState.collectAsState()
                     val snackbarHostState = remember { SnackbarHostState() }
+                    
+                    // Collect preferences
+                    val enablePrivacyProxy by preferencesRepository.enablePrivacyProxy.collectAsState(initial = true)
+                    val alwaysLoadRemoteImages by preferencesRepository.alwaysLoadRemoteImages.collectAsState(initial = false)
 
                     // Show error message if any
                     LaunchedEffect(uiState.errorMessage) {
@@ -134,6 +144,9 @@ class MainActivity : ComponentActivity() {
                         uiState.currentEmail != null -> {
                             val context = LocalContext.current
                             val scope = rememberCoroutineScope()
+                            
+                            // Determine whether images should be loaded
+                            val shouldLoadImages = alwaysLoadRemoteImages || uiState.sessionLoadImages
                             
                             EmailDetailScreen(
                                 email = uiState.currentEmail!!,
@@ -154,7 +167,13 @@ class MainActivity : ComponentActivity() {
                                 } else null,
                                 onShareEml = {
                                     shareCurrentEmail(context, uiState.currentEmail!!.subject)
-                                }
+                                },
+                                hasRemoteImages = uiState.hasRemoteImages,
+                                sessionLoadImages = shouldLoadImages,
+                                onShowImages = {
+                                    viewModel.enableSessionImageLoading()
+                                },
+                                useProxy = enablePrivacyProxy
                             )
                         }
                         else -> {
@@ -172,7 +191,8 @@ class MainActivity : ComponentActivity() {
                                 onClearHistory = {
                                     viewModel.clearHistory()
                                 },
-                                snackbarHostState = snackbarHostState
+                                snackbarHostState = snackbarHostState,
+                                preferencesRepository = preferencesRepository
                             )
                         }
                     }
@@ -210,6 +230,18 @@ class MainActivity : ComponentActivity() {
 
     private fun loadEmailFromUri(uri: Uri, mimeType: String?) {
         try {
+            // Take persistable URI permission for content:// URIs
+            if (uri.scheme == "content") {
+                try {
+                    contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (e: SecurityException) {
+                    // Permission not available - this is OK, file may still be readable
+                }
+            }
+            
             contentResolver.openInputStream(uri)?.use { inputStream ->
                 val bytes = inputStream.readBytes()
                 val filename = getFilenameFromUri(uri) ?: "email.eml"
@@ -278,7 +310,8 @@ private fun LetterboxScaffold(
     onEntryDelete: (HistoryEntry) -> Unit,
     onOpenFile: (Uri) -> Unit,
     onClearHistory: () -> Unit,
-    snackbarHostState: SnackbarHostState
+    snackbarHostState: SnackbarHostState,
+    preferencesRepository: UserPreferencesRepository
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
@@ -292,6 +325,10 @@ private fun LetterboxScaffold(
     // For now, settings are stored in memory and reset on app restart
     var historyLimitIndex by remember { mutableIntStateOf(0) } // 0=10, 1=20, 2=50, 3=100, 4=Unlimited
     var storeLocalCopies by remember { mutableStateOf(true) }
+    
+    // Collect image loading preferences
+    val alwaysLoadRemoteImages by preferencesRepository.alwaysLoadRemoteImages.collectAsState(initial = false)
+    val enablePrivacyProxy by preferencesRepository.enablePrivacyProxy.collectAsState(initial = true)
     
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -379,6 +416,18 @@ private fun LetterboxScaffold(
                 onHistoryLimitChange = { historyLimitIndex = it },
                 storeLocalCopies = storeLocalCopies,
                 onStoreLocalCopiesChange = { storeLocalCopies = it },
+                alwaysLoadRemoteImages = alwaysLoadRemoteImages,
+                onAlwaysLoadRemoteImagesChange = { 
+                    scope.launch { 
+                        preferencesRepository.setAlwaysLoadRemoteImages(it)
+                    }
+                },
+                enablePrivacyProxy = enablePrivacyProxy,
+                onEnablePrivacyProxyChange = {
+                    scope.launch {
+                        preferencesRepository.setEnablePrivacyProxy(it)
+                    }
+                },
                 onClearHistory = {
                     showSettingsSheet = false
                     showClearHistoryDialog = true
@@ -442,6 +491,10 @@ private fun SettingsContent(
     onHistoryLimitChange: (Int) -> Unit,
     storeLocalCopies: Boolean,
     onStoreLocalCopiesChange: (Boolean) -> Unit,
+    alwaysLoadRemoteImages: Boolean,
+    onAlwaysLoadRemoteImagesChange: (Boolean) -> Unit,
+    enablePrivacyProxy: Boolean,
+    onEnablePrivacyProxyChange: (Boolean) -> Unit,
     onClearHistory: () -> Unit
 ) {
     val historyLimitOptions = listOf("10", "20", "50", "100", "Unlimited")
@@ -476,6 +529,66 @@ private fun SettingsContent(
                 valueRange = 0f..4f,
                 steps = 3,
                 modifier = Modifier.fillMaxWidth()
+            )
+        }
+        
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+        
+        // Remote images section
+        Text(
+            text = "Remote Images",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
+        
+        // Always load remote images toggle
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Always load remote images",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text(
+                    text = "Automatically load images from external sources",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = alwaysLoadRemoteImages,
+                onCheckedChange = onAlwaysLoadRemoteImagesChange
+            )
+        }
+        
+        // Privacy proxy toggle
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Use privacy proxy",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text(
+                    text = "Load images through DuckDuckGo to hide your IP address",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = enablePrivacyProxy,
+                onCheckedChange = onEnablePrivacyProxyChange
             )
         }
         
