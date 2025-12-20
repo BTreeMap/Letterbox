@@ -3,4 +3,6 @@
     <color name="md_theme_onPrimary">#FFFFFF</color>
     <color name="md_theme_background">#FFFBFE</color>
     <color name="md_theme_onBackground">#1C1B1F</color>
+    <!-- App icon background color (White for clean appearance) -->
+    <color name="ic_launcher_background">#FFFFFF</color>
 </resources>
