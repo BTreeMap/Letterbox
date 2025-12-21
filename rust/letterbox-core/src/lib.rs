@@ -603,7 +603,6 @@ pub fn extract_remote_images(html: String) -> Vec<RemoteImage> {
 #[uniffi::export]
 pub fn rewrite_image_urls(html: String, proxy_base_url: String) -> String {
     use scraper::{Html, Selector};
-    use url::Url;
     
     let document = Html::parse_document(&html);
     let img_selector = Selector::parse("img").unwrap();
