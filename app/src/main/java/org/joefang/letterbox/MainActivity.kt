@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import org.joefang.letterbox.data.LetterboxDatabase
 import org.joefang.letterbox.data.UserPreferencesRepository
 import org.joefang.letterbox.ui.EmailContent
 import org.joefang.letterbox.ui.EmailDetailScreen
@@ -97,7 +98,15 @@ private object FileConstants {
 
 class MainActivity : ComponentActivity() {
     private val viewModel: EmailViewModel by viewModels {
-        EmailViewModelFactory(InMemoryHistoryRepository(filesDir))
+        val database = LetterboxDatabase.getInstance(this)
+        EmailViewModelFactory(
+            HistoryRepository(
+                baseDir = filesDir,
+                blobDao = database.blobDao(),
+                historyItemDao = database.historyItemDao(),
+                historyLimit = 10
+            )
+        )
     }
     
     private lateinit var preferencesRepository: UserPreferencesRepository

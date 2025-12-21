@@ -34,7 +34,7 @@ data class EmailUiState(
 )
 
 class EmailViewModel(
-    private val repository: InMemoryHistoryRepository
+    private val repository: HistoryRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(EmailUiState())
@@ -423,7 +423,7 @@ class EmailViewModel(
 }
 
 class EmailViewModelFactory(
-    private val repository: InMemoryHistoryRepository
+    private val repository: HistoryRepository
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
