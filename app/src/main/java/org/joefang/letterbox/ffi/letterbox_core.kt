@@ -634,9 +634,13 @@ internal object IntegrityCheckingUniffiLib {
         uniffiCheckContractApiVersion(this)
         uniffiCheckApiChecksums(this)
     }
+    external fun uniffi_letterbox_core_checksum_func_extract_remote_images(
+    ): Short
     external fun uniffi_letterbox_core_checksum_func_parse_eml(
     ): Short
     external fun uniffi_letterbox_core_checksum_func_parse_eml_from_path(
+    ): Short
+    external fun uniffi_letterbox_core_checksum_func_rewrite_image_urls(
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_attachment_count(
     ): Short
@@ -732,10 +736,14 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_letterbox_core_fn_method_emailhandle_write_resource_to_path(`ptr`: Long,`cid`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_letterbox_core_fn_func_extract_remote_images(`html`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_func_parse_eml(`data`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_letterbox_core_fn_func_parse_eml_from_path(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
+    external fun uniffi_letterbox_core_fn_func_rewrite_image_urls(`html`: RustBuffer.ByValue,`proxyBaseUrl`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun ffi_letterbox_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_letterbox_core_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -855,10 +863,16 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
+    if (lib.uniffi_letterbox_core_checksum_func_extract_remote_images() != 33308.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_letterbox_core_checksum_func_parse_eml() != 48112.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_func_parse_eml_from_path() != 22339.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_func_parse_eml_from_path() != 36307.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_core_checksum_func_rewrite_image_urls() != 35199.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_attachment_count() != 2946.toShort()) {
@@ -909,10 +923,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_to() != 837.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_attachment_to_path() != 47618.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_attachment_to_path() != 9686.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_resource_to_path() != 60863.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_resource_to_path() != 46693.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1409,6 +1423,12 @@ public interface EmailHandleInterface {
      * Write an attachment directly to a file path.
      * This avoids copying large attachments across the FFI boundary.
      * Returns true on success, false if attachment not found.
+     *
+     * # Security
+     * The caller is responsible for validating that `path` is a safe, sandboxed location.
+     * This function will create parent directories and write to the specified path without
+     * additional path validation. Use only with paths constructed from trusted sources
+     * (e.g., application cache directories).
      */
     fun `writeAttachmentToPath`(`index`: kotlin.UInt, `path`: kotlin.String): kotlin.Boolean
     
@@ -1416,6 +1436,12 @@ public interface EmailHandleInterface {
      * Write an inline resource directly to a file path.
      * This avoids copying large resources across the FFI boundary.
      * Returns true on success.
+     *
+     * # Security
+     * The caller is responsible for validating that `path` is a safe, sandboxed location.
+     * This function will create parent directories and write to the specified path without
+     * additional path validation. Use only with paths constructed from trusted sources
+     * (e.g., application cache directories).
      */
     fun `writeResourceToPath`(`cid`: kotlin.String, `path`: kotlin.String): kotlin.Boolean
     
@@ -1788,6 +1814,12 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
      * Write an attachment directly to a file path.
      * This avoids copying large attachments across the FFI boundary.
      * Returns true on success, false if attachment not found.
+     *
+     * # Security
+     * The caller is responsible for validating that `path` is a safe, sandboxed location.
+     * This function will create parent directories and write to the specified path without
+     * additional path validation. Use only with paths constructed from trusted sources
+     * (e.g., application cache directories).
      */
     @Throws(ParseException::class)override fun `writeAttachmentToPath`(`index`: kotlin.UInt, `path`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
@@ -1807,6 +1839,12 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
      * Write an inline resource directly to a file path.
      * This avoids copying large resources across the FFI boundary.
      * Returns true on success.
+     *
+     * # Security
+     * The caller is responsible for validating that `path` is a safe, sandboxed location.
+     * This function will create parent directories and write to the specified path without
+     * additional path validation. Use only with paths constructed from trusted sources
+     * (e.g., application cache directories).
      */
     @Throws(ParseException::class)override fun `writeResourceToPath`(`cid`: kotlin.String, `path`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
@@ -1900,6 +1938,51 @@ public object FfiConverterTypeAttachmentInfo: FfiConverterRustBuffer<AttachmentI
             FfiConverterString.write(value.`name`, buf)
             FfiConverterString.write(value.`contentType`, buf)
             FfiConverterULong.write(value.`size`, buf)
+    }
+}
+
+
+
+/**
+ * Result of extracting remote image URLs from HTML.
+ */
+data class RemoteImage (
+    /**
+     * Original image URL (http:// or https://)
+     */
+    var `url`: kotlin.String
+    , 
+    /**
+     * Whether this is a tracking pixel (1x1 image)
+     */
+    var `isTrackingPixel`: kotlin.Boolean
+    
+){
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeRemoteImage: FfiConverterRustBuffer<RemoteImage> {
+    override fun read(buf: ByteBuffer): RemoteImage {
+        return RemoteImage(
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: RemoteImage) = (
+            FfiConverterString.allocationSize(value.`url`) +
+            FfiConverterBoolean.allocationSize(value.`isTrackingPixel`)
+    )
+
+    override fun write(value: RemoteImage, buf: ByteBuffer) {
+            FfiConverterString.write(value.`url`, buf)
+            FfiConverterBoolean.write(value.`isTrackingPixel`, buf)
     }
 }
 
@@ -2200,6 +2283,34 @@ public object FfiConverterSequenceTypeAttachmentInfo: FfiConverterRustBuffer<Lis
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeRemoteImage: FfiConverterRustBuffer<List<RemoteImage>> {
+    override fun read(buf: ByteBuffer): List<RemoteImage> {
+        val len = buf.getInt()
+        return List<RemoteImage>(len) {
+            FfiConverterTypeRemoteImage.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<RemoteImage>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeRemoteImage.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<RemoteImage>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeRemoteImage.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeResourceMeta: FfiConverterRustBuffer<List<ResourceMeta>> {
     override fun read(buf: ByteBuffer): List<ResourceMeta> {
         val len = buf.getInt()
@@ -2222,6 +2333,23 @@ public object FfiConverterSequenceTypeResourceMeta: FfiConverterRustBuffer<List<
     }
 }
         /**
+         * Extract all remote image URLs from HTML content.
+         * Uses proper HTML parsing instead of regex to handle edge cases.
+         *
+         * Returns a list of remote image URLs found in <img src="..."> tags.
+         * Only returns http:// and https:// URLs, excludes cid: URLs.
+         */ fun `extractRemoteImages`(`html`: kotlin.String): List<RemoteImage> {
+            return FfiConverterSequenceTypeRemoteImage.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_letterbox_core_fn_func_extract_remote_images(
+    
+        FfiConverterString.lower(`html`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Parse an EML file from raw bytes.
          * Returns an opaque handle that stays in Rust memory.
          */
@@ -2239,8 +2367,13 @@ public object FfiConverterSequenceTypeResourceMeta: FfiConverterRustBuffer<List<
         /**
          * Parse an EML file from a file path.
          * This is the preferred method for large emails as it avoids copying the entire
-         * file into the JVM heap first. Rust reads/mmaps the file directly.
+         * file into the JVM heap first. Rust reads the file directly.
          * Returns an opaque handle that stays in Rust memory.
+         *
+         * # Security
+         * The caller should ensure the path points to an untrusted EML file that is safe to parse.
+         * The mail-parser library handles malformed input gracefully, but the caller should still
+         * validate that the file exists in an expected location.
          */
     @Throws(ParseException::class) fun `parseEmlFromPath`(`path`: kotlin.String): EmailHandle {
             return FfiConverterTypeEmailHandle.lift(
@@ -2248,6 +2381,24 @@ public object FfiConverterSequenceTypeResourceMeta: FfiConverterRustBuffer<List<
     UniffiLib.uniffi_letterbox_core_fn_func_parse_eml_from_path(
     
         FfiConverterString.lower(`path`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Rewrite HTML to proxy remote images through DuckDuckGo.
+         * Uses proper HTML parsing and reconstruction instead of regex.
+         *
+         * @param html The original HTML content
+         * @param proxy_base_url The DuckDuckGo proxy base URL (e.g., "https://external-content.duckduckgo.com/iu/?u=")
+         * @return HTML with rewritten image URLs
+         */ fun `rewriteImageUrls`(`html`: kotlin.String, `proxyBaseUrl`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_letterbox_core_fn_func_rewrite_image_urls(
+    
+        FfiConverterString.lower(`html`),FfiConverterString.lower(`proxyBaseUrl`),_status)
 }
     )
     }

@@ -203,7 +203,15 @@ fun EmailDetailScreen(
 
             // WebView for HTML content
             val processedHtml = if (sessionLoadImages) {
-                HtmlImageRewriter.rewriteImageUrls(email.bodyHtml ?: "", useProxy)
+                // Use Rust FFI to rewrite image URLs with DuckDuckGo proxy
+                try {
+                    org.joefang.letterbox.ffi.rewriteImageUrls(
+                        email.bodyHtml ?: "",
+                        if (useProxy) "https://external-content.duckduckgo.com/iu/?u=" else ""
+                    )
+                } catch (e: Exception) {
+                    email.bodyHtml ?: "<p>No content available</p>"
+                }
             } else {
                 email.bodyHtml ?: "<p>No content available</p>"
             }

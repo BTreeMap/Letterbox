@@ -7,9 +7,9 @@ import org.joefang.letterbox.ffi.EmailHandle
 import org.joefang.letterbox.ffi.ParseException
 import org.joefang.letterbox.ffi.parseEml
 import org.joefang.letterbox.ffi.parseEmlFromPath
+import org.joefang.letterbox.ffi.extractRemoteImages
 import org.joefang.letterbox.ui.AttachmentData
 import org.joefang.letterbox.ui.EmailContent
-import org.joefang.letterbox.ui.HtmlImageRewriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -66,9 +66,13 @@ class EmailViewModel(
                 
                 // If successfully parsed, show the email
                 if (parsed != null) {
-                    val hasRemoteImages = HtmlImageRewriter.containsRemoteImages(
-                        parsed.bodyHtml ?: ""
-                    )
+                    // Use Rust FFI to detect remote images
+                    val hasRemoteImages = try {
+                        val remoteImages = extractRemoteImages(parsed.bodyHtml ?: "")
+                        remoteImages.isNotEmpty()
+                    } catch (e: Exception) {
+                        false
+                    }
                     _uiState.update { it.copy(
                         isLoading = false,
                         currentEmail = parsed,
@@ -114,9 +118,13 @@ class EmailViewModel(
                         // Read bytes for sharing functionality
                         // Note: This could be optimized to load lazily only when sharing
                         val bytes = file.readBytes()
-                        val hasRemoteImages = HtmlImageRewriter.containsRemoteImages(
-                            parsed.bodyHtml ?: ""
-                        )
+                        // Use Rust FFI to detect remote images
+                        val hasRemoteImages = try {
+                            val remoteImages = extractRemoteImages(parsed.bodyHtml ?: "")
+                            remoteImages.isNotEmpty()
+                        } catch (e: Exception) {
+                            false
+                        }
                         _uiState.update { it.copy(
                             isLoading = false,
                             currentEmail = parsed,
@@ -219,19 +227,6 @@ class EmailViewModel(
      */
     fun enableSessionImageLoading() {
         _uiState.update { it.copy(sessionLoadImages = true) }
-    }
-    
-    /**
-     * Get the processed HTML for display based on current image loading settings.
-     * 
-     * @param useProxy Whether to use DuckDuckGo proxy for remote images
-     * @return HTML with images rewritten if needed
-     */
-    fun getDisplayHtml(useProxy: Boolean): String? {
-        val currentEmail = _uiState.value.currentEmail ?: return null
-        val bodyHtml = currentEmail.bodyHtml ?: return null
-        
-        return HtmlImageRewriter.rewriteImageUrls(bodyHtml, useProxy)
     }
 
     /**
