@@ -10,6 +10,7 @@ import androidx.core.content.FileProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -37,6 +38,10 @@ class EmailOpeningE2ETest {
     private lateinit var context: Context
     private lateinit var testEmlFile: File
     private lateinit var testEmlUri: Uri
+
+    companion object {
+        private const val EMAIL_LOAD_TIMEOUT_MS = 10000L
+    }
 
     @Before
     fun setup() {
@@ -71,7 +76,7 @@ class EmailOpeningE2ETest {
         // Launch the activity with the intent
         ActivityScenario.launch<MainActivity>(intent).use { scenario ->
             // Wait for the email to load and verify content is displayed
-            composeTestRule.waitUntil(timeoutMillis = 10000) {
+            composeTestRule.waitUntil(timeoutMillis = EMAIL_LOAD_TIMEOUT_MS) {
                 try {
                     composeTestRule.onNodeWithText("Test Email - Simple", substring = true).assertExists()
                     true
@@ -101,7 +106,7 @@ class EmailOpeningE2ETest {
         // Launch the activity with the intent
         ActivityScenario.launch<MainActivity>(intent).use { scenario ->
             // Wait for the email to load and verify content is displayed
-            composeTestRule.waitUntil(timeoutMillis = 10000) {
+            composeTestRule.waitUntil(timeoutMillis = EMAIL_LOAD_TIMEOUT_MS) {
                 try {
                     composeTestRule.onNodeWithText("Test Email - Simple", substring = true).assertExists()
                     true
@@ -130,7 +135,7 @@ class EmailOpeningE2ETest {
         
         ActivityScenario.launch<MainActivity>(intent).use { scenario ->
             // Wait for email to load
-            composeTestRule.waitUntil(timeoutMillis = 10000) {
+            composeTestRule.waitUntil(timeoutMillis = EMAIL_LOAD_TIMEOUT_MS) {
                 try {
                     composeTestRule.onNodeWithText("Test Email - Simple", substring = true).assertExists()
                     true
@@ -140,7 +145,8 @@ class EmailOpeningE2ETest {
             }
             
             // Verify the activity is still active (not crashed)
-            assert(scenario.state.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))
+            val isResumed = scenario.state.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+            assertTrue("Activity should be in RESUMED state but is ${scenario.state}", isResumed)
             
             // Verify email content is displayed
             composeTestRule.onNodeWithText("From: sender@example.com", substring = true).assertIsDisplayed()
