@@ -357,12 +357,14 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
+    implementation(libs.datastore.preferences)
     implementation(libs.jna) { artifact { type = "aar" } }
     kapt(libs.room.compiler)
 
     testImplementation(libs.junit4)
     testImplementation(kotlin("test-junit"))
     testImplementation(libs.coroutines.test)
+    testImplementation(libs.robolectric)
     testImplementation("net.java.dev.jna:jna:5.14.0")
 
     androidTestImplementation(platform(libs.compose.bom))

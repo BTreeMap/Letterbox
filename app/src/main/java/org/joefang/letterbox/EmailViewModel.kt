@@ -7,6 +7,7 @@ import org.joefang.letterbox.ffi.EmailHandle
 import org.joefang.letterbox.ffi.ParseException
 import org.joefang.letterbox.ffi.parseEml
 import org.joefang.letterbox.ffi.parseEmlFromPath
+import org.joefang.letterbox.ffi.extractRemoteImages
 import org.joefang.letterbox.ui.AttachmentData
 import org.joefang.letterbox.ui.EmailContent
 import kotlinx.coroutines.Dispatchers
@@ -27,11 +28,13 @@ data class EmailUiState(
     val currentEntryId: Long? = null,
     val currentEmailBytes: ByteArray? = null,
     val isLoading: Boolean = false,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val sessionLoadImages: Boolean = false,
+    val hasRemoteImages: Boolean = false
 )
 
 class EmailViewModel(
-    private val repository: InMemoryHistoryRepository
+    private val repository: HistoryRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(EmailUiState())
@@ -63,11 +66,20 @@ class EmailViewModel(
                 
                 // If successfully parsed, show the email
                 if (parsed != null) {
+                    // Use Rust FFI to detect remote images
+                    val hasRemoteImages = try {
+                        val remoteImages = extractRemoteImages(parsed.bodyHtml ?: "")
+                        remoteImages.isNotEmpty()
+                    } catch (e: Exception) {
+                        false
+                    }
                     _uiState.update { it.copy(
                         isLoading = false,
                         currentEmail = parsed,
                         currentEntryId = entry.id,
-                        currentEmailBytes = bytes
+                        currentEmailBytes = bytes,
+                        sessionLoadImages = false,
+                        hasRemoteImages = hasRemoteImages
                     ) }
                 } else {
                     _uiState.update { it.copy(
@@ -106,11 +118,20 @@ class EmailViewModel(
                         // Read bytes for sharing functionality
                         // Note: This could be optimized to load lazily only when sharing
                         val bytes = file.readBytes()
+                        // Use Rust FFI to detect remote images
+                        val hasRemoteImages = try {
+                            val remoteImages = extractRemoteImages(parsed.bodyHtml ?: "")
+                            remoteImages.isNotEmpty()
+                        } catch (e: Exception) {
+                            false
+                        }
                         _uiState.update { it.copy(
                             isLoading = false,
                             currentEmail = parsed,
                             currentEntryId = entry.id,
-                            currentEmailBytes = bytes
+                            currentEmailBytes = bytes,
+                            sessionLoadImages = false,
+                            hasRemoteImages = hasRemoteImages
                         ) }
                     } else {
                         _uiState.update { it.copy(
@@ -180,7 +201,9 @@ class EmailViewModel(
         _uiState.update { it.copy(
             currentEmail = null,
             currentEntryId = null,
-            currentEmailBytes = null
+            currentEmailBytes = null,
+            sessionLoadImages = false,
+            hasRemoteImages = false
         ) }
     }
 
@@ -196,6 +219,14 @@ class EmailViewModel(
      */
     fun setError(message: String) {
         _uiState.update { it.copy(errorMessage = message) }
+    }
+    
+    /**
+     * Enable image loading for the current session.
+     * This is a one-time action that persists until the email is closed.
+     */
+    fun enableSessionImageLoading() {
+        _uiState.update { it.copy(sessionLoadImages = true) }
     }
 
     /**
@@ -387,7 +418,7 @@ class EmailViewModel(
 }
 
 class EmailViewModelFactory(
-    private val repository: InMemoryHistoryRepository
+    private val repository: HistoryRepository
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {

@@ -122,6 +122,49 @@ class HistoryRepository(
     suspend fun blobMeta(hash: String): BlobEntity? {
         return blobDao.getByHash(hash)
     }
+    
+    /**
+     * Delete a single history entry by ID.
+     */
+    suspend fun delete(entryId: Long) {
+        withContext(Dispatchers.IO) {
+            val entry = historyItemDao.getById(entryId) ?: return@withContext
+            
+            // Delete history item
+            historyItemDao.deleteById(entryId)
+            
+            // Check if blob is still referenced
+            val refCount = historyItemDao.countByBlobHash(entry.blobHash)
+            if (refCount == 0) {
+                // No more references - delete blob
+                blobDao.deleteByHash(entry.blobHash)
+                File(casDir, entry.blobHash).delete()
+            } else {
+                // Update ref count
+                blobDao.decrementRefCount(entry.blobHash)
+            }
+        }
+    }
+    
+    /**
+     * Clear all history entries.
+     */
+    suspend fun clearAll() {
+        withContext(Dispatchers.IO) {
+            // Get all blobs before clearing
+            val allItems = historyItemDao.getRecentItems(Int.MAX_VALUE)
+            val blobHashes = allItems.map { it.blobHash }.distinct()
+            
+            // Clear database
+            allItems.forEach { historyItemDao.deleteById(it.id) }
+            
+            // Delete all blob files
+            blobHashes.forEach { hash ->
+                blobDao.deleteByHash(hash)
+                File(casDir, hash).delete()
+            }
+        }
+    }
 
     /**
      * Enforce the history limit by removing oldest entries.
