@@ -63,8 +63,12 @@ cargo test
 
 ## Troubleshooting
 
+For detailed troubleshooting information and solutions to common issues, see [docs/troubleshooting.md](docs/troubleshooting.md).
+
+Quick fixes:
 - If Android builds cannot find the native library, ensure `cargo-ndk` is installed and rebuild with `-PrustBuild=true` so `cargoNdkBuild` emits ABI-specific `.so` files.
 - If host-side FFI tests cannot load the library, verify `target/release/libletterbox_core.so` exists (built by `cargoHostBuild`) or set `LETTERBOX_CORE_LIB_PATH` to the compiled library.
+- If the app crashes when opening email files, ensure you're running the latest version with the WebView request interception fix.
 
 ## License
 

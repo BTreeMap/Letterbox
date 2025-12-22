@@ -1,0 +1,16 @@
+From: sender@example.com
+To: recipient@example.com
+Subject: Test Email - With Remote Images
+Date: Mon, 22 Dec 2025 10:00:00 +0000
+Message-ID: <test456@example.com>
+Content-Type: text/html; charset=UTF-8
+
+<html>
+<body>
+<h1>Email with Images</h1>
+<p>This email contains remote images that should be blocked by default.</p>
+<img src="https://example.com/image1.png" alt="Remote Image 1">
+<p>And another image:</p>
+<img src="https://example.com/image2.jpg" alt="Remote Image 2">
+</body>
+</html>

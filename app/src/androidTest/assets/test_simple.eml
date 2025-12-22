@@ -1,0 +1,13 @@
+From: sender@example.com
+To: recipient@example.com
+Subject: Test Email - Simple
+Date: Mon, 22 Dec 2025 10:00:00 +0000
+Message-ID: <test123@example.com>
+Content-Type: text/html; charset=UTF-8
+
+<html>
+<body>
+<h1>Test Email</h1>
+<p>This is a simple test email to verify the app works correctly.</p>
+</body>
+</html>
