@@ -557,32 +557,36 @@ pub struct RemoteImage {
 
 /// Extract all remote image URLs from HTML content.
 /// Uses proper HTML parsing instead of regex to handle edge cases.
-/// 
+///
 /// Returns a list of remote image URLs found in <img src="..."> tags.
 /// Only returns http:// and https:// URLs, excludes cid: URLs.
 #[uniffi::export]
 pub fn extract_remote_images(html: String) -> Vec<RemoteImage> {
     use scraper::{Html, Selector};
-    
+
     let document = Html::parse_document(&html);
     let img_selector = Selector::parse("img").unwrap();
-    
+
     let mut images = Vec::new();
-    
+
     for element in document.select(&img_selector) {
         if let Some(src) = element.value().attr("src") {
             // Only include http:// and https:// URLs
             if src.starts_with("http://") || src.starts_with("https://") {
                 // Check if it's a tracking pixel (1x1 image)
-                let is_tracking = element.value().attr("width")
+                let is_tracking = element
+                    .value()
+                    .attr("width")
                     .and_then(|w| w.parse::<u32>().ok())
                     .map(|w| w <= 1)
                     .unwrap_or(false)
-                    && element.value().attr("height")
+                    && element
+                        .value()
+                        .attr("height")
                         .and_then(|h| h.parse::<u32>().ok())
                         .map(|h| h <= 1)
                         .unwrap_or(false);
-                
+
                 images.push(RemoteImage {
                     url: src.to_string(),
                     is_tracking_pixel: is_tracking,
@@ -590,7 +594,7 @@ pub fn extract_remote_images(html: String) -> Vec<RemoteImage> {
             }
         }
     }
-    
+
     images
 }
 
@@ -603,13 +607,13 @@ pub fn extract_remote_images(html: String) -> Vec<RemoteImage> {
 #[uniffi::export]
 pub fn rewrite_image_urls(html: String, proxy_base_url: String) -> String {
     use scraper::{Html, Selector};
-    
+
     let document = Html::parse_document(&html);
     let img_selector = Selector::parse("img").unwrap();
-    
+
     let mut result = html.clone();
     let mut replacements = Vec::new();
-    
+
     // Collect all img tags that need rewriting
     for element in document.select(&img_selector) {
         if let Some(src) = element.value().attr("src") {
@@ -622,14 +626,20 @@ pub fn rewrite_image_urls(html: String, proxy_base_url: String) -> String {
             }
         }
     }
-    
+
     // Apply replacements
     for (original, proxied) in replacements {
         // Replace src="original" with src="proxied"
-        result = result.replace(&format!("src=\"{}\"", original), &format!("src=\"{}\"", proxied));
-        result = result.replace(&format!("src='{}'", original), &format!("src='{}'", proxied));
+        result = result.replace(
+            &format!("src=\"{}\"", original),
+            &format!("src=\"{}\"", proxied),
+        );
+        result = result.replace(
+            &format!("src='{}'", original),
+            &format!("src='{}'", proxied),
+        );
     }
-    
+
     result
 }
 
