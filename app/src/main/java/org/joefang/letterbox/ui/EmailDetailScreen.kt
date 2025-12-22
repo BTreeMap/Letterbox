@@ -597,15 +597,25 @@ private fun EmailWebView(
                             }
                         }
 
+                        // Allow network loads when explicitly enabled (for remote images)
+                        if (allowNetworkLoads && (url.startsWith("http://") || url.startsWith("https://"))) {
+                            return null // Let WebView handle it normally
+                        }
+
                         // Block all other external requests with a clear error
-                        return WebResourceResponse(
-                            "text/plain",
-                            "utf-8",
-                            403,
-                            "Forbidden",
-                            emptyMap(),
-                            ByteArrayInputStream("External resources are blocked for security".toByteArray())
-                        )
+                        if (url.startsWith("http://") || url.startsWith("https://")) {
+                            return WebResourceResponse(
+                                "text/plain",
+                                "utf-8",
+                                403,
+                                "Forbidden",
+                                emptyMap(),
+                                ByteArrayInputStream("External resources are blocked for security".toByteArray())
+                            )
+                        }
+
+                        // For other schemes, return null to let WebView handle them
+                        return null
                     }
 
                     override fun shouldOverrideUrlLoading(
