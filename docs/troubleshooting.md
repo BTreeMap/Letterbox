@@ -109,6 +109,47 @@ The setting can be changed in Settings:
 
 ## Test failures
 
+### Instrumented tests crash with "Process crashed"
+
+#### Symptoms
+- Instrumented tests start but crash during execution
+- Error message: "Instrumentation run failed due to Process crashed"
+- Some tests pass before the crash occurs
+- The failing test may not be the one that actually caused the crash
+
+#### Root Cause
+FFI (Foreign Function Interface) calls to the Rust native library may fail if the native library is not available or fails to load. In Kotlin/Java, when a native library fails to load, it throws `UnsatisfiedLinkError` or `ExceptionInInitializerError`, which are `Error` types, NOT `Exception` types.
+
+If FFI calls are wrapped in `catch (e: Exception)` blocks, these errors are **NOT caught**, causing the process to crash.
+
+#### Solution
+All FFI calls must catch both `Exception` AND `Error` types:
+
+```kotlin
+val result = try {
+    someFfiFunction()
+} catch (e: Exception) {
+    fallbackValue
+} catch (e: UnsatisfiedLinkError) {
+    // Native library not available
+    fallbackValue
+} catch (e: ExceptionInInitializerError) {
+    // Library initialization failed
+    fallbackValue
+}
+```
+
+The following FFI functions in this codebase require this pattern:
+- `parseEml()` / `parseEmlFromPath()` - Already properly handled
+- `extractRemoteImages()` - Fixed in EmailViewModel.kt
+- `rewriteImageUrls()` - Fixed in EmailDetailScreen.kt
+
+#### Prevention
+When adding new FFI calls, always:
+1. Wrap in try-catch
+2. Catch both `Exception` and `Error` types (`UnsatisfiedLinkError`, `ExceptionInInitializerError`)
+3. Provide a sensible fallback (e.g., empty list, original content, false)
+
 ### Running instrumented tests
 Instrumented tests require an Android device or emulator:
 
