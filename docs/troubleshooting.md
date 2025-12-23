@@ -150,6 +150,30 @@ When adding new FFI calls, always:
 2. Catch both `Exception` and `Error` types (`UnsatisfiedLinkError`, `ExceptionInInitializerError`)
 3. Provide a sensible fallback (e.g., empty list, original content, false)
 
+### Test assets not found (FileNotFoundException)
+
+#### Symptoms
+- Instrumented tests fail with `java.io.FileNotFoundException: test_simple.eml`
+- Tests that access test assets crash with asset not found errors
+
+#### Root Cause
+Test assets (files in `app/src/androidTest/assets/`) are packaged into the **test APK**, not the application APK. Using `ApplicationProvider.getApplicationContext().assets` accesses the **application APK's assets**, which doesn't contain test assets.
+
+#### Solution
+Use `InstrumentationRegistry.getInstrumentation().context` to access test APK assets:
+
+```kotlin
+// Wrong: Uses application context (app APK assets)
+val context = ApplicationProvider.getApplicationContext()
+val content = context.assets.open("test_file.eml")
+
+// Correct: Uses instrumentation context (test APK assets)
+val testContext = InstrumentationRegistry.getInstrumentation().context
+val content = testContext.assets.open("test_file.eml")
+```
+
+Note: For file operations (cache, shared preferences), continue using `ApplicationProvider.getApplicationContext()` as those need access to the app's storage.
+
 ### Running instrumented tests
 Instrumented tests require an Android device or emulator:
 
