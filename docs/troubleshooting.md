@@ -174,6 +174,36 @@ val content = testContext.assets.open("test_file.eml")
 
 Note: For file operations (cache, shared preferences), continue using `ApplicationProvider.getApplicationContext()` as those need access to the app's storage.
 
+### FileProvider path not configured (IllegalArgumentException)
+
+#### Symptoms
+- Tests fail with `java.lang.IllegalArgumentException: Failed to find configured root that contains /data/data/.../cache/file.eml`
+- FileProvider.getUriForFile() throws exception
+
+#### Root Cause
+The FileProvider is configured with specific paths in `res/xml/file_paths.xml`. If you write a file to a directory that isn't configured, FileProvider cannot create a URI for it.
+
+#### Solution
+Write test files to a directory that's already configured in `file_paths.xml`:
+
+```kotlin
+// Wrong: Writing to cache root (not configured)
+val file = File(context.cacheDir, "test.eml")
+
+// Correct: Writing to "shared/" subdirectory (configured in file_paths.xml)
+val sharedDir = File(context.cacheDir, "shared")
+sharedDir.mkdirs()
+val file = File(sharedDir, "test.eml")
+```
+
+Check `app/src/main/res/xml/file_paths.xml` to see which paths are configured:
+```xml
+<paths>
+    <cache-path name="attachments" path="attachments/" />
+    <cache-path name="shared" path="shared/" />
+</paths>
+```
+
 ### Running instrumented tests
 Instrumented tests require an Android device or emulator:
 

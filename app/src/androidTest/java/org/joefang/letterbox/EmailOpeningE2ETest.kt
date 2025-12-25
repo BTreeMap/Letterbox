@@ -54,11 +54,14 @@ class EmailOpeningE2ETest {
         val testContext = InstrumentationRegistry.getInstrumentation().context
         val emlContent = testContext.assets.open("test_simple.eml").bufferedReader().use { it.readText() }
         
-        // Create test file in internal storage (using app context for file storage)
-        testEmlFile = File(context.cacheDir, "test_simple.eml")
+        // Create test file in the "shared" subdirectory of cache, which is configured 
+        // in file_paths.xml for FileProvider access
+        val sharedDir = File(context.cacheDir, "shared")
+        sharedDir.mkdirs()
+        testEmlFile = File(sharedDir, "test_simple.eml")
         testEmlFile.writeText(emlContent)
         
-        // Create content URI for the test file
+        // Create content URI for the test file using the app's FileProvider
         testEmlUri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
