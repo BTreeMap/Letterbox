@@ -204,12 +204,20 @@ fun EmailDetailScreen(
             // WebView for HTML content
             val processedHtml = if (sessionLoadImages) {
                 // Use Rust FFI to rewrite image URLs with DuckDuckGo proxy
+                // Note: Must catch both Exception and Error (UnsatisfiedLinkError)
+                // to gracefully handle cases where native library is unavailable
                 try {
                     org.joefang.letterbox.ffi.rewriteImageUrls(
                         email.bodyHtml ?: "",
                         if (useProxy) "https://external-content.duckduckgo.com/iu/?u=" else ""
                     )
                 } catch (e: Exception) {
+                    email.bodyHtml ?: "<p>No content available</p>"
+                } catch (e: UnsatisfiedLinkError) {
+                    // Native library not available - fall back to original HTML
+                    email.bodyHtml ?: "<p>No content available</p>"
+                } catch (e: ExceptionInInitializerError) {
+                    // Library initialization failed - fall back to original HTML
                     email.bodyHtml ?: "<p>No content available</p>"
                 }
             } else {

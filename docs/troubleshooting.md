@@ -109,6 +109,101 @@ The setting can be changed in Settings:
 
 ## Test failures
 
+### Instrumented tests crash with "Process crashed"
+
+#### Symptoms
+- Instrumented tests start but crash during execution
+- Error message: "Instrumentation run failed due to Process crashed"
+- Some tests pass before the crash occurs
+- The failing test may not be the one that actually caused the crash
+
+#### Root Cause
+FFI (Foreign Function Interface) calls to the Rust native library may fail if the native library is not available or fails to load. In Kotlin/Java, when a native library fails to load, it throws `UnsatisfiedLinkError` or `ExceptionInInitializerError`, which are `Error` types, NOT `Exception` types.
+
+If FFI calls are wrapped in `catch (e: Exception)` blocks, these errors are **NOT caught**, causing the process to crash.
+
+#### Solution
+All FFI calls must catch both `Exception` AND `Error` types:
+
+```kotlin
+val result = try {
+    someFfiFunction()
+} catch (e: Exception) {
+    fallbackValue
+} catch (e: UnsatisfiedLinkError) {
+    // Native library not available
+    fallbackValue
+} catch (e: ExceptionInInitializerError) {
+    // Library initialization failed
+    fallbackValue
+}
+```
+
+The following FFI functions in this codebase require this pattern:
+- `parseEml()` / `parseEmlFromPath()` - Already properly handled
+- `extractRemoteImages()` - Fixed in EmailViewModel.kt
+- `rewriteImageUrls()` - Fixed in EmailDetailScreen.kt
+
+#### Prevention
+When adding new FFI calls, always:
+1. Wrap in try-catch
+2. Catch both `Exception` and `Error` types (`UnsatisfiedLinkError`, `ExceptionInInitializerError`)
+3. Provide a sensible fallback (e.g., empty list, original content, false)
+
+### Test assets not found (FileNotFoundException)
+
+#### Symptoms
+- Instrumented tests fail with `java.io.FileNotFoundException: test_simple.eml`
+- Tests that access test assets crash with asset not found errors
+
+#### Root Cause
+Test assets (files in `app/src/androidTest/assets/`) are packaged into the **test APK**, not the application APK. Using `ApplicationProvider.getApplicationContext().assets` accesses the **application APK's assets**, which doesn't contain test assets.
+
+#### Solution
+Use `InstrumentationRegistry.getInstrumentation().context` to access test APK assets:
+
+```kotlin
+// Wrong: Uses application context (app APK assets)
+val context = ApplicationProvider.getApplicationContext()
+val content = context.assets.open("test_file.eml")
+
+// Correct: Uses instrumentation context (test APK assets)
+val testContext = InstrumentationRegistry.getInstrumentation().context
+val content = testContext.assets.open("test_file.eml")
+```
+
+Note: For file operations (cache, shared preferences), continue using `ApplicationProvider.getApplicationContext()` as those need access to the app's storage.
+
+### FileProvider path not configured (IllegalArgumentException)
+
+#### Symptoms
+- Tests fail with `java.lang.IllegalArgumentException: Failed to find configured root that contains /data/data/.../cache/file.eml`
+- FileProvider.getUriForFile() throws exception
+
+#### Root Cause
+The FileProvider is configured with specific paths in `res/xml/file_paths.xml`. If you write a file to a directory that isn't configured, FileProvider cannot create a URI for it.
+
+#### Solution
+Write test files to a directory that's already configured in `file_paths.xml`:
+
+```kotlin
+// Wrong: Writing to cache root (not configured)
+val file = File(context.cacheDir, "test.eml")
+
+// Correct: Writing to "shared/" subdirectory (configured in file_paths.xml)
+val sharedDir = File(context.cacheDir, "shared")
+sharedDir.mkdirs()
+val file = File(sharedDir, "test.eml")
+```
+
+Check `app/src/main/res/xml/file_paths.xml` to see which paths are configured:
+```xml
+<paths>
+    <cache-path name="attachments" path="attachments/" />
+    <cache-path name="shared" path="shared/" />
+</paths>
+```
+
 ### Running instrumented tests
 Instrumented tests require an Android device or emulator:
 
