@@ -263,9 +263,15 @@ adb devices
 # Run tests on connected device
 ./gradlew :app:connectedAndroidTest
 
-# Or use managed device
-./gradlew :app:pixel7Api34ProdDebugAndroidTest
+# Or use managed device (auto-provisions an emulator - this is how CI runs)
+./gradlew pixel7Api34StagingDebugAndroidTest
 ```
+
+**Note:** Managed device tests automatically download and provision an Android emulator image. The first run takes longer as it downloads the image. Subsequent runs are faster.
+
+Available managed device configurations:
+- `pixel7Api34StagingDebugAndroidTest` - Pixel 7 with API 34 (Android 14)
+- `allDevicesStagingDebugAndroidTest` - All configured managed devices
 
 ### Running unit tests
 Unit tests can run on the host machine:
