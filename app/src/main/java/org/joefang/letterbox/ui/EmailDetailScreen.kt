@@ -6,6 +6,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -102,6 +103,9 @@ fun EmailDetailScreen(
     var showDetailsDialog by remember { mutableStateOf(false) }
     var showAttachments by remember { mutableStateOf(email.attachments.isNotEmpty()) }
     val context = LocalContext.current
+    
+    // Handle system back button/gesture
+    BackHandler(onBack = onNavigateBack)
     
     Scaffold(
         topBar = {
