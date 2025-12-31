@@ -25,7 +25,7 @@ import org.junit.runner.RunWith
  * - "Open file" button is present and clickable
  * - Overflow menu (3-dot icon) opens and shows menu items
  * - Empty state message appears when no history
- * - About and Clear History dialogs function correctly
+ * - About dialog and Settings bottom sheet function correctly
  */
 @RunWith(AndroidJUnit4::class)
 class HomeScreenTest {
@@ -82,15 +82,6 @@ class HomeScreenTest {
     }
 
     @Test
-    fun homeScreen_overflowMenuOpensAndShowsClearHistory() {
-        // Click overflow menu
-        composeTestRule.onNodeWithContentDescription("More options").performClick()
-
-        // Wait for dropdown and verify "Clear history" is shown
-        composeTestRule.onNodeWithText("Clear history").assertIsDisplayed()
-    }
-
-    @Test
     fun homeScreen_overflowMenuOpensAndShowsAbout() {
         // Click overflow menu
         composeTestRule.onNodeWithContentDescription("More options").performClick()
@@ -119,46 +110,6 @@ class HomeScreenTest {
     }
 
     @Test
-    fun homeScreen_clearHistoryDialogOpensAndCancels() {
-        // Open overflow menu
-        composeTestRule.onNodeWithContentDescription("More options").performClick()
-
-        // Click Clear history
-        composeTestRule.onNodeWithText("Clear history").performClick()
-
-        // Verify confirmation dialog is shown
-        composeTestRule.onNodeWithText("Clear history?").assertIsDisplayed()
-        composeTestRule.onNodeWithText("This will remove all items from your history", substring = true).assertIsDisplayed()
-
-        // Cancel the dialog
-        composeTestRule.onNodeWithText("Cancel").performClick()
-
-        // Verify dialog is closed
-        composeTestRule.onNodeWithText("Clear history?").assertDoesNotExist()
-    }
-
-    @Test
-    fun homeScreen_clearHistoryDialogConfirmsClearAction() {
-        // Open overflow menu
-        composeTestRule.onNodeWithContentDescription("More options").performClick()
-
-        // Click Clear history
-        composeTestRule.onNodeWithText("Clear history").performClick()
-
-        // Verify confirmation dialog is shown
-        composeTestRule.onNodeWithText("Clear history?").assertIsDisplayed()
-
-        // Confirm clearing
-        composeTestRule.onNodeWithText("Clear").performClick()
-
-        // Verify dialog is closed and snackbar appears
-        composeTestRule.onNodeWithText("Clear history?").assertDoesNotExist()
-        
-        // Snackbar should show "History cleared"
-        composeTestRule.onNodeWithText("History cleared").assertIsDisplayed()
-    }
-
-    @Test
     fun homeScreen_overflowMenuOpensAndShowsSettings() {
         // Click overflow menu
         composeTestRule.onNodeWithContentDescription("More options").performClick()
@@ -168,7 +119,7 @@ class HomeScreenTest {
     }
 
     @Test
-    fun homeScreen_settingsBottomSheetOpensAndCloses() {
+    fun homeScreen_settingsBottomSheetOpensWithCacheInfo() {
         // Open overflow menu
         composeTestRule.onNodeWithContentDescription("More options").performClick()
 
@@ -177,7 +128,20 @@ class HomeScreenTest {
 
         // Verify Settings bottom sheet is shown with expected content
         composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
-        composeTestRule.onNodeWithText("History limit").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Store local copies").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Remote Images").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Storage").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Email cache").assertIsDisplayed()
+    }
+
+    @Test
+    fun homeScreen_settingsClearCacheDisabledWhenEmpty() {
+        // Open overflow menu
+        composeTestRule.onNodeWithContentDescription("More options").performClick()
+
+        // Click Settings
+        composeTestRule.onNodeWithText("Settings").performClick()
+
+        // Verify Settings bottom sheet shows "No cached emails" when cache is empty
+        composeTestRule.onNodeWithText("No cached emails").assertIsDisplayed()
     }
 }

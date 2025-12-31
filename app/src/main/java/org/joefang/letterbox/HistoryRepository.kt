@@ -29,18 +29,27 @@ data class HistoryEntry(
 )
 
 /**
+ * Data class representing cache storage statistics.
+ */
+data class CacheStats(
+    /** Total number of cached email entries. */
+    val entryCount: Int,
+    /** Total size of cached blobs in bytes. */
+    val totalSizeBytes: Long
+)
+
+/**
  * Repository for managing email file history with Content-Addressable Storage (CAS).
  * 
  * Features:
  * - Deduplication: Same file content is stored only once
- * - LRU eviction: Oldest entries are removed when limit is exceeded
+ * - Indefinite caching: Emails are cached until user explicitly clears them
  * - Persistence: Uses Room database for metadata and file system for blobs
  */
 class HistoryRepository(
     private val baseDir: File,
     private val blobDao: BlobDao,
-    private val historyItemDao: HistoryItemDao,
-    private val historyLimit: Int = 10
+    private val historyItemDao: HistoryItemDao
 ) {
     private val casDir: File = File(baseDir, "cas").also { it.mkdirs() }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -62,7 +71,8 @@ class HistoryRepository(
      * - Computes SHA-256 hash of the content
      * - Stores the file in CAS if not already present
      * - Creates a history entry
-     * - Enforces the history limit by evicting oldest items
+     * 
+     * Emails are cached indefinitely until user explicitly clears them.
      */
     suspend fun ingest(bytes: ByteArray, displayName: String, originalUri: String?): HistoryEntry {
         return withContext(Dispatchers.IO) {
@@ -89,9 +99,6 @@ class HistoryRepository(
                 lastAccessed = now
             )
             val id = historyItemDao.insert(entity)
-
-            // Enforce history limit
-            enforceLimit()
 
             entity.copy(id = id).toHistoryEntry()
         }
@@ -167,31 +174,26 @@ class HistoryRepository(
     }
 
     /**
-     * Enforce the history limit by removing oldest entries.
+     * Get cache statistics including total size and entry count.
+     * Calculates actual size by summing blob file sizes.
      */
-    private suspend fun enforceLimit() {
-        if (historyLimit <= 0) return
-        
-        val count = historyItemDao.count()
-        if (count <= historyLimit) return
-
-        val toRemove = count - historyLimit
-        val oldestItems = historyItemDao.getOldestItems(toRemove)
-        
-        for (item in oldestItems) {
-            // Delete history item
-            historyItemDao.deleteById(item.id)
+    suspend fun getCacheStats(): CacheStats {
+        return withContext(Dispatchers.IO) {
+            val entryCount = historyItemDao.count()
             
-            // Check if blob is still referenced
-            val refCount = historyItemDao.countByBlobHash(item.blobHash)
-            if (refCount == 0) {
-                // No more references - delete blob
-                blobDao.deleteByHash(item.blobHash)
-                File(casDir, item.blobHash).delete()
-            } else {
-                // Update ref count
-                blobDao.decrementRefCount(item.blobHash)
+            // Calculate total size by summing unique blob sizes
+            val allItems = historyItemDao.getRecentItems(Int.MAX_VALUE)
+            val uniqueHashes = allItems.map { it.blobHash }.distinct()
+            var totalSize = 0L
+            
+            for (hash in uniqueHashes) {
+                val blobFile = File(casDir, hash)
+                if (blobFile.exists()) {
+                    totalSize += blobFile.length()
+                }
             }
+            
+            CacheStats(entryCount, totalSize)
         }
     }
 
@@ -212,10 +214,11 @@ class HistoryRepository(
 /**
  * In-memory implementation of HistoryRepository for testing and simple usage.
  * Does not require Room database.
+ * 
+ * Emails are cached indefinitely until user explicitly clears them.
  */
 class InMemoryHistoryRepository(
-    private val baseDir: File,
-    private val historyLimit: Int = 10
+    private val baseDir: File
 ) {
     private val casDir: File = File(baseDir, "cas").also { it.mkdirs() }
     private val blobs = mutableMapOf<String, BlobMeta>()
@@ -248,7 +251,6 @@ class InMemoryHistoryRepository(
             lastAccessed = System.currentTimeMillis()
         )
         _items.value = (_items.value + newEntry).sortedByDescending { it.lastAccessed }
-        enforceLimit()
         return newEntry
     }
 
@@ -299,25 +301,14 @@ class InMemoryHistoryRepository(
         blobs.clear()
     }
 
-    private fun enforceLimit() {
-        if (historyLimit <= 0) return
-        val items = _items.value
-        if (items.size <= historyLimit) return
-
-        val toRemove = items.sortedBy { it.lastAccessed }.take(items.size - historyLimit)
-        val remaining = items - toRemove.toSet()
-        _items.value = remaining.sortedByDescending { it.lastAccessed }
-
-        toRemove.forEach { entry ->
-            val meta = blobs[entry.blobHash] ?: return@forEach
-            val remainingRefs = remaining.count { it.blobHash == entry.blobHash }
-            if (remainingRefs == 0) {
-                blobs.remove(entry.blobHash)
-                File(casDir, entry.blobHash).delete()
-            } else {
-                blobs[entry.blobHash] = meta.copy(refCount = remainingRefs)
-            }
-        }
+    /**
+     * Get cache statistics including total size and entry count.
+     */
+    @Synchronized
+    fun getCacheStats(): CacheStats {
+        val entryCount = _items.value.size
+        val totalSize = blobs.values.sumOf { it.sizeBytes }
+        return CacheStats(entryCount, totalSize)
     }
 
     private fun nextId(): Long = (_items.value.maxOfOrNull { it.id } ?: 0L) + 1L

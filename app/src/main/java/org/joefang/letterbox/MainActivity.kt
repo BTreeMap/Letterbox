@@ -36,7 +36,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -49,7 +48,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,7 +62,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import org.joefang.letterbox.data.LetterboxDatabase
 import org.joefang.letterbox.data.UserPreferencesRepository
-import org.joefang.letterbox.ui.EmailContent
 import org.joefang.letterbox.ui.EmailDetailScreen
 import org.joefang.letterbox.ui.theme.LetterboxTheme
 import kotlinx.coroutines.launch
@@ -103,8 +100,7 @@ class MainActivity : ComponentActivity() {
             HistoryRepository(
                 baseDir = filesDir,
                 blobDao = database.blobDao(),
-                historyItemDao = database.historyItemDao(),
-                historyLimit = 10
+                historyItemDao = database.historyItemDao()
             )
         )
     }
@@ -188,6 +184,7 @@ class MainActivity : ComponentActivity() {
                         else -> {
                             LetterboxScaffold(
                                 history = uiState.history,
+                                cacheStats = uiState.cacheStats,
                                 onEntryClick = { entry ->
                                     viewModel.openHistoryEntry(entry)
                                 },
@@ -315,6 +312,7 @@ private fun LoadingScreen() {
 @OptIn(ExperimentalMaterial3Api::class)
 private fun LetterboxScaffold(
     history: List<HistoryEntry>,
+    cacheStats: CacheStats,
     onEntryClick: (HistoryEntry) -> Unit,
     onEntryDelete: (HistoryEntry) -> Unit,
     onOpenFile: (Uri) -> Unit,
@@ -324,16 +322,10 @@ private fun LetterboxScaffold(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
-    var showClearHistoryDialog by remember { mutableStateOf(false) }
+    var showClearCacheDialog by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val settingsSheetState = rememberModalBottomSheetState()
-    
-    // Settings state
-    // TODO: Implement proper persistence using DataStore or SharedPreferences
-    // For now, settings are stored in memory and reset on app restart
-    var historyLimitIndex by remember { mutableIntStateOf(0) } // 0=10, 1=20, 2=50, 3=100, 4=Unlimited
-    var storeLocalCopies by remember { mutableStateOf(true) }
     
     // Collect image loading preferences
     val alwaysLoadRemoteImages by preferencesRepository.alwaysLoadRemoteImages.collectAsState(initial = false)
@@ -365,13 +357,6 @@ private fun LetterboxScaffold(
                             onClick = {
                                 showMenu = false
                                 showSettingsSheet = true
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Clear history") },
-                            onClick = {
-                                showMenu = false
-                                showClearHistoryDialog = true
                             }
                         )
                         DropdownMenuItem(
@@ -421,10 +406,7 @@ private fun LetterboxScaffold(
             sheetState = settingsSheetState
         ) {
             SettingsContent(
-                historyLimitIndex = historyLimitIndex,
-                onHistoryLimitChange = { historyLimitIndex = it },
-                storeLocalCopies = storeLocalCopies,
-                onStoreLocalCopiesChange = { storeLocalCopies = it },
+                cacheStats = cacheStats,
                 alwaysLoadRemoteImages = alwaysLoadRemoteImages,
                 onAlwaysLoadRemoteImagesChange = { 
                     scope.launch { 
@@ -437,9 +419,9 @@ private fun LetterboxScaffold(
                         preferencesRepository.setEnablePrivacyProxy(it)
                     }
                 },
-                onClearHistory = {
+                onClearCache = {
                     showSettingsSheet = false
-                    showClearHistoryDialog = true
+                    showClearCacheDialog = true
                 }
             )
         }
@@ -466,19 +448,24 @@ private fun LetterboxScaffold(
         )
     }
     
-    // Clear history confirmation dialog
-    if (showClearHistoryDialog) {
+    // Clear cache confirmation dialog
+    if (showClearCacheDialog) {
         AlertDialog(
-            onDismissRequest = { showClearHistoryDialog = false },
-            title = { Text("Clear history?") },
-            text = { Text("This will remove all items from your history. This action cannot be undone.") },
+            onDismissRequest = { showClearCacheDialog = false },
+            title = { Text("Clear cache?") },
+            text = { 
+                Text(
+                    "This will delete all ${cacheStats.entryCount} cached emails " +
+                    "(${formatStorageSize(cacheStats.totalSizeBytes)}). This action cannot be undone."
+                ) 
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        showClearHistoryDialog = false
+                        showClearCacheDialog = false
                         onClearHistory()
                         scope.launch {
-                            snackbarHostState.showSnackbar("History cleared")
+                            snackbarHostState.showSnackbar("Cache cleared")
                         }
                     }
                 ) {
@@ -486,7 +473,7 @@ private fun LetterboxScaffold(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showClearHistoryDialog = false }) {
+                TextButton(onClick = { showClearCacheDialog = false }) {
                     Text("Cancel")
                 }
             }
@@ -496,18 +483,13 @@ private fun LetterboxScaffold(
 
 @Composable
 private fun SettingsContent(
-    historyLimitIndex: Int,
-    onHistoryLimitChange: (Int) -> Unit,
-    storeLocalCopies: Boolean,
-    onStoreLocalCopiesChange: (Boolean) -> Unit,
+    cacheStats: CacheStats,
     alwaysLoadRemoteImages: Boolean,
     onAlwaysLoadRemoteImagesChange: (Boolean) -> Unit,
     enablePrivacyProxy: Boolean,
     onEnablePrivacyProxyChange: (Boolean) -> Unit,
-    onClearHistory: () -> Unit
+    onClearCache: () -> Unit
 ) {
-    val historyLimitOptions = listOf("10", "20", "50", "100", "Unlimited")
-    
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -519,29 +501,6 @@ private fun SettingsContent(
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(bottom = 16.dp)
         )
-        
-        // History limit setting
-        Column(modifier = Modifier.padding(vertical = 8.dp)) {
-            Text(
-                text = "History limit",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Text(
-                text = "Maximum number of recent emails to keep: ${historyLimitOptions[historyLimitIndex]}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Slider(
-                value = historyLimitIndex.toFloat(),
-                onValueChange = { onHistoryLimitChange(it.toInt()) },
-                valueRange = 0f..4f,
-                steps = 3,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
         
         // Remote images section
         Text(
@@ -603,7 +562,15 @@ private fun SettingsContent(
         
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
         
-        // Store local copies toggle
+        // Storage section (Telegram-style clear cache)
+        Text(
+            text = "Storage",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
+        
+        // Cache info card
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -613,35 +580,43 @@ private fun SettingsContent(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Store local copies",
-                    style = MaterialTheme.typography.titleMedium
+                    text = "Email cache",
+                    style = MaterialTheme.typography.titleSmall
                 )
                 Text(
-                    text = "Keep copies of emails for reliable history access",
+                    text = if (cacheStats.entryCount == 0) {
+                        "No cached emails"
+                    } else {
+                        "${cacheStats.entryCount} email${if (cacheStats.entryCount != 1) "s" else ""} • ${formatStorageSize(cacheStats.totalSizeBytes)}"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
-                checked = storeLocalCopies,
-                onCheckedChange = onStoreLocalCopiesChange
-            )
-        }
-        
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-        
-        // Clear history button
-        TextButton(
-            onClick = onClearHistory,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = "Clear history",
-                color = MaterialTheme.colorScheme.error
-            )
+            TextButton(
+                onClick = onClearCache,
+                enabled = cacheStats.entryCount > 0
+            ) {
+                Text(
+                    text = "Clear",
+                    color = if (cacheStats.entryCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
         
         Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+
+/**
+ * Format storage size in a human-readable format.
+ */
+private fun formatStorageSize(bytes: Long): String {
+    return when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> String.format("%.1f KB", bytes / 1024.0)
+        bytes < 1024 * 1024 * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+        else -> String.format("%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0))
     }
 }
 

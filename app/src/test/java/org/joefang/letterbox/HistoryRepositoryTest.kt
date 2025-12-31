@@ -19,7 +19,7 @@ class HistoryRepositoryTest {
     @Before
     fun setUp() {
         tempDir = createTempDirectory(prefix = "letterbox-test").toFile()
-        repository = InMemoryHistoryRepository(tempDir, historyLimit = 2)
+        repository = InMemoryHistoryRepository(tempDir)
     }
 
     @After
@@ -41,18 +41,22 @@ class HistoryRepositoryTest {
     }
 
     @Test
-    fun `evicts least recently used items when over limit`() {
+    fun `caches items indefinitely without eviction`() {
+        // With no limit, all items should be retained
         val first = repository.ingest("One".toByteArray(), "one", null)
         val second = repository.ingest("Two".toByteArray(), "two", null)
         val third = repository.ingest("Three".toByteArray(), "three", null)
 
         val items = repository.items.value
-        assertEquals(2, items.size)
-        assertTrue(items.any { it.displayName == "three" })
+        assertEquals(3, items.size)
+        assertTrue(items.any { it.displayName == "one" })
         assertTrue(items.any { it.displayName == "two" })
-        assertFalse(items.any { it.displayName == "one" })
+        assertTrue(items.any { it.displayName == "three" })
 
-        assertEquals(null, repository.blobMeta(first.blobHash))
+        // All blobs should still exist
+        assertNotNull(repository.blobMeta(first.blobHash))
+        assertNotNull(repository.blobMeta(second.blobHash))
+        assertNotNull(repository.blobMeta(third.blobHash))
     }
 
     @Test
@@ -102,5 +106,34 @@ class HistoryRepositoryTest {
         repository.clearAll()
         
         assertEquals(0, repository.items.value.size)
+    }
+
+    @Test
+    fun `getCacheStats returns correct entry count and size`() {
+        // Empty repository
+        var stats = repository.getCacheStats()
+        assertEquals(0, stats.entryCount)
+        assertEquals(0L, stats.totalSizeBytes)
+
+        // Add some entries
+        val bytes1 = "First email content".toByteArray()
+        val bytes2 = "Second email content that is longer".toByteArray()
+        repository.ingest(bytes1, "first", null)
+        repository.ingest(bytes2, "second", null)
+
+        stats = repository.getCacheStats()
+        assertEquals(2, stats.entryCount)
+        assertEquals(bytes1.size.toLong() + bytes2.size.toLong(), stats.totalSizeBytes)
+    }
+
+    @Test
+    fun `getCacheStats counts deduplicated blobs only once`() {
+        val bytes = "Shared email content".toByteArray()
+        repository.ingest(bytes, "first", null)
+        repository.ingest(bytes, "second", null)  // Same content, should deduplicate
+
+        val stats = repository.getCacheStats()
+        assertEquals(2, stats.entryCount)  // Two entries
+        assertEquals(bytes.size.toLong(), stats.totalSizeBytes)  // But only one blob size
     }
 }

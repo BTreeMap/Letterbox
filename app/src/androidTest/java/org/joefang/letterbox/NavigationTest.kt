@@ -44,7 +44,7 @@ class NavigationTest {
 
         // Verify menu is open
         composeTestRule.onNodeWithText("About").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Clear history").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
 
         // Click About (which should open dialog and dismiss menu)
         composeTestRule.onNodeWithText("About").performClick()
@@ -99,19 +99,14 @@ class NavigationTest {
     }
 
     @Test
-    fun navigation_clearHistoryDialogCancelReturnsToHome() {
-        // Open Clear History dialog
+    fun navigation_settingsBottomSheetOpensFromMenu() {
+        // Open Settings bottom sheet
         composeTestRule.onNodeWithContentDescription("More options").performClick()
-        composeTestRule.onNodeWithText("Clear history").performClick()
+        composeTestRule.onNodeWithText("Settings").performClick()
 
-        // Verify dialog is shown
-        composeTestRule.onNodeWithText("Clear history?").assertIsDisplayed()
-
-        // Cancel
-        composeTestRule.onNodeWithText("Cancel").performClick()
-
-        // Verify we're back to home screen
-        composeTestRule.onNodeWithText("Letterbox").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Open file").assertIsDisplayed()
+        // Verify bottom sheet is shown
+        composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Storage").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Email cache").assertIsDisplayed()
     }
 }
