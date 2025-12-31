@@ -30,7 +30,8 @@ data class EmailUiState(
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val sessionLoadImages: Boolean = false,
-    val hasRemoteImages: Boolean = false
+    val hasRemoteImages: Boolean = false,
+    val cacheStats: CacheStats = CacheStats(0, 0L)
 )
 
 class EmailViewModel(
@@ -45,7 +46,19 @@ class EmailViewModel(
         viewModelScope.launch {
             repository.items.collect { items ->
                 _uiState.update { it.copy(history = items) }
+                // Refresh cache stats whenever history changes
+                refreshCacheStats()
             }
+        }
+    }
+    
+    /**
+     * Refresh cache statistics.
+     */
+    private fun refreshCacheStats() {
+        viewModelScope.launch {
+            val stats = repository.getCacheStats()
+            _uiState.update { it.copy(cacheStats = stats) }
         }
     }
 
