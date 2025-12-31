@@ -69,4 +69,7 @@ interface HistoryItemDao {
     @Transaction
     @Query("DELETE FROM history_items WHERE id IN (SELECT id FROM history_items ORDER BY last_accessed ASC LIMIT :count)")
     suspend fun deleteOldestItems(count: Int)
+
+    @Query("DELETE FROM history_items")
+    suspend fun deleteAll()
 }

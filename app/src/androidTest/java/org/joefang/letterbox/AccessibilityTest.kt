@@ -10,6 +10,10 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
+import org.joefang.letterbox.data.LetterboxDatabase
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -27,6 +31,15 @@ class AccessibilityTest {
 
     @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
+
+    @Before
+    fun setup() {
+        // Clear history database to ensure tests start with empty state
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        runBlocking {
+            LetterboxDatabase.getInstance(context).historyItemDao().deleteAll()
+        }
+    }
 
     @Test
     fun accessibility_overflowMenuHasContentDescription() {

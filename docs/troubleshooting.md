@@ -204,6 +204,55 @@ Check `app/src/main/res/xml/file_paths.xml` to see which paths are configured:
 </paths>
 ```
 
+### Test isolation issues (database state not reset)
+
+#### Symptoms
+- Tests that expect "empty state" fail inconsistently
+- Tests pass individually but fail when run as a suite
+- Error like "The component is not displayed!" for empty state message
+
+#### Root Cause
+Instrumented tests share the same application database. Tests that add data (like `EmailOpeningE2ETest` which opens email files) can leave data in the database that affects subsequent tests expecting an empty state.
+
+#### Solution
+Clear the database in `@Before` methods for tests that require a clean state:
+
+```kotlin
+import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
+import org.joefang.letterbox.data.LetterboxDatabase
+import org.junit.Before
+
+@RunWith(AndroidJUnit4::class)
+class HomeScreenTest {
+    @get:Rule
+    val composeTestRule = createAndroidComposeRule<MainActivity>()
+
+    @Before
+    fun setup() {
+        // Clear history database to ensure tests start with empty state
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        runBlocking {
+            LetterboxDatabase.getInstance(context).historyItemDao().deleteAll()
+        }
+    }
+
+    @Test
+    fun homeScreen_displaysEmptyStateMessage() {
+        // This test now reliably sees empty state
+        composeTestRule.onNodeWithText("Open an .eml or .msg file").assertIsDisplayed()
+    }
+}
+```
+
+Note: Use `targetContext` (application context) for database operations, not `context` (test APK context).
+
+#### Prevention
+When writing new tests that depend on application state:
+1. Always clear relevant data in `@Before` method
+2. Consider using Room's in-memory database for unit tests
+3. Use `@After` to clean up if necessary
+
 ### Running instrumented tests
 Instrumented tests require an Android device or emulator:
 
