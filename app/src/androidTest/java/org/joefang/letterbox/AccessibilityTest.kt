@@ -71,7 +71,7 @@ class AccessibilityTest {
         composeTestRule.onNodeWithContentDescription("More options").performClick()
 
         // Menu items should have readable text
-        composeTestRule.onNodeWithText("Clear history").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
         composeTestRule.onNodeWithText("About").assertIsDisplayed()
     }
 
@@ -90,17 +90,16 @@ class AccessibilityTest {
     }
 
     @Test
-    fun accessibility_confirmationDialogHasBothButtons() {
-        // Open Clear History dialog
+    fun accessibility_settingsBottomSheetIsAccessible() {
+        // Open Settings bottom sheet
         composeTestRule.onNodeWithContentDescription("More options").performClick()
-        composeTestRule.onNodeWithText("Clear history").performClick()
+        composeTestRule.onNodeWithText("Settings").performClick()
 
-        // Confirmation dialog should have both Cancel and Clear buttons
-        composeTestRule.onNodeWithText("Cancel").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Clear").assertIsDisplayed()
-        
-        // Clean up
-        composeTestRule.onNodeWithText("Cancel").performClick()
+        // Settings sheet should have readable labels
+        composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Remote Images").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Storage").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Email cache").assertIsDisplayed()
     }
 
     @Test
@@ -123,8 +122,8 @@ class AccessibilityTest {
         // Open menu
         composeTestRule.onNodeWithContentDescription("More options").performClick()
 
-        // Verify expected menu items exist
-        composeTestRule.onNodeWithText("Clear history").assertIsDisplayed()
+        // Verify expected menu items exist (Settings and About, no Clear history in menu anymore)
+        composeTestRule.onNodeWithText("Settings").assertIsDisplayed()
         composeTestRule.onNodeWithText("About").assertIsDisplayed()
     }
 }
