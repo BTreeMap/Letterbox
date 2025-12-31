@@ -59,7 +59,10 @@ cargo test
 
 - Rust core: `cargo test`.
 - Android unit tests (all flavors): `./gradlew test`.
-- Instrumented tests are present under `app/src/androidTest` and can be executed with an emulator/device via `./gradlew :app:connectedAndroidTest`.
+- Instrumented tests (connected device): `./gradlew :app:connectedAndroidTest`.
+- Instrumented tests (managed device - used in CI): `./gradlew pixel7Api34StagingDebugAndroidTest`.
+
+See [docs/troubleshooting.md](docs/troubleshooting.md) for common test issues and solutions.
 
 ## Troubleshooting
 

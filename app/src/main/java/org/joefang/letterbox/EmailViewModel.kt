@@ -67,10 +67,18 @@ class EmailViewModel(
                 // If successfully parsed, show the email
                 if (parsed != null) {
                     // Use Rust FFI to detect remote images
+                    // Note: Must catch both Exception and Error (UnsatisfiedLinkError)
+                    // to gracefully handle cases where native library is unavailable
                     val hasRemoteImages = try {
                         val remoteImages = extractRemoteImages(parsed.bodyHtml ?: "")
                         remoteImages.isNotEmpty()
                     } catch (e: Exception) {
+                        false
+                    } catch (e: UnsatisfiedLinkError) {
+                        // Native library not available
+                        false
+                    } catch (e: ExceptionInInitializerError) {
+                        // Library initialization failed
                         false
                     }
                     _uiState.update { it.copy(
@@ -119,10 +127,18 @@ class EmailViewModel(
                         // Note: This could be optimized to load lazily only when sharing
                         val bytes = file.readBytes()
                         // Use Rust FFI to detect remote images
+                        // Note: Must catch both Exception and Error (UnsatisfiedLinkError)
+                        // to gracefully handle cases where native library is unavailable
                         val hasRemoteImages = try {
                             val remoteImages = extractRemoteImages(parsed.bodyHtml ?: "")
                             remoteImages.isNotEmpty()
                         } catch (e: Exception) {
+                            false
+                        } catch (e: UnsatisfiedLinkError) {
+                            // Native library not available
+                            false
+                        } catch (e: ExceptionInInitializerError) {
+                            // Library initialization failed
                             false
                         }
                         _uiState.update { it.copy(
