@@ -55,12 +55,11 @@ class HistoryRepositoryTest {
         val first = repository.ingest(bytes, "first", null)
         val firstAccessed = first.lastAccessed
         
-        // Small delay to ensure timestamp difference
-        Thread.sleep(10)
-        
+        // Ingest same content again - should return existing entry with updated timestamp
         val second = repository.ingest(bytes, "second", null)
         
-        // Second ingest should have updated lastAccessed
+        // Second ingest should return the same entry (same ID) with same or later timestamp
+        assertEquals(first.id, second.id)
         assertTrue(second.lastAccessed >= firstAccessed)
     }
 

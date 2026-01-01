@@ -165,24 +165,22 @@ class HistoryRepository(
     ): HistoryEntry {
         return withContext(Dispatchers.IO) {
             val hash = sha256(bytes)
-            val blobFile = File(casDir, hash)
             val now = System.currentTimeMillis()
             
-            // Check if blob already exists
-            val existingBlob = blobDao.getByHash(hash)
-            if (existingBlob == null) {
-                // New content - save to file system and database
-                blobFile.writeBytes(bytes)
-                blobDao.insert(BlobEntity(hash, bytes.size.toLong(), 1))
-            }
-            
-            // Check if history entry already exists for this blob
-            val existingItems = historyItemDao.getByBlobHash(hash)
-            if (existingItems.isNotEmpty()) {
+            // Check if history entry already exists for this blob (deduplication)
+            val existingItem = historyItemDao.getFirstByBlobHash(hash)
+            if (existingItem != null) {
                 // Email already in history - update last accessed timestamp and return
-                val existingItem = existingItems.first()
                 historyItemDao.updateLastAccessed(existingItem.id, now)
                 return@withContext existingItem.copy(lastAccessed = now).toHistoryEntry()
+            }
+            
+            // New content - check if blob exists and create if needed
+            val blobFile = File(casDir, hash)
+            val existingBlob = blobDao.getByHash(hash)
+            if (existingBlob == null) {
+                blobFile.writeBytes(bytes)
+                blobDao.insert(BlobEntity(hash, bytes.size.toLong(), 1))
             }
 
             // Create new history entry with metadata
