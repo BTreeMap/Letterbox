@@ -142,20 +142,20 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
         .unwrap_or_default();
 
     let date = message.date().map(|d| d.to_rfc3339()).unwrap_or_default();
-    
+
     // Parse date to epoch milliseconds for sorting
     // Uses the mail-parser's DateTime which provides to_timestamp()
     let date_timestamp = message
         .date()
         .map(|d| d.to_timestamp() * 1000) // Convert seconds to milliseconds
         .unwrap_or(0);
-    
+
     // Extract structured sender info for search/filter
     let sender_info = message
         .from()
         .map(|addrs| extract_first_address_info(addrs))
         .unwrap_or_default();
-    
+
     // Extract structured recipient info (To + Cc) for search/filter
     let mut recipient_info = Vec::new();
     if let Some(addrs) = message.to() {
@@ -354,21 +354,29 @@ fn format_addresses(addresses: &mail_parser::Address) -> String {
 /// Used for sender information where typically only the first address matters.
 fn extract_first_address_info(addresses: &mail_parser::Address) -> AddressInfo {
     match addresses {
-        mail_parser::Address::List(list) => {
-            list.first().map(|addr| AddressInfo {
+        mail_parser::Address::List(list) => list
+            .first()
+            .map(|addr| AddressInfo {
                 email: addr.address.as_deref().unwrap_or("").to_string(),
-                name: addr.name.as_ref().map(|n| n.to_string()).unwrap_or_default(),
-            }).unwrap_or_default()
-        }
-        mail_parser::Address::Group(groups) => {
-            groups.first()
-                .and_then(|g| g.addresses.first())
-                .map(|addr| AddressInfo {
-                    email: addr.address.as_deref().unwrap_or("").to_string(),
-                    name: addr.name.as_ref().map(|n| n.to_string()).unwrap_or_default(),
-                })
-                .unwrap_or_default()
-        }
+                name: addr
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+            })
+            .unwrap_or_default(),
+        mail_parser::Address::Group(groups) => groups
+            .first()
+            .and_then(|g| g.addresses.first())
+            .map(|addr| AddressInfo {
+                email: addr.address.as_deref().unwrap_or("").to_string(),
+                name: addr
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -376,21 +384,29 @@ fn extract_first_address_info(addresses: &mail_parser::Address) -> AddressInfo {
 /// Used for recipient information where all addresses are relevant.
 fn extract_all_address_info(addresses: &mail_parser::Address) -> Vec<AddressInfo> {
     match addresses {
-        mail_parser::Address::List(list) => {
-            list.iter().map(|addr| AddressInfo {
+        mail_parser::Address::List(list) => list
+            .iter()
+            .map(|addr| AddressInfo {
                 email: addr.address.as_deref().unwrap_or("").to_string(),
-                name: addr.name.as_ref().map(|n| n.to_string()).unwrap_or_default(),
-            }).collect()
-        }
-        mail_parser::Address::Group(groups) => {
-            groups.iter()
-                .flat_map(|g| g.addresses.iter())
-                .map(|addr| AddressInfo {
-                    email: addr.address.as_deref().unwrap_or("").to_string(),
-                    name: addr.name.as_ref().map(|n| n.to_string()).unwrap_or_default(),
-                })
-                .collect()
-        }
+                name: addr
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+            })
+            .collect(),
+        mail_parser::Address::Group(groups) => groups
+            .iter()
+            .flat_map(|g| g.addresses.iter())
+            .map(|addr| AddressInfo {
+                email: addr.address.as_deref().unwrap_or("").to_string(),
+                name: addr
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+            })
+            .collect(),
     }
 }
 
@@ -459,17 +475,14 @@ impl EmailHandle {
             .map(|msg| msg.date.clone())
             .unwrap_or_default()
     }
-    
+
     /// Get the date as epoch milliseconds.
     /// Returns 0 if the date is missing or unparseable.
     /// Used for sorting and filtering in the Kotlin layer.
     pub fn date_timestamp(&self) -> i64 {
-        self.inner
-            .lock()
-            .map(|msg| msg.date_timestamp)
-            .unwrap_or(0)
+        self.inner.lock().map(|msg| msg.date_timestamp).unwrap_or(0)
     }
-    
+
     /// Get structured sender information.
     /// Returns AddressInfo with separate email and name fields for search indexing.
     pub fn sender_info(&self) -> AddressInfo {
@@ -478,7 +491,7 @@ impl EmailHandle {
             .map(|msg| msg.sender_info.clone())
             .unwrap_or_default()
     }
-    
+
     /// Get structured recipient information (To + Cc).
     /// Returns list of AddressInfo for all recipients for search indexing.
     pub fn recipient_info(&self) -> Vec<AddressInfo> {
@@ -487,7 +500,7 @@ impl EmailHandle {
             .map(|msg| msg.recipient_info.clone())
             .unwrap_or_default()
     }
-    
+
     /// Get a preview of the body text for search indexing.
     /// Returns the first 500 characters of the plain text body.
     pub fn body_preview(&self) -> String {
@@ -1251,17 +1264,17 @@ Content-Type: text/html
         let recipients = handle.recipient_info();
         // Should have 3 recipients: Alice, bob, carol
         assert_eq!(recipients.len(), 3);
-        
+
         // Check Alice
         let alice = recipients.iter().find(|r| r.email == "alice@example.com");
         assert!(alice.is_some());
         assert_eq!(alice.unwrap().name, "Alice");
-        
+
         // Check bob (no name)
         let bob = recipients.iter().find(|r| r.email == "bob@example.com");
         assert!(bob.is_some());
         assert_eq!(bob.unwrap().name, "");
-        
+
         // Check carol
         let carol = recipients.iter().find(|r| r.email == "carol@example.com");
         assert!(carol.is_some());
