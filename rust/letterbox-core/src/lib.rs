@@ -37,10 +37,26 @@ struct ParsedMessage {
     reply_to: String,
     message_id: String,
     date: String,
+    /// Timestamp in milliseconds since Unix epoch, 0 if unparseable
+    date_timestamp: i64,
     body_html: Option<String>,
     body_text: Option<String>,
     inline_assets: HashMap<String, InlineAsset>,
     attachments: Vec<Attachment>,
+    /// Structured sender information for search/filter
+    sender_info: AddressInfo,
+    /// Structured recipient information for search/filter
+    recipient_info: Vec<AddressInfo>,
+}
+
+/// Structured address information for search and filtering.
+/// Exposed to Kotlin via UniFFI to enable separate indexing of name and email.
+#[derive(Clone, Default, uniffi::Record)]
+pub struct AddressInfo {
+    /// Email address (e.g., "sender@example.com")
+    pub email: String,
+    /// Display name (e.g., "John Doe"), empty if not available
+    pub name: String,
 }
 
 /// Internal representation of an inline asset with metadata.
@@ -126,6 +142,28 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
         .unwrap_or_default();
 
     let date = message.date().map(|d| d.to_rfc3339()).unwrap_or_default();
+
+    // Parse date to epoch milliseconds for sorting
+    // Uses the mail-parser's DateTime which provides to_timestamp()
+    let date_timestamp = message
+        .date()
+        .map(|d| d.to_timestamp() * 1000) // Convert seconds to milliseconds
+        .unwrap_or(0);
+
+    // Extract structured sender info for search/filter
+    let sender_info = message
+        .from()
+        .map(|addrs| extract_first_address_info(addrs))
+        .unwrap_or_default();
+
+    // Extract structured recipient info (To + Cc) for search/filter
+    let mut recipient_info = Vec::new();
+    if let Some(addrs) = message.to() {
+        recipient_info.extend(extract_all_address_info(addrs));
+    }
+    if let Some(addrs) = message.cc() {
+        recipient_info.extend(extract_all_address_info(addrs));
+    }
 
     // Get body HTML
     let body_html = message.body_html(0).map(|s| s.to_string());
@@ -247,10 +285,13 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
         reply_to,
         message_id,
         date,
+        date_timestamp,
         body_html: final_body_html,
         body_text,
         inline_assets,
         attachments,
+        sender_info,
+        recipient_info,
     };
 
     Ok(Arc::new(EmailHandle {
@@ -306,6 +347,66 @@ fn format_addresses(addresses: &mail_parser::Address) -> String {
             })
             .collect::<Vec<_>>()
             .join(", "),
+    }
+}
+
+/// Extract the first address from an Address object as structured AddressInfo.
+/// Used for sender information where typically only the first address matters.
+fn extract_first_address_info(addresses: &mail_parser::Address) -> AddressInfo {
+    match addresses {
+        mail_parser::Address::List(list) => list
+            .first()
+            .map(|addr| AddressInfo {
+                email: addr.address.as_deref().unwrap_or("").to_string(),
+                name: addr
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+            })
+            .unwrap_or_default(),
+        mail_parser::Address::Group(groups) => groups
+            .first()
+            .and_then(|g| g.addresses.first())
+            .map(|addr| AddressInfo {
+                email: addr.address.as_deref().unwrap_or("").to_string(),
+                name: addr
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// Extract all addresses from an Address object as structured AddressInfo.
+/// Used for recipient information where all addresses are relevant.
+fn extract_all_address_info(addresses: &mail_parser::Address) -> Vec<AddressInfo> {
+    match addresses {
+        mail_parser::Address::List(list) => list
+            .iter()
+            .map(|addr| AddressInfo {
+                email: addr.address.as_deref().unwrap_or("").to_string(),
+                name: addr
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+            })
+            .collect(),
+        mail_parser::Address::Group(groups) => groups
+            .iter()
+            .flat_map(|g| g.addresses.iter())
+            .map(|addr| AddressInfo {
+                email: addr.address.as_deref().unwrap_or("").to_string(),
+                name: addr
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+            })
+            .collect(),
     }
 }
 
@@ -372,6 +473,50 @@ impl EmailHandle {
         self.inner
             .lock()
             .map(|msg| msg.date.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get the date as epoch milliseconds.
+    /// Returns 0 if the date is missing or unparseable.
+    /// Used for sorting and filtering in the Kotlin layer.
+    pub fn date_timestamp(&self) -> i64 {
+        self.inner.lock().map(|msg| msg.date_timestamp).unwrap_or(0)
+    }
+
+    /// Get structured sender information.
+    /// Returns AddressInfo with separate email and name fields for search indexing.
+    pub fn sender_info(&self) -> AddressInfo {
+        self.inner
+            .lock()
+            .map(|msg| msg.sender_info.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get structured recipient information (To + Cc).
+    /// Returns list of AddressInfo for all recipients for search indexing.
+    pub fn recipient_info(&self) -> Vec<AddressInfo> {
+        self.inner
+            .lock()
+            .map(|msg| msg.recipient_info.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get a preview of the body text for search indexing.
+    /// Returns the first 500 characters of the plain text body.
+    pub fn body_preview(&self) -> String {
+        self.inner
+            .lock()
+            .map(|msg| {
+                msg.body_text
+                    .as_ref()
+                    .map(|text| {
+                        // Take first 500 characters for search index
+                        let chars: String = text.chars().take(500).collect();
+                        // Clean up whitespace
+                        chars.split_whitespace().collect::<Vec<_>>().join(" ")
+                    })
+                    .unwrap_or_default()
+            })
             .unwrap_or_default()
     }
 
@@ -1069,5 +1214,135 @@ Content-Type: text/html
         // Email has no attachments, so any index is invalid
         assert!(handle.get_attachment_content(0).is_none());
         assert!(handle.get_attachment_content(100).is_none());
+    }
+
+    // Tests for structured address extraction (for search/filter)
+
+    #[test]
+    fn sender_info_extracts_email_and_name() {
+        let email = "Subject: Test\r\n\
+                     From: John Doe <john@example.com>\r\n\
+                     To: recipient@example.com\r\n\r\n\
+                     Body";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let sender = handle.sender_info();
+        assert_eq!(sender.email, "john@example.com");
+        assert_eq!(sender.name, "John Doe");
+    }
+
+    #[test]
+    fn sender_info_handles_email_only() {
+        let email = "Subject: Test\r\n\
+                     From: sender@example.com\r\n\
+                     To: recipient@example.com\r\n\r\n\
+                     Body";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let sender = handle.sender_info();
+        assert_eq!(sender.email, "sender@example.com");
+        assert_eq!(sender.name, "");
+    }
+
+    #[test]
+    fn sender_info_handles_missing_from() {
+        let email = "Subject: Test\r\n\
+                     To: recipient@example.com\r\n\r\n\
+                     Body";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let sender = handle.sender_info();
+        assert_eq!(sender.email, "");
+        assert_eq!(sender.name, "");
+    }
+
+    #[test]
+    fn recipient_info_extracts_to_and_cc() {
+        let email = "Subject: Test\r\n\
+                     From: sender@example.com\r\n\
+                     To: Alice <alice@example.com>, bob@example.com\r\n\
+                     Cc: carol@example.com\r\n\r\n\
+                     Body";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let recipients = handle.recipient_info();
+        // Should have 3 recipients: Alice, bob, carol
+        assert_eq!(recipients.len(), 3);
+
+        // Check Alice
+        let alice = recipients.iter().find(|r| r.email == "alice@example.com");
+        assert!(alice.is_some());
+        assert_eq!(alice.unwrap().name, "Alice");
+
+        // Check bob (no name)
+        let bob = recipients.iter().find(|r| r.email == "bob@example.com");
+        assert!(bob.is_some());
+        assert_eq!(bob.unwrap().name, "");
+
+        // Check carol
+        let carol = recipients.iter().find(|r| r.email == "carol@example.com");
+        assert!(carol.is_some());
+    }
+
+    #[test]
+    fn date_timestamp_parses_valid_date() {
+        let email = "Subject: Test\r\n\
+                     From: sender@example.com\r\n\
+                     Date: Mon, 11 Dec 2023 10:00:00 +0000\r\n\r\n\
+                     Body";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let ts = handle.date_timestamp();
+        // Should be a positive timestamp around Dec 2023
+        assert!(ts > 0);
+        // Timestamp should be in milliseconds (greater than 1 billion)
+        assert!(ts > 1_000_000_000_000);
+    }
+
+    #[test]
+    fn date_timestamp_returns_zero_for_missing_date() {
+        let email = "Subject: Test\r\n\
+                     From: sender@example.com\r\n\r\n\
+                     Body";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let ts = handle.date_timestamp();
+        assert_eq!(ts, 0);
+    }
+
+    #[test]
+    fn body_preview_returns_first_500_chars() {
+        // Create an email with a long body
+        let long_body = "a ".repeat(300); // 600 chars with spaces
+        let email = format!(
+            "Subject: Test\r\n\
+             From: sender@example.com\r\n\r\n\
+             {}",
+            long_body
+        );
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let preview = handle.body_preview();
+        // Preview should be limited to ~500 chars worth of content
+        assert!(preview.len() <= 500);
+        // Should contain 'a' from the body
+        assert!(preview.contains('a'));
+    }
+
+    #[test]
+    fn body_preview_returns_empty_for_html_only_email() {
+        let email = "Subject: Test\r\n\
+                     From: sender@example.com\r\n\
+                     Content-Type: text/html\r\n\r\n\
+                     <html><body>Hello</body></html>";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let preview = handle.body_preview();
+        // HTML-only emails may have body_text extracted from HTML
+        // This tests that the function doesn't crash
+        assert!(preview.is_empty() || preview.contains("Hello"));
+    }
+
+    #[test]
+    fn body_preview_cleans_whitespace() {
+        let email = "Subject: Test\r\n\
+                     From: sender@example.com\r\n\r\n\
+                     Hello    World\n\nThis is   a test";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let preview = handle.body_preview();
+        // Should collapse whitespace
+        assert!(!preview.contains("    "));
     }
 }

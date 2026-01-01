@@ -19,22 +19,30 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -54,13 +62,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import org.joefang.letterbox.data.LetterboxDatabase
+import org.joefang.letterbox.data.SortDirection
+import org.joefang.letterbox.data.SortField
 import org.joefang.letterbox.data.UserPreferencesRepository
 import org.joefang.letterbox.ui.EmailDetailScreen
 import org.joefang.letterbox.ui.theme.LetterboxTheme
@@ -183,8 +198,17 @@ class MainActivity : ComponentActivity() {
                         }
                         else -> {
                             LetterboxScaffold(
-                                history = uiState.history,
+                                history = uiState.filteredHistory,
                                 cacheStats = uiState.cacheStats,
+                                searchQuery = uiState.searchQuery,
+                                onSearchQueryChange = { viewModel.setSearchQuery(it) },
+                                isSearchActive = uiState.isSearchActive,
+                                onSearchActiveChange = { viewModel.setSearchActive(it) },
+                                sortField = uiState.sortField,
+                                sortDirection = uiState.sortDirection,
+                                onSortChange = { field, direction -> viewModel.setSortOrder(field, direction) },
+                                filterHasAttachments = uiState.filterHasAttachments,
+                                onToggleAttachmentsFilter = { viewModel.toggleAttachmentsFilter() },
                                 onEntryClick = { entry ->
                                     viewModel.openHistoryEntry(entry)
                                 },
@@ -313,6 +337,15 @@ private fun LoadingScreen() {
 private fun LetterboxScaffold(
     history: List<HistoryEntry>,
     cacheStats: CacheStats,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    isSearchActive: Boolean,
+    onSearchActiveChange: (Boolean) -> Unit,
+    sortField: SortField,
+    sortDirection: SortDirection,
+    onSortChange: (SortField, SortDirection) -> Unit,
+    filterHasAttachments: Boolean,
+    onToggleAttachmentsFilter: () -> Unit,
     onEntryClick: (HistoryEntry) -> Unit,
     onEntryDelete: (HistoryEntry) -> Unit,
     onOpenFile: (Uri) -> Unit,
@@ -324,8 +357,10 @@ private fun LetterboxScaffold(
     var showAboutDialog by remember { mutableStateOf(false) }
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
+    var showSortMenu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val settingsSheetState = rememberModalBottomSheetState()
+    val searchFocusRequester = remember { FocusRequester() }
     
     // Collect image loading preferences
     val alwaysLoadRemoteImages by preferencesRepository.alwaysLoadRemoteImages.collectAsState(initial = false)
@@ -337,38 +372,92 @@ private fun LetterboxScaffold(
         uri?.let { onOpenFile(it) }
     }
     
+    // Request focus when search becomes active
+    LaunchedEffect(isSearchActive) {
+        if (isSearchActive) {
+            searchFocusRequester.requestFocus()
+        }
+    }
+    
     Scaffold(
         topBar = { 
-            TopAppBar(
-                title = { Text(text = "Letterbox") },
-                actions = {
-                    IconButton(onClick = { showMenu = !showMenu }) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "More options"
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Settings") },
-                            onClick = {
-                                showMenu = false
-                                showSettingsSheet = true
+            if (isSearchActive) {
+                // Search mode top bar
+                TopAppBar(
+                    title = {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = onSearchQueryChange,
+                            placeholder = { Text("Search emails...") },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(searchFocusRequester)
+                                .testTag("searchTextField")
+                                .semantics { contentDescription = "Search emails" },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(
+                                        onClick = { onSearchQueryChange("") },
+                                        modifier = Modifier.semantics { contentDescription = "Clear search" }
+                                    ) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                                    }
+                                }
                             }
                         )
-                        DropdownMenuItem(
-                            text = { Text("About") },
-                            onClick = {
-                                showMenu = false
-                                showAboutDialog = true
-                            }
-                        )
+                    },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = { onSearchActiveChange(false) },
+                            modifier = Modifier.semantics { contentDescription = "Close search" }
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Close search")
+                        }
                     }
-                }
-            )
+                )
+            } else {
+                // Normal mode top bar
+                TopAppBar(
+                    title = { Text(text = "Letterbox") },
+                    actions = {
+                        IconButton(
+                            onClick = { onSearchActiveChange(true) },
+                            modifier = Modifier.semantics { contentDescription = "Search emails" }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = "Search"
+                            )
+                        }
+                        IconButton(onClick = { showMenu = !showMenu }) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "More options"
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Settings") },
+                                onClick = {
+                                    showMenu = false
+                                    showSettingsSheet = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("About") },
+                                onClick = {
+                                    showMenu = false
+                                    showAboutDialog = true
+                                }
+                            )
+                        }
+                    }
+                )
+            }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
@@ -389,11 +478,116 @@ private fun LetterboxScaffold(
                 Text("Open file")
             }
             
-            // History list
+            // Sort and Filter controls
+            if (history.isNotEmpty() || isSearchActive || filterHasAttachments) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Sort button with dropdown
+                    Box {
+                        FilterChip(
+                            selected = false,
+                            onClick = { showSortMenu = true },
+                            label = {
+                                Text(
+                                    when (sortField) {
+                                        SortField.DATE -> "Date"
+                                        SortField.SUBJECT -> "Subject"
+                                        SortField.SENDER -> "Sender"
+                                    } + if (sortDirection == SortDirection.ASCENDING) " ↑" else " ↓"
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            },
+                            modifier = Modifier.semantics { contentDescription = "Sort emails" }
+                        )
+                        DropdownMenu(
+                            expanded = showSortMenu,
+                            onDismissRequest = { showSortMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Date (newest first)") },
+                                onClick = {
+                                    onSortChange(SortField.DATE, SortDirection.DESCENDING)
+                                    showSortMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Date (oldest first)") },
+                                onClick = {
+                                    onSortChange(SortField.DATE, SortDirection.ASCENDING)
+                                    showSortMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Subject (A-Z)") },
+                                onClick = {
+                                    onSortChange(SortField.SUBJECT, SortDirection.ASCENDING)
+                                    showSortMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Subject (Z-A)") },
+                                onClick = {
+                                    onSortChange(SortField.SUBJECT, SortDirection.DESCENDING)
+                                    showSortMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Sender (A-Z)") },
+                                onClick = {
+                                    onSortChange(SortField.SENDER, SortDirection.ASCENDING)
+                                    showSortMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Sender (Z-A)") },
+                                onClick = {
+                                    onSortChange(SortField.SENDER, SortDirection.DESCENDING)
+                                    showSortMenu = false
+                                }
+                            )
+                        }
+                    }
+                    
+                    // Attachments filter chip
+                    FilterChip(
+                        selected = filterHasAttachments,
+                        onClick = onToggleAttachmentsFilter,
+                        label = { 
+                            Text(if (filterHasAttachments) "📎 Attachments" else "Has attachments") 
+                        },
+                        modifier = Modifier.semantics { 
+                            contentDescription = if (filterHasAttachments) 
+                                "Filter: showing only emails with attachments" 
+                            else 
+                                "Filter by attachments"
+                        }
+                    )
+                }
+            }
+            
+            // History list with appropriate empty message
+            val emptyMessage = when {
+                isSearchActive && searchQuery.isNotBlank() -> "No emails match \"$searchQuery\""
+                filterHasAttachments -> "No emails with attachments"
+                else -> "Open an .eml or .msg file to get started."
+            }
+            
             HistoryList(
                 entries = history,
                 onEntryClick = onEntryClick,
                 onEntryDelete = onEntryDelete,
+                emptyMessage = emptyMessage,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -625,7 +819,8 @@ private fun HistoryList(
     entries: List<HistoryEntry>,
     onEntryClick: (HistoryEntry) -> Unit,
     onEntryDelete: (HistoryEntry) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    emptyMessage: String = "Open an .eml or .msg file to get started."
 ) {
     if (entries.isEmpty()) {
         Column(
@@ -634,7 +829,7 @@ private fun HistoryList(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "Open an .eml or .msg file to get started.",
+                text = emptyMessage,
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.padding(16.dp)
             )
@@ -644,7 +839,7 @@ private fun HistoryList(
             modifier = modifier,
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
-            items(entries) { entry ->
+            items(entries, key = { it.id }) { entry ->
                 HistoryRow(
                     entry = entry,
                     onClick = { onEntryClick(entry) },
@@ -666,28 +861,65 @@ private fun HistoryRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+            .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp)
+            .semantics { 
+                contentDescription = buildString {
+                    append("Email: ${entry.displayName}")
+                    if (entry.displaySender.isNotBlank()) {
+                        append(", from ${entry.displaySender}")
+                    }
+                    if (entry.hasAttachments) {
+                        append(", has attachments")
+                    }
+                }
+            },
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = entry.displayName,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(modifier = Modifier.height(4.dp))
+            // Subject/display name
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = entry.displayName,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                // Attachment indicator
+                if (entry.hasAttachments) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "📎",
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            
+            // Sender info (if available)
+            if (entry.displaySender.isNotBlank()) {
+                Text(
+                    text = entry.displaySender,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+            }
+            
+            // Timestamp and source
             Row {
                 Text(
-                    text = formatTimestamp(entry.lastAccessed),
+                    text = formatTimestamp(entry.effectiveDate),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.outline
                 )
                 entry.originalUri?.let { uri ->
                     Text(
                         text = " • ",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.outline
                     )
                     Text(
                         text = extractSourceName(uri),
@@ -700,7 +932,10 @@ private fun HistoryRow(
                 }
             }
         }
-        IconButton(onClick = onDelete) {
+        IconButton(
+            onClick = onDelete,
+            modifier = Modifier.semantics { contentDescription = "Delete email" }
+        ) {
             Icon(
                 imageVector = Icons.Default.Delete,
                 contentDescription = "Delete",

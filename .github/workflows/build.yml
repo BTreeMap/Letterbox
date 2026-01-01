@@ -114,9 +114,11 @@ jobs:
 
       - name: Rust format check
         run: cargo fmt --all -- --check
+        working-directory: rust/letterbox-core
 
       - name: Rust tests
         run: cargo test
+        working-directory: rust/letterbox-core
 
       - name: Gradle permissions
         run: chmod +x gradlew

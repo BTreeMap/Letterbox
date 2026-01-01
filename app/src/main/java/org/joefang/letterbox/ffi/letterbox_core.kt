@@ -646,11 +646,15 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_body_html(
     ): Short
+    external fun uniffi_letterbox_core_checksum_method_emailhandle_body_preview(
+    ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_body_text(
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_cc(
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_date(
+    ): Short
+    external fun uniffi_letterbox_core_checksum_method_emailhandle_date_timestamp(
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_from(
     ): Short
@@ -668,7 +672,11 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_message_id(
     ): Short
+    external fun uniffi_letterbox_core_checksum_method_emailhandle_recipient_info(
+    ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_reply_to(
+    ): Short
+    external fun uniffi_letterbox_core_checksum_method_emailhandle_sender_info(
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_subject(
     ): Short
@@ -704,12 +712,16 @@ internal object UniffiLib {
     ): Int
     external fun uniffi_letterbox_core_fn_method_emailhandle_body_html(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_letterbox_core_fn_method_emailhandle_body_preview(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_method_emailhandle_body_text(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_method_emailhandle_cc(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_method_emailhandle_date(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_letterbox_core_fn_method_emailhandle_date_timestamp(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     external fun uniffi_letterbox_core_fn_method_emailhandle_from(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_method_emailhandle_get_attachment_content(`ptr`: Long,`index`: Int,uniffi_out_err: UniffiRustCallStatus, 
@@ -726,7 +738,11 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_method_emailhandle_message_id(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_letterbox_core_fn_method_emailhandle_recipient_info(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_method_emailhandle_reply_to(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_letterbox_core_fn_method_emailhandle_sender_info(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_core_fn_method_emailhandle_subject(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -881,6 +897,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_html() != 37584.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_preview() != 56708.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_text() != 49627.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -888,6 +907,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_date() != 5435.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_date_timestamp() != 22451.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_from() != 17732.toShort()) {
@@ -914,7 +936,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_message_id() != 52741.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_recipient_info() != 35618.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_reply_to() != 59962.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_sender_info() != 20160.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_subject() != 19561.toShort()) {
@@ -1135,6 +1163,29 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
 /**
  * @suppress
  */
+public object FfiConverterLong: FfiConverter<Long, Long> {
+    override fun lift(value: Long): Long {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Long {
+        return buf.getLong()
+    }
+
+    override fun lower(value: Long): Long {
+        return value
+    }
+
+    override fun allocationSize(value: Long) = 8UL
+
+    override fun write(value: Long, buf: ByteBuffer) {
+        buf.putLong(value)
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
     override fun lift(value: Byte): Boolean {
         return value.toInt() != 0
@@ -1345,6 +1396,12 @@ public interface EmailHandleInterface {
     fun `bodyHtml`(): kotlin.String?
     
     /**
+     * Get a preview of the body text for search indexing.
+     * Returns the first 500 characters of the plain text body.
+     */
+    fun `bodyPreview`(): kotlin.String
+    
+    /**
      * Get the plain text body content, if available.
      */
     fun `bodyText`(): kotlin.String?
@@ -1358,6 +1415,13 @@ public interface EmailHandleInterface {
      * Get the date as an RFC3339 string.
      */
     fun `date`(): kotlin.String
+    
+    /**
+     * Get the date as epoch milliseconds.
+     * Returns 0 if the date is missing or unparseable.
+     * Used for sorting and filtering in the Kotlin layer.
+     */
+    fun `dateTimestamp`(): kotlin.Long
     
     /**
      * Get the "From" field formatted as a string.
@@ -1405,9 +1469,21 @@ public interface EmailHandleInterface {
     fun `messageId`(): kotlin.String
     
     /**
+     * Get structured recipient information (To + Cc).
+     * Returns list of AddressInfo for all recipients for search indexing.
+     */
+    fun `recipientInfo`(): List<AddressInfo>
+    
+    /**
      * Get the "Reply-To" field formatted as a string.
      */
     fun `replyTo`(): kotlin.String
+    
+    /**
+     * Get structured sender information.
+     * Returns AddressInfo with separate email and name fields for search indexing.
+     */
+    fun `senderInfo`(): AddressInfo
     
     /**
      * Get the email subject.
@@ -1582,6 +1658,23 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
 
     
     /**
+     * Get a preview of the body text for search indexing.
+     * Returns the first 500 characters of the plain text body.
+     */override fun `bodyPreview`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_body_preview(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Get the plain text body content, if available.
      */override fun `bodyText`(): kotlin.String? {
             return FfiConverterOptionalString.lift(
@@ -1620,6 +1713,24 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     callWithHandle {
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_date(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get the date as epoch milliseconds.
+     * Returns 0 if the date is missing or unparseable.
+     * Used for sorting and filtering in the Kotlin layer.
+     */override fun `dateTimestamp`(): kotlin.Long {
+            return FfiConverterLong.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_date_timestamp(
         it,
         _status)
 }
@@ -1763,12 +1874,46 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
 
     
     /**
+     * Get structured recipient information (To + Cc).
+     * Returns list of AddressInfo for all recipients for search indexing.
+     */override fun `recipientInfo`(): List<AddressInfo> {
+            return FfiConverterSequenceTypeAddressInfo.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_recipient_info(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Get the "Reply-To" field formatted as a string.
      */override fun `replyTo`(): kotlin.String {
             return FfiConverterString.lift(
     callWithHandle {
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_reply_to(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Get structured sender information.
+     * Returns AddressInfo with separate email and name fields for search indexing.
+     */override fun `senderInfo`(): AddressInfo {
+            return FfiConverterTypeAddressInfo.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_sender_info(
         it,
         _status)
 }
@@ -1894,6 +2039,52 @@ public object FfiConverterTypeEmailHandle: FfiConverter<EmailHandle, Long> {
 
     override fun write(value: EmailHandle, buf: ByteBuffer) {
         buf.putLong(lower(value))
+    }
+}
+
+
+
+/**
+ * Structured address information for search and filtering.
+ * Exposed to Kotlin via UniFFI to enable separate indexing of name and email.
+ */
+data class AddressInfo (
+    /**
+     * Email address (e.g., "sender@example.com")
+     */
+    var `email`: kotlin.String
+    , 
+    /**
+     * Display name (e.g., "John Doe"), empty if not available
+     */
+    var `name`: kotlin.String
+    
+){
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAddressInfo: FfiConverterRustBuffer<AddressInfo> {
+    override fun read(buf: ByteBuffer): AddressInfo {
+        return AddressInfo(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: AddressInfo) = (
+            FfiConverterString.allocationSize(value.`email`) +
+            FfiConverterString.allocationSize(value.`name`)
+    )
+
+    override fun write(value: AddressInfo, buf: ByteBuffer) {
+            FfiConverterString.write(value.`email`, buf)
+            FfiConverterString.write(value.`name`, buf)
     }
 }
 
@@ -2245,6 +2436,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeAddressInfo: FfiConverterRustBuffer<List<AddressInfo>> {
+    override fun read(buf: ByteBuffer): List<AddressInfo> {
+        val len = buf.getInt()
+        return List<AddressInfo>(len) {
+            FfiConverterTypeAddressInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<AddressInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeAddressInfo.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<AddressInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeAddressInfo.write(it, buf)
         }
     }
 }
