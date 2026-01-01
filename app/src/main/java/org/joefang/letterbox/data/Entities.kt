@@ -26,7 +26,14 @@ data class BlobEntity(
 
 /**
  * Represents a history item linking a user-facing name to a blob.
- * Multiple history items can reference the same blob (deduplication).
+ * Each unique EML file (identified by SHA-256 checksum) has exactly one history entry.
+ * 
+ * ## Deduplication
+ * 
+ * The blob_hash field has a unique constraint to ensure each unique EML file
+ * (identified by its SHA-256 checksum) appears only once in the history.
+ * When the same file is ingested again, the existing entry's lastAccessed
+ * timestamp is updated instead of creating a duplicate.
  * 
  * ## Email Metadata Fields
  * 
@@ -73,7 +80,7 @@ data class BlobEntity(
         )
     ],
     indices = [
-        Index("blob_hash"),
+        Index("blob_hash", unique = true),
         Index("email_date"),
         Index("sender_email"),
         Index("has_attachments")

@@ -30,16 +30,38 @@ class HistoryRepositoryTest {
     }
 
     @Test
-    fun `deduplicates blobs and maintains ref counts`() {
+    fun `deduplicates emails with same content - returns existing entry`() {
         val bytes = "Subject: hello".toByteArray()
         val first = repository.ingest(bytes, "first", null)
         val second = repository.ingest(bytes, "second", null)
 
+        // Same content should return the same entry (same ID)
+        assertEquals(first.id, second.id)
+        assertEquals(first.blobHash, second.blobHash)
+        
+        // Only one entry should exist
+        assertEquals(1, repository.items.value.size)
+        
+        // Blob should still exist
         val blobMeta = repository.blobMeta(first.blobHash)
         assertNotNull(blobMeta)
-        assertEquals(2, blobMeta.refCount)
-        assertEquals(first.blobHash, second.blobHash)
+        assertEquals(1, blobMeta.refCount) // Only one reference, not incremented
         assertTrue(repository.blobFor(first.blobHash)?.exists() == true)
+    }
+    
+    @Test
+    fun `deduplication updates lastAccessed timestamp`() {
+        val bytes = "Subject: hello".toByteArray()
+        val first = repository.ingest(bytes, "first", null)
+        val firstAccessed = first.lastAccessed
+        
+        // Small delay to ensure timestamp difference
+        Thread.sleep(10)
+        
+        val second = repository.ingest(bytes, "second", null)
+        
+        // Second ingest should have updated lastAccessed
+        assertTrue(second.lastAccessed >= firstAccessed)
     }
 
     @Test
@@ -81,21 +103,24 @@ class HistoryRepositoryTest {
     }
 
     @Test
-    fun `delete preserves blob when other entries reference it`() {
-        val bytes = "Shared content".toByteArray()
-        val first = repository.ingest(bytes, "first", null)
-        val second = repository.ingest(bytes, "second", null)
+    fun `delete removes entry and blob when only reference`() {
+        val bytes = "Unique content".toByteArray()
+        val entry = repository.ingest(bytes, "entry", null)
         
-        val blobHash = first.blobHash
-        assertEquals(second.blobHash, blobHash)
+        val blobHash = entry.blobHash
         
-        // Delete first entry
-        repository.delete(first.id)
-        
-        // Blob should still exist for second entry
+        // Entry and blob exist
         assertEquals(1, repository.items.value.size)
         assertNotNull(repository.blobMeta(blobHash))
         assertTrue(repository.blobFor(blobHash)?.exists() == true)
+        
+        // Delete the entry
+        repository.delete(entry.id)
+        
+        // Both entry and blob should be gone
+        assertEquals(0, repository.items.value.size)
+        assertNull(repository.blobMeta(blobHash))
+        assertFalse(repository.blobFor(blobHash)?.exists() == true)
     }
 
     @Test
@@ -129,14 +154,15 @@ class HistoryRepositoryTest {
     }
 
     @Test
-    fun `getCacheStats counts deduplicated blobs only once`() {
+    fun `getCacheStats with full deduplication`() {
         val bytes = "Shared email content".toByteArray()
         repository.ingest(bytes, "first", null)
         repository.ingest(bytes, "second", null)  // Same content, should deduplicate
 
         val stats = repository.getCacheStats()
-        assertEquals(2, stats.entryCount)  // Two entries
-        assertEquals(bytes.size.toLong(), stats.totalSizeBytes)  // But only one blob size
+        // With proper deduplication, same content = one entry only
+        assertEquals(1, stats.entryCount)
+        assertEquals(bytes.size.toLong(), stats.totalSizeBytes)
     }
     
     // =========================================================================
@@ -223,6 +249,32 @@ class HistoryRepositoryTest {
     }
     
     @Test
+    fun `search finds emails by body preview - full text search`() {
+        val meta1 = EmailMetadata(
+            subject = "Unrelated Subject",
+            bodyPreview = "The quarterly budget meeting was successful"
+        )
+        val meta2 = EmailMetadata(
+            subject = "Another Subject",
+            bodyPreview = "Please review the attached document"
+        )
+        val meta3 = EmailMetadata(
+            subject = "Third Subject",
+            bodyPreview = "Budget planning for next quarter"
+        )
+        
+        repository.ingest("1".toByteArray(), "d1", null, meta1)
+        repository.ingest("2".toByteArray(), "d2", null, meta2)
+        repository.ingest("3".toByteArray(), "d3", null, meta3)
+        
+        // Search for "budget" should find emails 1 and 3 via body preview
+        val results = repository.search("budget")
+        
+        assertEquals(2, results.size)
+        assertTrue(results.any { it.bodyPreview.contains("budget", ignoreCase = true) })
+    }
+    
+    @Test
     fun `search with empty query returns all items`() {
         repository.ingest("1".toByteArray(), "d1", null)
         repository.ingest("2".toByteArray(), "d2", null)
@@ -230,6 +282,19 @@ class HistoryRepositoryTest {
         val results = repository.search("")
         
         assertEquals(2, results.size)
+    }
+    
+    @Test
+    fun `body preview is included in HistoryEntry`() {
+        val bodyText = "This is the body preview text that should be searchable"
+        val metadata = EmailMetadata(
+            subject = "Test",
+            bodyPreview = bodyText
+        )
+        
+        val entry = repository.ingest("test".toByteArray(), "display", null, metadata)
+        
+        assertEquals(bodyText, entry.bodyPreview)
     }
     
     @Test
