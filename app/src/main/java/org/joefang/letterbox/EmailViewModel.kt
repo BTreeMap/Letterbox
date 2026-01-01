@@ -70,12 +70,14 @@ class EmailViewModel(
             _uiState.update { it.copy(isLoading = true) }
             
             try {
-                // Parse the email to extract subject for display name
-                val parsed = parseEmailBytes(bytes)
+                // Parse the email to extract metadata for indexing
+                val parseResult = parseEmailBytesWithMetadata(bytes)
+                val parsed = parseResult.first
+                val metadata = parseResult.second
                 val displayName = parsed?.subject?.takeIf { it.isNotBlank() } ?: filename
                 
-                // Store in repository
-                val entry = repository.ingest(bytes, displayName, uri)
+                // Store in repository with metadata for search/filter
+                val entry = repository.ingest(bytes, displayName, uri, metadata)
                 
                 // If successfully parsed, show the email
                 if (parsed != null) {
@@ -268,6 +270,16 @@ class EmailViewModel(
      * - Memory-efficient opaque handle pattern
      */
     private suspend fun parseEmailBytes(bytes: ByteArray): EmailContent? {
+        return parseEmailBytesWithMetadata(bytes).first
+    }
+    
+    /**
+     * Parse email bytes and extract metadata for search/filter indexing.
+     * 
+     * Returns a pair of (EmailContent?, EmailMetadata).
+     * The metadata is always extracted even if parsing fails, with fallback values.
+     */
+    private suspend fun parseEmailBytesWithMetadata(bytes: ByteArray): Pair<EmailContent?, EmailMetadata> {
         return withContext(Dispatchers.Default) {
             try {
                 val handle: EmailHandle = parseEml(bytes)
@@ -282,7 +294,33 @@ class EmailViewModel(
                     )
                 }
                 
-                EmailContent(
+                // Extract structured sender info
+                val senderInfo = try {
+                    handle.senderInfo()
+                } catch (e: Exception) {
+                    null
+                }
+                
+                // Extract recipient info for search
+                val recipientInfo = try {
+                    handle.recipientInfo()
+                } catch (e: Exception) {
+                    emptyList()
+                }
+                
+                // Build metadata for search indexing
+                val metadata = EmailMetadata(
+                    subject = handle.subject(),
+                    senderEmail = senderInfo?.email ?: "",
+                    senderName = senderInfo?.name ?: "",
+                    recipientEmails = recipientInfo.mapNotNull { it.email.takeIf { e -> e.isNotBlank() } }.joinToString(", "),
+                    recipientNames = recipientInfo.mapNotNull { it.name.takeIf { n -> n.isNotBlank() } }.joinToString(", "),
+                    emailDate = try { handle.dateTimestamp() } catch (e: Exception) { 0L },
+                    hasAttachments = attachments.isNotEmpty(),
+                    bodyPreview = try { handle.bodyPreview() } catch (e: Exception) { "" }
+                )
+                
+                val content = EmailContent(
                     subject = handle.subject(),
                     from = handle.from(),
                     to = handle.to(),
@@ -295,16 +333,58 @@ class EmailViewModel(
                     getResource = { cid -> handle.getResource(cid) },
                     getAttachmentContent = { index -> handle.getAttachmentContent(index.toUInt()) }
                 )
+                
+                Pair(content, metadata)
             } catch (e: ParseException) {
                 // Rust parser returned a parse error - fall back to Kotlin parser
-                parseEmailBytesKotlin(bytes)
+                Pair(parseEmailBytesKotlin(bytes), extractMetadataFallback(bytes))
             } catch (e: UnsatisfiedLinkError) {
                 // Native library not available - fall back to Kotlin parser
-                parseEmailBytesKotlin(bytes)
+                Pair(parseEmailBytesKotlin(bytes), extractMetadataFallback(bytes))
             } catch (e: ExceptionInInitializerError) {
                 // Library initialization failed - fall back to Kotlin parser
-                parseEmailBytesKotlin(bytes)
+                Pair(parseEmailBytesKotlin(bytes), extractMetadataFallback(bytes))
             }
+        }
+    }
+    
+    /**
+     * Extract metadata using fallback Kotlin parser.
+     */
+    private fun extractMetadataFallback(bytes: ByteArray): EmailMetadata {
+        return try {
+            val text = String(bytes, Charsets.UTF_8)
+            val headers = parseHeaders(text)
+            val body = extractBody(text)
+            
+            val from = headers["from"] ?: ""
+            val (senderEmail, senderName) = parseAddressField(from)
+            
+            EmailMetadata(
+                subject = headers["subject"] ?: "Untitled",
+                senderEmail = senderEmail,
+                senderName = senderName,
+                recipientEmails = headers["to"] ?: "",
+                recipientNames = "",
+                emailDate = 0, // Fallback parser doesn't parse dates
+                hasAttachments = false, // Fallback parser doesn't detect attachments
+                bodyPreview = body.take(500)
+            )
+        } catch (e: Exception) {
+            EmailMetadata()
+        }
+    }
+    
+    /**
+     * Parse an address field to extract email and name.
+     * Handles formats like "John Doe <john@example.com>" and "john@example.com"
+     */
+    private fun parseAddressField(address: String): Pair<String, String> {
+        val angleMatch = Regex("""(.+?)\s*<(.+?)>""").find(address.trim())
+        return if (angleMatch != null) {
+            Pair(angleMatch.groupValues[2].trim(), angleMatch.groupValues[1].trim())
+        } else {
+            Pair(address.trim(), "")
         }
     }
 

@@ -7,11 +7,29 @@ import androidx.room.RoomDatabase
 
 /**
  * Room database for the Letterbox app.
- * Contains tables for blobs (CAS) and history items.
+ * 
+ * ## Tables
+ * 
+ * - **blobs**: Content-Addressable Storage (CAS) for email file data
+ * - **history_items**: Email history entries with metadata for search/filter/sort
+ * - **email_fts**: FTS4 virtual table for full-text search (auto-synced with history_items)
+ * 
+ * ## Version History
+ * 
+ * - **Version 1**: Initial schema with blobs and history_items
+ * - **Version 2**: Added email metadata fields (subject, sender, recipient, date, etc.)
+ *                  and FTS4 table for full-text search. This is a breaking change -
+ *                  database is dropped and recreated since the app is pre-beta.
+ * 
+ * ## Migration Strategy
+ * 
+ * Since the app is pre-beta, we use `fallbackToDestructiveMigration()` instead of
+ * writing migration scripts. This means existing cached emails will be lost on update,
+ * which is acceptable for early development.
  */
 @Database(
-    entities = [BlobEntity::class, HistoryItemEntity::class],
-    version = 1,
+    entities = [BlobEntity::class, HistoryItemEntity::class, EmailFtsEntity::class],
+    version = 2,
     exportSchema = false
 )
 abstract class LetterboxDatabase : RoomDatabase() {
@@ -28,10 +46,20 @@ abstract class LetterboxDatabase : RoomDatabase() {
                     context.applicationContext,
                     LetterboxDatabase::class.java,
                     "letterbox.db"
-                ).build()
+                )
+                    // Pre-beta: destructive migration is acceptable
+                    .fallbackToDestructiveMigration()
+                    .build()
                 INSTANCE = instance
                 instance
             }
+        }
+        
+        /**
+         * Clear the singleton instance. Used for testing.
+         */
+        fun clearInstance() {
+            INSTANCE = null
         }
     }
 }
