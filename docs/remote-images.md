@@ -62,6 +62,20 @@ Proxied URL:  https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fexampl
 - SAF (Storage Access Framework) permissions are persisted when opening files
 - Only specific MIME types are accepted by the file picker
 
+### Error Handling
+
+When the native Rust library is unavailable or encounters an error:
+- The original HTML is displayed without modification
+- The app does not crash - errors are caught and handled gracefully
+- Inline (cid:) images continue to work normally
+
+**Important**: The proxy rewriting is only performed when both conditions are met:
+1. User has clicked "Show" to load images (`sessionLoadImages = true`)
+2. The proxy feature is enabled (`useProxy = true`)
+
+When the proxy is disabled, images load directly without URL rewriting to avoid
+potential crashes or unexpected behavior from empty proxy URL strings.
+
 ## Implementation
 
 The feature is implemented in several layers:
