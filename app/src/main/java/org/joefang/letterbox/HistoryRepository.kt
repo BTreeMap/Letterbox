@@ -45,7 +45,9 @@ data class HistoryEntry(
     val senderEmail: String = "",
     val senderName: String = "",
     val emailDate: Long = 0,
-    val hasAttachments: Boolean = false
+    val hasAttachments: Boolean = false,
+    /** First 500 characters of the email body for full-text search. */
+    val bodyPreview: String = ""
 ) {
     /**
      * Get the display sender - name if available, otherwise email.
@@ -142,10 +144,18 @@ class HistoryRepository(
      * 
      * Emails are cached indefinitely until user explicitly clears them.
      * 
+     * ## Deduplication
+     * 
+     * If an email with the same SHA-256 checksum already exists in history,
+     * the existing entry is updated (lastAccessed timestamp) rather than
+     * creating a duplicate. This ensures each unique EML file appears only
+     * once in the history.
+     * 
      * @param bytes Raw email file content
      * @param displayName Display name for the email (usually filename)
      * @param originalUri Source URI for provenance tracking
      * @param metadata Email metadata extracted from parsing for search/filter
+     * @return The existing or newly created history entry
      */
     suspend fun ingest(
         bytes: ByteArray, 
@@ -155,21 +165,25 @@ class HistoryRepository(
     ): HistoryEntry {
         return withContext(Dispatchers.IO) {
             val hash = sha256(bytes)
-            val blobFile = File(casDir, hash)
+            val now = System.currentTimeMillis()
             
-            // Check if blob already exists
+            // Check if history entry already exists for this blob (deduplication)
+            val existingItem = historyItemDao.getFirstByBlobHash(hash)
+            if (existingItem != null) {
+                // Email already in history - update last accessed timestamp and return
+                historyItemDao.updateLastAccessed(existingItem.id, now)
+                return@withContext existingItem.copy(lastAccessed = now).toHistoryEntry()
+            }
+            
+            // New content - check if blob exists and create if needed
+            val blobFile = File(casDir, hash)
             val existingBlob = blobDao.getByHash(hash)
             if (existingBlob == null) {
-                // New content - save to file system and database
                 blobFile.writeBytes(bytes)
                 blobDao.insert(BlobEntity(hash, bytes.size.toLong(), 1))
-            } else {
-                // Content exists - increment ref count
-                blobDao.incrementRefCount(hash)
             }
 
-            // Create history entry with metadata
-            val now = System.currentTimeMillis()
+            // Create new history entry with metadata
             val effectiveDisplayName = displayName.ifBlank { 
                 metadata.subject.ifBlank { "Untitled" } 
             }
@@ -302,7 +316,8 @@ class HistoryRepository(
         senderEmail = senderEmail,
         senderName = senderName,
         emailDate = emailDate,
-        hasAttachments = hasAttachments
+        hasAttachments = hasAttachments,
+        bodyPreview = bodyPreview
     )
     
     // =========================================================================
@@ -497,6 +512,16 @@ class InMemoryHistoryRepository(
      */
     private val bodyPreviews = mutableMapOf<Long, String>()
 
+    /**
+     * Ingest an email file into the repository.
+     * 
+     * ## Deduplication
+     * 
+     * If an email with the same SHA-256 checksum already exists in history,
+     * the existing entry is updated (lastAccessed timestamp) rather than
+     * creating a duplicate. This ensures each unique EML file appears only
+     * once in the history.
+     */
     @Synchronized
     fun ingest(
         bytes: ByteArray, 
@@ -506,12 +531,24 @@ class InMemoryHistoryRepository(
     ): HistoryEntry {
         val hash = sha256(bytes)
         val blobFile = File(casDir, hash)
+        val now = System.currentTimeMillis()
+        
+        // Check if blob already exists
         val existingMeta = blobs[hash]
         if (existingMeta == null) {
             blobFile.writeBytes(bytes)
             blobs[hash] = BlobMeta(hash, bytes.size.toLong(), 1)
-        } else {
-            blobs[hash] = existingMeta.copy(refCount = existingMeta.refCount + 1)
+        }
+        
+        // Check if history entry already exists for this blob (deduplication)
+        val existingEntry = _items.value.find { it.blobHash == hash }
+        if (existingEntry != null) {
+            // Email already in history - update last accessed timestamp and return
+            val updatedEntry = existingEntry.copy(lastAccessed = now)
+            _items.value = _items.value.map { 
+                if (it.id == existingEntry.id) updatedEntry else it 
+            }.sortedByDescending { it.lastAccessed }
+            return updatedEntry
         }
 
         val effectiveDisplayName = displayName.ifBlank { 
@@ -519,21 +556,23 @@ class InMemoryHistoryRepository(
         }
         
         val id = nextId()
+        val bodyPreviewText = metadata.bodyPreview.take(500)
         val newEntry = HistoryEntry(
             id = id,
             blobHash = hash,
             displayName = effectiveDisplayName,
             originalUri = originalUri,
-            lastAccessed = System.currentTimeMillis(),
+            lastAccessed = now,
             subject = metadata.subject.ifBlank { effectiveDisplayName },
             senderEmail = metadata.senderEmail,
             senderName = metadata.senderName,
             emailDate = metadata.emailDate,
-            hasAttachments = metadata.hasAttachments
+            hasAttachments = metadata.hasAttachments,
+            bodyPreview = bodyPreviewText
         )
         
-        // Store body preview for search
-        bodyPreviews[id] = metadata.bodyPreview.take(500)
+        // Store body preview for backward compatibility (deprecated - use entry.bodyPreview)
+        bodyPreviews[id] = bodyPreviewText
         
         _items.value = (_items.value + newEntry).sortedByDescending { it.lastAccessed }
         return newEntry
@@ -615,7 +654,7 @@ class InMemoryHistoryRepository(
             entry.subject.lowercase().contains(lowerQuery) ||
             entry.senderName.lowercase().contains(lowerQuery) ||
             entry.senderEmail.lowercase().contains(lowerQuery) ||
-            bodyPreviews[entry.id]?.lowercase()?.contains(lowerQuery) == true
+            entry.bodyPreview.lowercase().contains(lowerQuery)
         }
     }
     

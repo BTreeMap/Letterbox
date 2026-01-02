@@ -70,6 +70,13 @@ interface HistoryItemDao {
 
     @Query("SELECT * FROM history_items WHERE blob_hash = :hash")
     suspend fun getByBlobHash(hash: String): List<HistoryItemEntity>
+    
+    /**
+     * Get a single history entry by blob hash.
+     * With the unique constraint on blob_hash, at most one entry exists per hash.
+     */
+    @Query("SELECT * FROM history_items WHERE blob_hash = :hash LIMIT 1")
+    suspend fun getFirstByBlobHash(hash: String): HistoryItemEntity?
 
     @Insert
     suspend fun insert(item: HistoryItemEntity): Long

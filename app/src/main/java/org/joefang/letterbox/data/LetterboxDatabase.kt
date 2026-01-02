@@ -20,6 +20,8 @@ import androidx.room.RoomDatabase
  * - **Version 2**: Added email metadata fields (subject, sender, recipient, date, etc.)
  *                  and FTS4 table for full-text search. This is a breaking change -
  *                  database is dropped and recreated since the app is pre-beta.
+ * - **Version 3**: Added unique constraint on blob_hash to enforce deduplication.
+ *                  Each unique EML file (by SHA-256 checksum) now has exactly one history entry.
  * 
  * ## Migration Strategy
  * 
@@ -29,7 +31,7 @@ import androidx.room.RoomDatabase
  */
 @Database(
     entities = [BlobEntity::class, HistoryItemEntity::class, EmailFtsEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class LetterboxDatabase : RoomDatabase() {

@@ -206,14 +206,17 @@ fun EmailDetailScreen(
             }
 
             // WebView for HTML content
-            val processedHtml = if (sessionLoadImages) {
+            // When sessionLoadImages is true, we load remote images
+            // When useProxy is true, images are proxied through DuckDuckGo for privacy
+            // When useProxy is false, images load directly (no rewriting needed)
+            val processedHtml = if (sessionLoadImages && useProxy) {
                 // Use Rust FFI to rewrite image URLs with DuckDuckGo proxy
                 // Note: Must catch both Exception and Error (UnsatisfiedLinkError)
                 // to gracefully handle cases where native library is unavailable
                 try {
                     org.joefang.letterbox.ffi.rewriteImageUrls(
                         email.bodyHtml ?: "",
-                        if (useProxy) "https://external-content.duckduckgo.com/iu/?u=" else ""
+                        "https://external-content.duckduckgo.com/iu/?u="
                     )
                 } catch (e: Exception) {
                     email.bodyHtml ?: "<p>No content available</p>"
@@ -225,6 +228,7 @@ fun EmailDetailScreen(
                     email.bodyHtml ?: "<p>No content available</p>"
                 }
             } else {
+                // Either not loading images, or loading directly without proxy
                 email.bodyHtml ?: "<p>No content available</p>"
             }
             

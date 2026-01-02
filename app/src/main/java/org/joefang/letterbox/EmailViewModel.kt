@@ -150,18 +150,28 @@ class EmailViewModel(
     /**
      * Apply filters and sorting to the history list.
      * Uses in-memory filtering for immediate responsiveness.
+     * 
+     * ## Full-Text Search
+     * 
+     * The search includes the following fields for a true full-text search:
+     * - subject: Email subject line
+     * - senderName: Sender's display name
+     * - senderEmail: Sender's email address
+     * - displayName: File display name (fallback)
+     * - bodyPreview: First 500 characters of email body content
      */
     private fun applyFiltersAndSort(items: List<HistoryEntry>, state: EmailUiState): List<HistoryEntry> {
         var result = items
         
-        // Apply search filter
+        // Apply search filter - true full-text search across all indexed fields
         if (state.searchQuery.isNotBlank()) {
             val query = state.searchQuery.lowercase()
             result = result.filter { entry ->
                 entry.subject.lowercase().contains(query) ||
                 entry.senderName.lowercase().contains(query) ||
                 entry.senderEmail.lowercase().contains(query) ||
-                entry.displayName.lowercase().contains(query)
+                entry.displayName.lowercase().contains(query) ||
+                entry.bodyPreview.lowercase().contains(query)
             }
         }
         
