@@ -415,8 +415,23 @@ async fn fetch_image_internal(
         }
     }
 
-    // For now, use a simple HTTP client until the full WireGuard tunnel is implemented
-    // This is a placeholder that will be replaced with the smoltcp-based implementation
+    // Current Implementation: Direct HTTP fetch using reqwest
+    //
+    // NOTE: The full WireGuard tunnel integration is implemented in the tunnel module
+    // but is not yet wired up to this fetch path. The current implementation uses
+    // reqwest directly which still provides privacy benefits through:
+    // - Cookie stripping
+    // - Referrer blocking
+    // - Generic user agent
+    //
+    // To enable the full WARP tunnel, the following work is needed:
+    // 1. Initialize WarpTunnel on first fetch
+    // 2. Route TCP connections through smoltcp
+    // 3. Add TLS layer for HTTPS via rustls
+    // 4. Implement DNS resolution through the tunnel
+    //
+    // The current approach works correctly and can be upgraded to use the tunnel
+    // without changing the public API.
     let response = http::fetch_image_simple(url).await?;
 
     // Cache the response

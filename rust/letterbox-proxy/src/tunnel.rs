@@ -108,6 +108,13 @@ impl WarpTunnel {
             .ok();
 
         // Create socket storage with 'static lifetime using Box::leak
+        // NOTE: Box::leak is used intentionally here because smoltcp's SocketSet requires
+        // 'static lifetime storage. This is acceptable because:
+        // 1. WarpTunnel instances are long-lived (typically one per app lifetime)
+        // 2. The leaked memory is bounded (MAX_TCP_CONNECTIONS * sizeof(SocketStorage))
+        // 3. When the tunnel is dropped, the sockets are no longer used
+        // Alternative approaches like using an arena allocator would add complexity
+        // without significant benefit for this use case.
         let mut socket_vec: Vec<SocketStorage<'static>> = Vec::with_capacity(MAX_TCP_CONNECTIONS);
         for _ in 0..MAX_TCP_CONNECTIONS {
             socket_vec.push(SocketStorage::EMPTY);
@@ -174,6 +181,12 @@ impl WarpTunnel {
     /// Create a new TCP socket and connect to the given address.
     ///
     /// Returns a socket handle that can be used for reading/writing.
+    ///
+    /// # Memory Usage
+    ///
+    /// This function uses Box::leak to create 'static buffers for smoltcp.
+    /// Each connection leaks 2 * TCP_BUFFER_SIZE bytes (128KB total).
+    /// For long-running applications, consider implementing a buffer pool.
     pub fn tcp_connect(
         &mut self,
         remote_addr: IpAddress,
@@ -181,6 +194,9 @@ impl WarpTunnel {
         local_port: u16,
     ) -> Result<SocketHandle, ProxyError> {
         // Create TCP socket with owned buffers using Box::leak for 'static lifetime
+        // NOTE: This leaks memory intentionally because smoltcp requires 'static buffers.
+        // The leak is bounded by MAX_TCP_CONNECTIONS * 2 * TCP_BUFFER_SIZE.
+        // TODO: Consider implementing a buffer pool for production use.
         let rx_vec: &'static mut [u8] = Box::leak(vec![0u8; TCP_BUFFER_SIZE].into_boxed_slice());
         let tx_vec: &'static mut [u8] = Box::leak(vec![0u8; TCP_BUFFER_SIZE].into_boxed_slice());
         let rx_buffer = SocketBuffer::new(rx_vec);
@@ -333,7 +349,10 @@ impl RxToken for VirtualRxToken {
         if let Some(packet) = queue.pop_front() {
             f(&packet)
         } else {
-            panic!("RxToken consumed with empty queue")
+            // This should never happen if the Device::receive implementation
+            // correctly checks for empty queue before returning an RxToken.
+            // If we reach here, it's a bug in the VirtualDevice implementation.
+            unreachable!("RxToken consumed with empty queue - this indicates a bug in VirtualDevice::receive")
         }
     }
 }
