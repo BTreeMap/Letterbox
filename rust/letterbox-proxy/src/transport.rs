@@ -280,7 +280,7 @@ mod tests {
     fn create_test_config() -> WarpConfig {
         // Generate a real keypair for testing
         let (private_key, _public_key) = WarpProvisioner::generate_keypair();
-        let (peer_private, peer_public) = WarpProvisioner::generate_keypair();
+        let (_peer_private, peer_public) = WarpProvisioner::generate_keypair();
 
         WarpConfig {
             account: WarpAccountData {

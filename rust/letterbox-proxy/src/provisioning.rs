@@ -109,6 +109,7 @@ struct EndpointData {
 
 /// Account details in config response.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct AccountDetails {
     #[serde(default)]
     account_type: String,

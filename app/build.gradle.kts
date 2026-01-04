@@ -324,8 +324,8 @@ val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
 val cargoHostBuild = tasks.register<Exec>("cargoHostBuild") {
     group = "build"
     description = "Build Rust shared library for host OS (for FFI unit tests)"
-    workingDir = rootProject.projectDir.resolve("rust/letterbox-core")
-    commandLine("cargo", "build", "--release", "--lib")
+    workingDir = rootProject.projectDir.resolve("rust")
+    commandLine("cargo", "build", "--release", "--workspace", "--lib")
 }
 
 tasks.named("preBuild") {
@@ -336,10 +336,12 @@ tasks.named("preBuild") {
 tasks.withType<Test> {
     dependsOn(cargoHostBuild)
     
-    // Set the library path for JNA to find the host-compiled Rust library
-    // The file is built by cargoHostBuild task before tests run, so we always set the path
+    // Set the library path for JNA to find the host-compiled Rust libraries
+    // The files are built by cargoHostBuild task before tests run, so we always set the path
     val libFile = File(hostLibDir, "libletterbox_core.so")
+    val proxyLibFile = File(hostLibDir, "libletterbox_proxy.so")
     systemProperty("uniffi.component.letterbox_core.libraryOverride", libFile.absolutePath)
+    systemProperty("uniffi.component.letterbox_proxy.libraryOverride", proxyLibFile.absolutePath)
     systemProperty("jna.library.path", hostLibDir.absolutePath)
 }
 

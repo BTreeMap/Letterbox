@@ -93,6 +93,7 @@ fn get_proxy_state() -> &'static Arc<RwLock<Option<ProxyState>>> {
 }
 
 /// Internal proxy state.
+#[allow(dead_code)]
 struct ProxyState {
     config: ProxyConfig,
     tunnel: Option<tunnel::WarpTunnel>,
@@ -432,7 +433,6 @@ async fn fetch_image_internal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
     #[test]
     fn test_proxy_status_before_init() {

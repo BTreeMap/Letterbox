@@ -19,11 +19,6 @@ use crate::error::ProxyError;
 use crate::ImageResponse;
 use std::time::Duration;
 
-/// Default fetch limits.
-const DEFAULT_MAX_SIZE: u64 = 10 * 1024 * 1024; // 10MB
-const DEFAULT_MAX_REDIRECTS: usize = 5;
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// Fetch an image using a simple HTTP client (fallback mode).
 ///
 /// This function uses reqwest directly without the WireGuard tunnel.
