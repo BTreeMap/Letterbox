@@ -746,14 +746,27 @@ pub fn extract_remote_images(html: String) -> Vec<RemoteImage> {
 /// Rewrite HTML to proxy remote images through a configurable proxy URL.
 /// Uses proper HTML parsing and reconstruction instead of regex.
 ///
-/// @param html The original HTML content
-/// @param proxy_base_url The proxy base URL (e.g., "https://proxy.example.com/?u=")
-/// @return HTML with rewritten image URLs
+/// # Arguments
 ///
-/// Note: This function is retained for backwards compatibility but is deprecated.
-/// The new WARP proxy architecture fetches images directly through the WireGuard
-/// tunnel without URL rewriting.
+/// * `html` - The original HTML content
+/// * `proxy_base_url` - The proxy base URL (e.g., "https://proxy.example.com/?u=")
+///
+/// # Returns
+///
+/// HTML with rewritten image URLs
+///
+/// # Deprecated
+///
+/// This function is retained for backwards compatibility but is deprecated.
+/// The new WARP proxy architecture in `letterbox-proxy` crate fetches images
+/// directly through the WireGuard tunnel without URL rewriting.
+/// Consider using `letterbox_proxy::proxy_fetch_image` instead.
 #[uniffi::export]
+#[deprecated(
+    since = "0.2.0",
+    note = "Use letterbox-proxy crate for image fetching through WARP tunnel"
+)]
+#[allow(deprecated)]
 pub fn rewrite_image_urls(html: String, proxy_base_url: String) -> String {
     use scraper::{Html, Selector};
 

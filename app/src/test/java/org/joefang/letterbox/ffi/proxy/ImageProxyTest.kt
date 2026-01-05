@@ -26,10 +26,22 @@ class ImageProxyTest {
         private var libraryLoaded = false
         private var loadError: String? = null
 
+        /**
+         * Load the native library before running tests.
+         *
+         * The library path can be configured via:
+         * - System property: `uniffi.component.letterbox_proxy.libraryOverride`
+         * - Environment variable: `LETTERBOX_PROXY_LIB_PATH` (fallback)
+         *
+         * These are only needed for host-side testing where the library is compiled
+         * for the host OS (e.g., x86_64-unknown-linux-gnu) rather than Android.
+         * For standard Android instrumented tests, the library is loaded from jniLibs.
+         */
         @JvmStatic
         @BeforeClass
         fun loadNativeLibrary() {
             try {
+                // Check for library path override (used for host-side testing)
                 val libPath = System.getProperty("uniffi.component.letterbox_proxy.libraryOverride")
                     ?: System.getenv("LETTERBOX_PROXY_LIB_PATH")
 

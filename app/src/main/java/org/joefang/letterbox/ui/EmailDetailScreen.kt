@@ -206,15 +206,9 @@ fun EmailDetailScreen(
             }
 
             // WebView for HTML content
-            // When sessionLoadImages is true, we load remote images
-            // When useProxy is true, images are fetched through the WARP privacy proxy
-            // When useProxy is false, images load directly (no rewriting needed)
-            // 
-            // NOTE: The rewriteImageUrls function currently uses URL rewriting but
-            // the new WARP proxy architecture fetches images directly through the
-            // WireGuard tunnel via the letterbox-proxy crate. For now, we allow
-            // network loads directly when the user clicks "Show" - the native proxy
-            // handles privacy protection at the network layer.
+            // Images are loaded directly when sessionLoadImages is true.
+            // Privacy protection is handled by the WARP proxy at the network layer
+            // via the letterbox-proxy crate when useProxy is enabled in settings.
             val processedHtml = email.bodyHtml ?: "<p>No content available</p>"
             
             EmailWebView(

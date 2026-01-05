@@ -536,24 +536,38 @@ mod tests {
 
     #[tokio::test]
     async fn test_url_scheme_validation_http() {
-        // http scheme should be allowed
+        // http scheme should be allowed - will fail with network error but not InvalidUrl
         let result = fetch_image_internal("http://example.com/image.png", None).await;
-        // Will fail with network error but scheme validation should pass
-        assert!(
-            result.is_ok()
-                || !matches!(result.as_ref().unwrap_err(), ProxyError::InvalidUrl { .. })
-        );
+        // Either succeeds or fails with an error that is NOT InvalidUrl
+        match &result {
+            Ok(_) => {} // Valid scheme, request succeeded
+            Err(e) => {
+                // Should not be InvalidUrl - that would mean scheme was rejected
+                assert!(
+                    !matches!(e, ProxyError::InvalidUrl { .. }),
+                    "http:// scheme should not produce InvalidUrl, got: {:?}",
+                    e
+                );
+            }
+        }
     }
 
     #[tokio::test]
     async fn test_url_scheme_validation_https() {
-        // https scheme should be allowed
+        // https scheme should be allowed - will fail with network error but not InvalidUrl
         let result = fetch_image_internal("https://example.com/image.png", None).await;
-        // Will fail with network error but scheme validation should pass
-        assert!(
-            result.is_ok()
-                || !matches!(result.as_ref().unwrap_err(), ProxyError::InvalidUrl { .. })
-        );
+        // Either succeeds or fails with an error that is NOT InvalidUrl
+        match &result {
+            Ok(_) => {} // Valid scheme, request succeeded
+            Err(e) => {
+                // Should not be InvalidUrl - that would mean scheme was rejected
+                assert!(
+                    !matches!(e, ProxyError::InvalidUrl { .. }),
+                    "https:// scheme should not produce InvalidUrl, got: {:?}",
+                    e
+                );
+            }
+        }
     }
 
     #[tokio::test]
