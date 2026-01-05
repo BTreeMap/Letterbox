@@ -479,4 +479,127 @@ mod tests {
         assert_eq!(response.mime_type, cloned.mime_type);
         assert_eq!(response.data, cloned.data);
     }
+
+    #[test]
+    fn test_proxy_status_struct_fields() {
+        let status = ProxyStatus {
+            ready: true,
+            warp_enabled: true,
+            endpoint: Some("engage.cloudflareclient.com:2408".to_string()),
+            last_error: None,
+            cache_size: 5,
+        };
+
+        assert!(status.ready);
+        assert!(status.warp_enabled);
+        assert_eq!(
+            status.endpoint,
+            Some("engage.cloudflareclient.com:2408".to_string())
+        );
+        assert!(status.last_error.is_none());
+        assert_eq!(status.cache_size, 5);
+    }
+
+    #[test]
+    fn test_batch_image_result_success() {
+        let result = BatchImageResult {
+            url: "https://example.com/image.png".to_string(),
+            success: true,
+            response: Some(ImageResponse {
+                mime_type: "image/png".to_string(),
+                data: vec![1, 2, 3, 4],
+                from_cache: false,
+                final_url: "https://example.com/image.png".to_string(),
+            }),
+            error: None,
+        };
+
+        assert!(result.success);
+        assert!(result.response.is_some());
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn test_batch_image_result_failure() {
+        let result = BatchImageResult {
+            url: "https://example.com/missing.png".to_string(),
+            success: false,
+            response: None,
+            error: Some("HTTP 404 Not Found".to_string()),
+        };
+
+        assert!(!result.success);
+        assert!(result.response.is_none());
+        assert!(result.error.is_some());
+        assert!(result.error.as_ref().unwrap().contains("404"));
+    }
+
+    #[tokio::test]
+    async fn test_url_scheme_validation_http() {
+        // http scheme should be allowed
+        let result = fetch_image_internal("http://example.com/image.png", None).await;
+        // Will fail with network error but scheme validation should pass
+        assert!(
+            result.is_ok()
+                || !matches!(result.as_ref().unwrap_err(), ProxyError::InvalidUrl { .. })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_url_scheme_validation_https() {
+        // https scheme should be allowed
+        let result = fetch_image_internal("https://example.com/image.png", None).await;
+        // Will fail with network error but scheme validation should pass
+        assert!(
+            result.is_ok()
+                || !matches!(result.as_ref().unwrap_err(), ProxyError::InvalidUrl { .. })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_url_scheme_validation_file_rejected() {
+        let result = fetch_image_internal("file:///etc/passwd", None).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ProxyError::InvalidUrl { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_url_scheme_validation_javascript_rejected() {
+        let result = fetch_image_internal("javascript:alert(1)", None).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ProxyError::InvalidUrl { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_url_scheme_validation_data_rejected() {
+        let result = fetch_image_internal("data:image/png;base64,iVBORw0KGgo=", None).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ProxyError::InvalidUrl { .. }));
+    }
+
+    #[test]
+    fn test_image_response_from_cache_flag() {
+        let response = ImageResponse {
+            mime_type: "image/jpeg".to_string(),
+            data: vec![0xFF, 0xD8, 0xFF, 0xE0],
+            from_cache: true,
+            final_url: "https://example.com/cached.jpg".to_string(),
+        };
+
+        assert!(response.from_cache);
+    }
+
+    #[test]
+    fn test_image_response_debug_impl() {
+        let response = ImageResponse {
+            mime_type: "image/gif".to_string(),
+            data: vec![0x47, 0x49, 0x46, 0x38],
+            from_cache: false,
+            final_url: "https://example.com/anim.gif".to_string(),
+        };
+
+        let debug_str = format!("{:?}", response);
+        assert!(debug_str.contains("image/gif"));
+        assert!(debug_str.contains("example.com"));
+    }
 }

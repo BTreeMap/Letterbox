@@ -2,10 +2,9 @@
 
 ## Overview
 
-Letterbox provides comprehensive privacy protection for loading remote images in emails. The app now supports two proxy modes:
+Letterbox provides comprehensive privacy protection for loading remote images in emails. The app uses a privacy-preserving image proxy based on Cloudflare WARP:
 
-1. **Cloudflare WARP Proxy** (Recommended): Uses a WireGuard tunnel through Cloudflare's network
-2. **DuckDuckGo Proxy** (Legacy): Uses DuckDuckGo's image proxy endpoint
+- **Cloudflare WARP Proxy**: Uses a WireGuard tunnel through Cloudflare's network to hide your IP address
 
 ## Features
 
@@ -15,7 +14,7 @@ Letterbox provides comprehensive privacy protection for loading remote images in
 - Click "Show" to load images for the current email only
 
 ### Privacy Protection
-- When images are loaded, they're routed through the selected privacy proxy
+- When images are loaded, they're routed through the privacy proxy
 - This prevents the email sender from seeing your IP address
 - Tracking headers (Referer, User-Agent) are stripped
 - Cookies are never sent to image servers
@@ -36,9 +35,9 @@ Access Settings from the main screen menu:
 
 ## Technical Details
 
-### Cloudflare WARP Proxy (New Architecture)
+### Cloudflare WARP Proxy Architecture
 
-The new proxy implementation uses a full WireGuard tunnel through Cloudflare's WARP network:
+The proxy implementation uses a full WireGuard tunnel through Cloudflare's WARP network:
 
 ```
 ┌───────────────┐      ┌──────────────┐      ┌──────────────┐      ┌─────────────┐
@@ -58,22 +57,11 @@ The new proxy implementation uses a full WireGuard tunnel through Cloudflare's W
 - **rustls**: TLS 1.3 for HTTPS connections
 - **LRU cache**: In-memory caching of fetched images
 
-#### Benefits over DuckDuckGo Proxy
-- **Works with all image formats** including SVG (DuckDuckGo returns 404 for formats it can't decode)
+#### Key Benefits
+- **Works with all image formats** including SVG
 - **Consistent performance**: Direct control over the tunnel
 - **Better error handling**: Detailed error messages for debugging
 - **Parallel fetching**: Optimized for emails with many images
-
-### DuckDuckGo Image Proxy (Legacy)
-
-The legacy proxy uses DuckDuckGo's `external-content.duckduckgo.com/iu/` endpoint:
-
-```
-Original URL: https://example.com/image.jpg
-Proxied URL:  https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fexample.com%2Fimage.jpg
-```
-
-**Known Issues**: DuckDuckGo's proxy returns HTTP 404 for image formats it cannot decode (SVG, some WebP, etc.)
 
 ### Privacy Benefits
 1. **IP Masking**: Your IP address is not visible to the email sender
@@ -102,32 +90,31 @@ When the native Rust library is unavailable or encounters an error:
 - The app does not crash - errors are caught and handled gracefully
 - Inline (cid:) images continue to work normally
 
-**Important**: The proxy rewriting is only performed when both conditions are met:
-1. User has clicked "Show" to load images (`sessionLoadImages = true`)
-2. The proxy feature is enabled (`useProxy = true`)
-
-When the proxy is disabled, images load directly without URL rewriting to avoid
-potential crashes or unexpected behavior from empty proxy URL strings.
-
 ## Implementation
 
 The feature is implemented in several layers:
 
 1. **UserPreferencesRepository**: Persists settings using Jetpack DataStore
-2. **HtmlImageRewriter**: Rewrites HTML to proxy images through DuckDuckGo
+2. **letterbox-proxy**: Rust crate that handles image fetching through WARP tunnel
 3. **EmailViewModel**: Tracks session image loading state and detects remote images
 4. **EmailDetailScreen**: Displays privacy banner and controls image loading
 5. **WebView**: Configured to allow network loads only when appropriate
 
 ## Testing
 
-Run the unit tests:
+Run the Rust proxy tests:
 ```bash
-./gradlew :app:testProdDebugUnitTest --tests "org.joefang.letterbox.ui.HtmlImageRewriterTest"
+cargo test --manifest-path rust/letterbox-proxy/Cargo.toml
 ```
 
-All tests cover:
-- URL proxying for http/https images
-- Preservation of cid: inline images
-- URL encoding with special characters
-- Detection of remote images
+Run the Kotlin unit tests:
+```bash
+./gradlew :app:testProdDebugUnitTest
+```
+
+Test coverage includes:
+- URL validation and content type checking
+- WARP configuration and persistence
+- WireGuard tunnel creation
+- Cache behavior
+- Error handling scenarios

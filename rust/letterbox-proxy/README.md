@@ -4,11 +4,12 @@ Privacy-preserving image proxy for Letterbox using Cloudflare WARP over WireGuar
 
 ## Overview
 
-This crate provides a complete image proxy solution that fetches remote images through Cloudflare's WARP network, hiding the user's IP address from image servers. Unlike the previous DuckDuckGo proxy approach, this implementation:
+This crate provides a complete image proxy solution that fetches remote images through Cloudflare's WARP network, hiding the user's IP address from image servers. Key features:
 
-- Works with all image formats including SVG
-- Provides consistent performance
+- Works with all image formats including SVG, WebP, and more
+- Provides consistent performance with in-app control
 - Uses a per-user WARP identity for better privacy
+- No dependency on third-party image proxy services
 
 ## Architecture
 

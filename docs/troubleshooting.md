@@ -101,11 +101,11 @@ The `shouldInterceptRequest` method blocks HTTP/HTTPS requests by default for pr
 ### Solution
 This is expected behavior. Users must:
 1. Click the "Show Images" button in the remote images banner
-2. Images will then load through DuckDuckGo privacy proxy (if enabled)
+2. Images will then load through the privacy proxy (if enabled)
 
 The setting can be changed in Settings:
 - "Always load remote images" - Loads images automatically
-- "Use privacy proxy" - Routes images through DuckDuckGo
+- "Use privacy proxy" - Routes images through the WARP privacy proxy
 
 ## Test failures
 

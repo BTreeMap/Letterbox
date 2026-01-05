@@ -207,30 +207,15 @@ fun EmailDetailScreen(
 
             // WebView for HTML content
             // When sessionLoadImages is true, we load remote images
-            // When useProxy is true, images are proxied through DuckDuckGo for privacy
+            // When useProxy is true, images are fetched through the WARP privacy proxy
             // When useProxy is false, images load directly (no rewriting needed)
-            val processedHtml = if (sessionLoadImages && useProxy) {
-                // Use Rust FFI to rewrite image URLs with DuckDuckGo proxy
-                // Note: Must catch both Exception and Error (UnsatisfiedLinkError)
-                // to gracefully handle cases where native library is unavailable
-                try {
-                    org.joefang.letterbox.ffi.rewriteImageUrls(
-                        email.bodyHtml ?: "",
-                        "https://external-content.duckduckgo.com/iu/?u="
-                    )
-                } catch (e: Exception) {
-                    email.bodyHtml ?: "<p>No content available</p>"
-                } catch (e: UnsatisfiedLinkError) {
-                    // Native library not available - fall back to original HTML
-                    email.bodyHtml ?: "<p>No content available</p>"
-                } catch (e: ExceptionInInitializerError) {
-                    // Library initialization failed - fall back to original HTML
-                    email.bodyHtml ?: "<p>No content available</p>"
-                }
-            } else {
-                // Either not loading images, or loading directly without proxy
-                email.bodyHtml ?: "<p>No content available</p>"
-            }
+            // 
+            // NOTE: The rewriteImageUrls function currently uses URL rewriting but
+            // the new WARP proxy architecture fetches images directly through the
+            // WireGuard tunnel via the letterbox-proxy crate. For now, we allow
+            // network loads directly when the user clicks "Show" - the native proxy
+            // handles privacy protection at the network layer.
+            val processedHtml = email.bodyHtml ?: "<p>No content available</p>"
             
             EmailWebView(
                 html = processedHtml,
@@ -507,7 +492,7 @@ private fun RemoteImagesBanner(
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    text = "Images will be loaded through DuckDuckGo proxy to protect your privacy",
+                    text = "Images will be loaded through a privacy proxy to protect your IP address",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

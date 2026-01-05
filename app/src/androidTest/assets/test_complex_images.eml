@@ -1,0 +1,88 @@
+From: newsletter@company.example.com
+To: user@example.com
+Subject: Complex Email with Multiple Image Types
+Date: Tue, 05 Jan 2026 08:00:00 +0000
+Message-ID: <complex789@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="related-boundary-123"
+
+--related-boundary-123
+Content-Type: text/html; charset=UTF-8
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; }
+        .header { background: #f5f5f5; padding: 20px; }
+        .content { padding: 20px; }
+        .footer { font-size: 12px; color: #666; padding: 20px; }
+        img { max-width: 100%; height: auto; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <!-- Inline CID image (should always work) -->
+        <img src="cid:logo@company.example" alt="Company Logo" width="150">
+    </div>
+    
+    <div class="content">
+        <h1>Welcome to Our Newsletter</h1>
+        
+        <p>This email demonstrates various image loading scenarios:</p>
+        
+        <!-- Remote HTTPS image -->
+        <h2>Featured Image (HTTPS)</h2>
+        <img src="https://images.example.com/featured/2026/banner.jpg" alt="Featured Banner" width="600">
+        
+        <!-- Remote HTTP image (insecure) -->
+        <h2>Legacy HTTP Image</h2>
+        <img src="http://legacy.example.com/old-image.gif" alt="Old GIF" width="200">
+        
+        <!-- Image with query parameters -->
+        <h2>Dynamic Image</h2>
+        <img src="https://cdn.example.com/resize?url=https://original.example.com/photo.png&w=400&h=300&format=webp" alt="Resized Photo">
+        
+        <!-- Tracking pixel (1x1) -->
+        <img src="https://track.analytics.example.com/pixel.gif?campaign=newsletter&user=12345" width="1" height="1" alt="">
+        
+        <!-- SVG image (often problematic with URL rewriting proxies) -->
+        <h2>Vector Graphic</h2>
+        <img src="https://assets.example.com/icons/star.svg" alt="Star Icon" width="48">
+        
+        <!-- WebP image (modern format) -->
+        <h2>Modern Format</h2>
+        <img src="https://cdn.example.com/photos/hero.webp" alt="WebP Hero" width="500">
+        
+        <!-- Image with special characters in URL -->
+        <h2>Special URL Characters</h2>
+        <img src="https://api.example.com/images/get?name=photo%20with%20spaces&category=été&size=medium" alt="Special Characters">
+        
+        <!-- Another inline CID image -->
+        <p><img src="cid:signature@company.example" alt="Signature" width="120"></p>
+    </div>
+    
+    <div class="footer">
+        <p>© 2026 Company Inc. | <a href="https://example.com/unsubscribe">Unsubscribe</a></p>
+    </div>
+</body>
+</html>
+
+--related-boundary-123
+Content-Type: image/png
+Content-ID: <logo@company.example>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9QzwAEjDAGNzYA
+AQoABv5sOcsAAAAASUVORK5CYII=
+
+--related-boundary-123
+Content-Type: image/png
+Content-ID: <signature@company.example>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAKklEQVR42mNgYGD4z0AEYGJgYPgP
+xAwMDAz/iVEIAv+JVQgGYIUQmhAAFRgH/R/0faAAAAAASUVORK5CYII=
+
+--related-boundary-123--

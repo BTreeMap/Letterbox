@@ -11,6 +11,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.io.File
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -106,5 +107,77 @@ class UserPreferencesRepositoryTest {
         val repository2 = UserPreferencesRepository(context)
         assertTrue(repository2.alwaysLoadRemoteImages.first())
         assertFalse(repository2.enablePrivacyProxy.first())
+    }
+
+    // Tests for ProxyMode
+
+    @Test
+    fun `proxyMode defaults to WARP`() = runBlocking {
+        val repository = UserPreferencesRepository(context)
+        
+        val mode = repository.proxyMode.first()
+        
+        assertEquals(ProxyMode.WARP, mode)
+    }
+
+    @Test
+    fun `can set and get proxyMode WARP`() = runBlocking {
+        val repository = UserPreferencesRepository(context)
+        
+        repository.setProxyMode(ProxyMode.WARP)
+        val mode = repository.proxyMode.first()
+        
+        assertEquals(ProxyMode.WARP, mode)
+    }
+
+    @Test
+    fun `can set and get proxyMode DIRECT`() = runBlocking {
+        val repository = UserPreferencesRepository(context)
+        
+        repository.setProxyMode(ProxyMode.DIRECT)
+        val mode = repository.proxyMode.first()
+        
+        assertEquals(ProxyMode.DIRECT, mode)
+    }
+
+    @Test
+    fun `proxyMode persists across repository instances`() = runBlocking {
+        val repository1 = UserPreferencesRepository(context)
+        repository1.setProxyMode(ProxyMode.DIRECT)
+        
+        val repository2 = UserPreferencesRepository(context)
+        val mode = repository2.proxyMode.first()
+        
+        assertEquals(ProxyMode.DIRECT, mode)
+    }
+
+    @Test
+    fun `cloudflareTermsAccepted defaults to false`() = runBlocking {
+        val repository = UserPreferencesRepository(context)
+        
+        val accepted = repository.cloudflareTermsAccepted.first()
+        
+        assertFalse(accepted)
+    }
+
+    @Test
+    fun `can set and get cloudflareTermsAccepted`() = runBlocking {
+        val repository = UserPreferencesRepository(context)
+        
+        repository.setCloudflareTermsAccepted(true)
+        assertTrue(repository.cloudflareTermsAccepted.first())
+        
+        repository.setCloudflareTermsAccepted(false)
+        assertFalse(repository.cloudflareTermsAccepted.first())
+    }
+
+    @Test
+    fun `ProxyMode enum has expected values`() {
+        // Verify the enum has exactly the expected values
+        val values = ProxyMode.entries
+        
+        assertEquals(2, values.size)
+        assertTrue(values.contains(ProxyMode.WARP))
+        assertTrue(values.contains(ProxyMode.DIRECT))
     }
 }
