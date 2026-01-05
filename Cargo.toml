@@ -1,5 +1,6 @@
 [workspace]
 members = [
-    "rust/letterbox-core"
+    "rust/letterbox-core",
+    "rust/letterbox-proxy"
 ]
 resolver = "2"

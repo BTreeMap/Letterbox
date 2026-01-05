@@ -1,0 +1,76 @@
+[package]
+name = "letterbox-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "Privacy-preserving image proxy using Cloudflare WARP over WireGuard"
+readme = "README.md"
+
+[lib]
+name = "letterbox_proxy"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "uniffi-bindgen-proxy"
+path = "uniffi-bindgen.rs"
+
+[features]
+default = []
+# Enable mock mode for testing without real network
+mock = []
+
+[dependencies]
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Async runtime
+tokio = { version = "1.41", features = ["rt-multi-thread", "sync", "time", "net", "io-util", "macros", "fs"] }
+futures = "0.3"
+
+# HTTP client for WARP provisioning (runs outside tunnel)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
+
+# Cryptography for WireGuard key generation (use the version boringtun needs)
+x25519-dalek = "=2.0.0-rc.3"
+base64 = "0.22"
+rand = "0.8"
+
+# WireGuard tunnel (boringtun-based)
+boringtun = "0.6"
+
+# TCP/IP stack
+smoltcp = { version = "0.12", default-features = false, features = ["medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "socket-dns"] }
+
+# TLS for HTTPS connections
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+webpki-roots = "0.26"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# URL parsing
+url = "2.5"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# UniFFI for Kotlin bindings
+uniffi = { version = "0.30.0", features = ["cli"] }
+
+# Caching
+lru = "0.12"
+
+# Time handling
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+[build-dependencies]
+uniffi = { version = "0.30.0", features = ["build"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.13"
+tempfile = "3.14"
+once_cell = "1.19"
+wiremock = "0.6"

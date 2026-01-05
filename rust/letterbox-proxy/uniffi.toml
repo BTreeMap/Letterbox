@@ -1,0 +1,3 @@
+[bindings.kotlin]
+package_name = "org.joefang.letterbox.ffi.proxy"
+cdylib_name = "letterbox_proxy"
