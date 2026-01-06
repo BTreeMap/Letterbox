@@ -92,20 +92,20 @@ The app uses `loadDataWithBaseURL(null, html, "text/html", "utf-8", null)` which
 ## Remote images not loading
 
 ### Symptoms
-- Images in emails don't appear even after clicking "Show Images"
-- Image placeholder icons visible but images don't load
+- Images in emails do not appear after tapping "Show Images".
+- Image placeholder icons are visible but images do not load.
 
 ### Root Cause
 The `shouldInterceptRequest` method blocks HTTP/HTTPS requests by default for privacy.
 
 ### Solution
-This is expected behavior. Users must:
-1. Click the "Show Images" button in the remote images banner
-2. Images will then load through the privacy proxy (if enabled)
+This is expected behavior. To load images:
+1. Tap the "Show Images" button in the remote images banner.
+2. Images load through the privacy proxy (if enabled).
 
 The setting can be changed in Settings:
-- "Always load remote images" - Loads images automatically
-- "Use privacy proxy" - Routes images through the WARP privacy proxy
+- "Always load remote images": Loads images automatically.
+- "Use privacy proxy": Routes images through the WARP privacy proxy.
 
 ## Test failures
 

@@ -90,11 +90,18 @@ class ImageProxyTest {
         val status = proxyStatus()
 
         // Verify we can access all fields without exceptions
-        val _ = status.ready
-        val _ = status.warpEnabled
-        val _ = status.endpoint
-        val _ = status.lastError
-        val _ = status.cacheSize
+        // Using named variables to avoid Kotlin reserved '_' issue
+        val ready = status.ready
+        val warpEnabled = status.warpEnabled
+        val endpoint = status.endpoint
+        val lastError = status.lastError
+        val cacheSize = status.cacheSize
+        
+        // Verify types by using them
+        assertNotNull(ready.toString())
+        assertNotNull(warpEnabled.toString())
+        assertNotNull(cacheSize.toString())
+        // endpoint and lastError can be null
     }
 
     @Test

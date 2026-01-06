@@ -743,68 +743,6 @@ pub fn extract_remote_images(html: String) -> Vec<RemoteImage> {
     images
 }
 
-/// Rewrite HTML to proxy remote images through a configurable proxy URL.
-/// Uses proper HTML parsing and reconstruction instead of regex.
-///
-/// # Arguments
-///
-/// * `html` - The original HTML content
-/// * `proxy_base_url` - The proxy base URL (e.g., "https://proxy.example.com/?u=")
-///
-/// # Returns
-///
-/// HTML with rewritten image URLs
-///
-/// # Deprecated
-///
-/// This function is retained for backwards compatibility but is deprecated.
-/// The new WARP proxy architecture in `letterbox-proxy` crate fetches images
-/// directly through the WireGuard tunnel without URL rewriting.
-/// Consider using `letterbox_proxy::proxy_fetch_image` instead.
-#[uniffi::export]
-#[deprecated(
-    since = "0.2.0",
-    note = "Use letterbox-proxy crate for image fetching through WARP tunnel"
-)]
-#[allow(deprecated)]
-pub fn rewrite_image_urls(html: String, proxy_base_url: String) -> String {
-    use scraper::{Html, Selector};
-
-    let document = Html::parse_document(&html);
-    let img_selector = Selector::parse("img").unwrap();
-
-    let mut result = html.clone();
-    let mut replacements = Vec::new();
-
-    // Collect all img tags that need rewriting
-    for element in document.select(&img_selector) {
-        if let Some(src) = element.value().attr("src") {
-            // Only rewrite http:// and https:// URLs
-            if src.starts_with("http://") || src.starts_with("https://") {
-                // URL-encode the target URL
-                let encoded_src = urlencoding::encode(src);
-                let proxied_url = format!("{}{}", proxy_base_url, encoded_src);
-                replacements.push((src.to_string(), proxied_url));
-            }
-        }
-    }
-
-    // Apply replacements
-    for (original, proxied) in replacements {
-        // Replace src="original" with src="proxied"
-        result = result.replace(
-            &format!("src=\"{}\"", original),
-            &format!("src=\"{}\"", proxied),
-        );
-        result = result.replace(
-            &format!("src='{}'", original),
-            &format!("src='{}'", proxied),
-        );
-    }
-
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
