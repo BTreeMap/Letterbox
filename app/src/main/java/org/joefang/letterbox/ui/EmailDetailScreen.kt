@@ -558,15 +558,16 @@ private fun EmailWebView(
         factory = { ctx ->
             WebView(ctx).apply {
                 // Security settings - always block direct network access
-                // Network loads are handled via our proxy interceptor
+                // When using proxy, we intercept and handle network loads in shouldInterceptRequest
+                // When not using proxy but allowNetworkLoads is true, WebView handles directly
+                val shouldBlockDirectAccess = !allowNetworkLoads || useProxy
+                
                 settings.apply {
                     allowFileAccess = false
                     allowContentAccess = false
                     javaScriptEnabled = false // Disable JS for security
-                    // When using proxy, we handle network loads ourselves in shouldInterceptRequest
-                    // When not using proxy but allowNetworkLoads is true, let WebView handle it directly
-                    blockNetworkLoads = !allowNetworkLoads || useProxy
-                    blockNetworkImage = !allowNetworkLoads || useProxy
+                    blockNetworkLoads = shouldBlockDirectAccess
+                    blockNetworkImage = shouldBlockDirectAccess
                 }
 
                 // Custom WebViewClient to intercept URLs

@@ -44,12 +44,10 @@ class HtmlImageProcessingTest {
     }
 
     private fun requireLibrary() {
-        if (!libraryLoaded) {
-            org.junit.Assume.assumeTrue(
-                "Skipping test: $loadError",
-                libraryLoaded
-            )
-        }
+        org.junit.Assume.assumeTrue(
+            "Skipping test: $loadError",
+            libraryLoaded
+        )
     }
 
     @Test
