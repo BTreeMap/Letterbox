@@ -640,8 +640,6 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_letterbox_core_checksum_func_parse_eml_from_path(
     ): Short
-    external fun uniffi_letterbox_core_checksum_func_rewrite_image_urls(
-    ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_attachment_count(
     ): Short
     external fun uniffi_letterbox_core_checksum_method_emailhandle_body_html(
@@ -758,8 +756,6 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_letterbox_core_fn_func_parse_eml_from_path(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
-    external fun uniffi_letterbox_core_fn_func_rewrite_image_urls(`html`: RustBuffer.ByValue,`proxyBaseUrl`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     external fun ffi_letterbox_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_letterbox_core_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -886,9 +882,6 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_core_checksum_func_parse_eml_from_path() != 36307.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_letterbox_core_checksum_func_rewrite_image_urls() != 35199.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_attachment_count() != 2946.toShort()) {
@@ -2600,24 +2593,6 @@ public object FfiConverterSequenceTypeResourceMeta: FfiConverterRustBuffer<List<
     UniffiLib.uniffi_letterbox_core_fn_func_parse_eml_from_path(
     
         FfiConverterString.lower(`path`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Rewrite HTML to proxy remote images through DuckDuckGo.
-         * Uses proper HTML parsing and reconstruction instead of regex.
-         *
-         * @param html The original HTML content
-         * @param proxy_base_url The DuckDuckGo proxy base URL (e.g., "https://external-content.duckduckgo.com/iu/?u=")
-         * @return HTML with rewritten image URLs
-         */ fun `rewriteImageUrls`(`html`: kotlin.String, `proxyBaseUrl`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCall() { _status ->
-    UniffiLib.uniffi_letterbox_core_fn_func_rewrite_image_urls(
-    
-        FfiConverterString.lower(`html`),FfiConverterString.lower(`proxyBaseUrl`),_status)
 }
     )
     }

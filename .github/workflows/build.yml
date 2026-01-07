@@ -134,23 +134,13 @@ jobs:
       - name: Gradle permissions
         run: chmod +x gradlew
 
-      - name: Build host Rust libraries for FFI tests
-        run: |
-          cargo build --release --lib
-        working-directory: rust/letterbox-core
-
-      - name: Build host Rust proxy library for FFI tests
-        run: |
-          cargo build --release --lib
-        working-directory: rust/letterbox-proxy
-
       - name: Android lint
         run: ./gradlew lint --no-daemon
 
       - name: Android unit tests (including FFI integration tests)
+        # Gradle's test task depends on cargoHostBuild which builds both letterbox-core
+        # and letterbox-proxy libraries to target/release/ before running tests
         run: ./gradlew test --no-daemon
-        env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/rust/letterbox-core/target/release:${{ github.workspace }}/rust/letterbox-proxy/target/release
 
   build:
     name: Build APKs
