@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import android.util.Log
 import kotlinx.coroutines.runBlocking
 import org.joefang.letterbox.data.ImageFetchResult
 import org.joefang.letterbox.data.ImageProxyService
@@ -640,7 +641,7 @@ private fun EmailWebView(
                                         )
                                     }
                                     is ImageFetchResult.Error -> {
-                                        android.util.Log.w("EmailWebView", "Proxy fetch failed for $url: ${result.message}")
+                                        Log.w("EmailWebView", "Proxy fetch failed for $url: ${result.message}")
                                         WebResourceResponse(
                                             "text/plain",
                                             "utf-8",
@@ -652,7 +653,7 @@ private fun EmailWebView(
                                     }
                                 }
                             } catch (e: Exception) {
-                                android.util.Log.e("EmailWebView", "Proxy error for $url", e)
+                                Log.e("EmailWebView", "Proxy error for $url", e)
                                 WebResourceResponse(
                                     "text/plain",
                                     "utf-8",
