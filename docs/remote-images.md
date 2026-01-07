@@ -85,7 +85,7 @@ The proxy implementation uses a WireGuard tunnel through Cloudflare WARP:
 The WebView remains sandboxed with:
 - JavaScript disabled
 - File access disabled
-- Network loads enabled only when explicitly requested
+- Network loads intercepted and proxied through WARP
 
 Storage Access Framework (SAF) permissions are persisted when opening files. Only specific MIME types are accepted by the file picker.
 
@@ -95,14 +95,15 @@ When the native Rust library is unavailable or encounters an error:
 - The original HTML displays without modification.
 - The app does not crash; errors are caught and handled gracefully.
 - Inline (cid:) images continue to work normally.
+- If proxy fails, images display an error placeholder.
 
 ## Implementation Layers
 
 1. **UserPreferencesRepository**: Persists settings using Jetpack DataStore.
-2. **letterbox-proxy**: Rust crate that handles image fetching through WARP tunnel.
-3. **EmailViewModel**: Tracks session image loading state and detects remote images.
+2. **ImageProxyService**: Kotlin service that wraps the Rust FFI for image fetching.
+3. **letterbox-proxy**: Rust crate that handles image fetching through WARP tunnel.
 4. **EmailDetailScreen**: Displays privacy banner and controls image loading.
-5. **WebView**: Configured to allow network loads only when appropriate.
+5. **EmailWebView**: Intercepts HTTP/HTTPS requests and routes through the proxy.
 
 ## Testing
 

@@ -18,6 +18,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import kotlinx.coroutines.runBlocking
+import org.joefang.letterbox.data.ImageFetchResult
+import org.joefang.letterbox.data.ImageProxyService
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -206,15 +209,15 @@ fun EmailDetailScreen(
             }
 
             // WebView for HTML content
-            // Images are loaded directly when sessionLoadImages is true.
-            // Privacy protection is handled by the WARP proxy at the network layer
-            // via the letterbox-proxy crate when useProxy is enabled in settings.
+            // When sessionLoadImages is true and useProxy is true, images are loaded 
+            // through the WARP privacy proxy. Otherwise, images are blocked by default.
             val processedHtml = email.bodyHtml ?: "<p>No content available</p>"
             
             EmailWebView(
                 html = processedHtml,
                 getResource = email.getResource,
                 allowNetworkLoads = sessionLoadImages,
+                useProxy = useProxy,
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f)
@@ -539,28 +542,34 @@ private fun EmailHeader(
  * Secure WebView that only loads content we provide.
  * - Disables file access for security
  * - Intercepts cid: URLs to load inline images from email attachments
- * - Optionally allows network loads for remote images (when proxied)
+ * - Optionally loads remote images through the WARP privacy proxy
  */
 @Composable
 private fun EmailWebView(
     html: String,
     getResource: (String) -> ByteArray?,
     modifier: Modifier = Modifier,
-    allowNetworkLoads: Boolean = false
+    allowNetworkLoads: Boolean = false,
+    useProxy: Boolean = true
 ) {
+    val context = LocalContext.current
+    
     AndroidView(
-        factory = { context ->
-            WebView(context).apply {
-                // Security settings
+        factory = { ctx ->
+            WebView(ctx).apply {
+                // Security settings - always block direct network access
+                // Network loads are handled via our proxy interceptor
                 settings.apply {
                     allowFileAccess = false
                     allowContentAccess = false
                     javaScriptEnabled = false // Disable JS for security
-                    blockNetworkLoads = !allowNetworkLoads // Allow network loads when images should be shown
-                    blockNetworkImage = !allowNetworkLoads
+                    // When using proxy, we handle network loads ourselves in shouldInterceptRequest
+                    // When not using proxy but allowNetworkLoads is true, let WebView handle it directly
+                    blockNetworkLoads = !allowNetworkLoads || useProxy
+                    blockNetworkImage = !allowNetworkLoads || useProxy
                 }
 
-                // Custom WebViewClient to intercept cid: URLs
+                // Custom WebViewClient to intercept URLs
                 webViewClient = object : WebViewClient() {
                     override fun shouldInterceptRequest(
                         view: WebView?,
@@ -592,21 +601,63 @@ private fun EmailWebView(
                             }
                         }
 
-                        // Allow network loads when explicitly enabled (for remote images)
-                        if (allowNetworkLoads && (url.startsWith("http://") || url.startsWith("https://"))) {
-                            return null // Let WebView handle it normally
-                        }
-
-                        // Block all other external requests with a clear error
+                        // Handle HTTP/HTTPS requests
                         if (url.startsWith("http://") || url.startsWith("https://")) {
-                            return WebResourceResponse(
-                                "text/plain",
-                                "utf-8",
-                                403,
-                                "Forbidden",
-                                emptyMap(),
-                                ByteArrayInputStream("External resources are blocked for security".toByteArray())
-                            )
+                            // Only fetch images if allowed
+                            if (!allowNetworkLoads) {
+                                return WebResourceResponse(
+                                    "text/plain",
+                                    "utf-8",
+                                    403,
+                                    "Forbidden",
+                                    emptyMap(),
+                                    ByteArrayInputStream("External resources are blocked for security".toByteArray())
+                                )
+                            }
+
+                            // If not using proxy, let WebView handle directly
+                            if (!useProxy) {
+                                return null
+                            }
+
+                            // Fetch through privacy proxy
+                            return try {
+                                val proxyService = ImageProxyService.getInstance(context)
+                                val result = runBlocking {
+                                    proxyService.fetchImage(url)
+                                }
+                                
+                                when (result) {
+                                    is ImageFetchResult.Success -> {
+                                        WebResourceResponse(
+                                            result.mimeType,
+                                            null,
+                                            ByteArrayInputStream(result.data)
+                                        )
+                                    }
+                                    is ImageFetchResult.Error -> {
+                                        android.util.Log.w("EmailWebView", "Proxy fetch failed for $url: ${result.message}")
+                                        WebResourceResponse(
+                                            "text/plain",
+                                            "utf-8",
+                                            502,
+                                            "Bad Gateway",
+                                            emptyMap(),
+                                            ByteArrayInputStream("Failed to fetch image: ${result.message}".toByteArray())
+                                        )
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("EmailWebView", "Proxy error for $url", e)
+                                WebResourceResponse(
+                                    "text/plain",
+                                    "utf-8",
+                                    500,
+                                    "Internal Error",
+                                    emptyMap(),
+                                    ByteArrayInputStream("Proxy error: ${e.message}".toByteArray())
+                                )
+                            }
                         }
 
                         // For other schemes, return null to let WebView handle them
