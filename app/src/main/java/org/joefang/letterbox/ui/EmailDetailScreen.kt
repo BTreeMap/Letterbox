@@ -2,6 +2,7 @@ package org.joefang.letterbox.ui
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -18,10 +19,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import android.util.Log
-import kotlinx.coroutines.runBlocking
-import org.joefang.letterbox.data.ImageFetchResult
-import org.joefang.letterbox.data.ImageProxyService
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -57,6 +54,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.runBlocking
+import org.joefang.letterbox.data.ImageFetchResult
+import org.joefang.letterbox.data.ImageProxyService
 import java.io.ByteArrayInputStream
 import java.io.File
 
