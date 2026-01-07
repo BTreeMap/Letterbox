@@ -621,6 +621,9 @@ private fun EmailWebView(
                             }
 
                             // Fetch through privacy proxy
+                            // Note: shouldInterceptRequest runs on a background thread,
+                            // so runBlocking is safe here and won't cause ANRs.
+                            // ImageProxyService.getInstance() is a thread-safe singleton.
                             return try {
                                 val proxyService = ImageProxyService.getInstance(context)
                                 val result = runBlocking {
