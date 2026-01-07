@@ -95,6 +95,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             rust/letterbox-core/target/
+            rust/letterbox-proxy/target/
           key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-
@@ -113,19 +114,35 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
 
       - name: Rust format check
-        run: cargo fmt --all -- --check
+        run: |
+          cargo fmt --all -- --check
         working-directory: rust/letterbox-core
+
+      - name: Rust format check (proxy)
+        run: |
+          cargo fmt --all -- --check
+        working-directory: rust/letterbox-proxy
 
       - name: Rust tests
         run: cargo test
         working-directory: rust/letterbox-core
 
+      - name: Rust tests (proxy)
+        run: cargo test
+        working-directory: rust/letterbox-proxy
+
       - name: Gradle permissions
         run: chmod +x gradlew
 
-      - name: Build host Rust library for FFI tests
-        run: cargo build --release --lib
+      - name: Build host Rust libraries for FFI tests
+        run: |
+          cargo build --release --lib
         working-directory: rust/letterbox-core
+
+      - name: Build host Rust proxy library for FFI tests
+        run: |
+          cargo build --release --lib
+        working-directory: rust/letterbox-proxy
 
       - name: Android lint
         run: ./gradlew lint --no-daemon
@@ -133,7 +150,7 @@ jobs:
       - name: Android unit tests (including FFI integration tests)
         run: ./gradlew test --no-daemon
         env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/rust/letterbox-core/target/release
+          LD_LIBRARY_PATH: ${{ github.workspace }}/rust/letterbox-core/target/release:${{ github.workspace }}/rust/letterbox-proxy/target/release
 
   build:
     name: Build APKs
@@ -201,10 +218,15 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1  # v4.4.4
 
-      - name: Build Android native libraries
+      - name: Build Android native libraries (letterbox-core)
         run: |
           cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --release
         working-directory: rust/letterbox-core
+
+      - name: Build Android native libraries (letterbox-proxy)
+        run: |
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --release
+        working-directory: rust/letterbox-proxy
 
       - name: Verify native libraries were generated
         run: |
@@ -214,6 +236,9 @@ jobs:
             echo "ERROR: No .so files found in jniLibs!"
             exit 1
           fi
+          echo "Verifying both letterbox_core and letterbox_proxy libraries:"
+          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_core*.so" | head -1 || (echo "ERROR: letterbox_core not found!" && exit 1)
+          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_proxy*.so" | head -1 || (echo "ERROR: letterbox_proxy not found!" && exit 1)
 
       - name: Build test debug APK
         run: ./gradlew assembleStagingDebug --no-daemon

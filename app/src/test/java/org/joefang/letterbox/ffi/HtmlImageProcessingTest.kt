@@ -11,49 +11,23 @@ import kotlin.test.assertTrue
  * These tests verify the extractRemoteImages FFI function which extracts
  * remote image URLs from HTML content for privacy analysis.
  * 
- * Note: These tests require the native library to be loaded. If the library
- * is not available, tests will be skipped.
+ * Note: These tests require the native library (letterbox_core) to be built and
+ * available via LD_LIBRARY_PATH. The CI workflow builds the library before running tests.
  */
 class HtmlImageProcessingTest {
 
     companion object {
-        private var libraryLoaded = false
-        private var loadError: String? = null
-
         @JvmStatic
         @BeforeClass
         fun loadNativeLibrary() {
-            try {
-                val libPath = System.getProperty("uniffi.component.letterbox_core.libraryOverride")
-                    ?: System.getenv("LETTERBOX_CORE_LIB_PATH")
-
-                if (libPath != null) {
-                    System.setProperty("uniffi.component.letterbox_core.libraryOverride", libPath)
-                }
-
-                uniffiEnsureInitialized()
-                libraryLoaded = true
-            } catch (e: UnsatisfiedLinkError) {
-                loadError = "Native library not found: ${e.message}"
-            } catch (e: ExceptionInInitializerError) {
-                loadError = "Library initialization failed: ${e.cause?.message ?: e.message}"
-            } catch (e: Exception) {
-                loadError = "Failed to load native library: ${e.message}"
-            }
+            // The native library should be available via LD_LIBRARY_PATH in CI
+            // If this fails, the CI workflow needs to build the library first
+            uniffiEnsureInitialized()
         }
-    }
-
-    private fun requireLibrary() {
-        org.junit.Assume.assumeTrue(
-            "Skipping test: $loadError",
-            libraryLoaded
-        )
     }
 
     @Test
     fun `extractRemoteImages finds http images`() {
-        requireLibrary()
-
         val html = """<img src="http://example.com/image.jpg" alt="test">"""
         val images = extractRemoteImages(html)
         
@@ -63,8 +37,6 @@ class HtmlImageProcessingTest {
 
     @Test
     fun `extractRemoteImages finds https images`() {
-        requireLibrary()
-
         val html = """<img src="https://example.com/image.png" alt="test">"""
         val images = extractRemoteImages(html)
         
@@ -74,8 +46,6 @@ class HtmlImageProcessingTest {
 
     @Test
     fun `extractRemoteImages ignores cid URLs`() {
-        requireLibrary()
-
         val html = """<img src="cid:image123@example.com" alt="test">"""
         val images = extractRemoteImages(html)
         
@@ -84,8 +54,6 @@ class HtmlImageProcessingTest {
 
     @Test
     fun `extractRemoteImages handles multiple images`() {
-        requireLibrary()
-
         val html = """
             <img src="http://example.com/1.jpg">
             <img src="https://example.com/2.png">
@@ -99,8 +67,6 @@ class HtmlImageProcessingTest {
 
     @Test
     fun `extractRemoteImages detects tracking pixels`() {
-        requireLibrary()
-
         val html = """<img src="https://tracker.com/pixel.png" width="1" height="1">"""
         val images = extractRemoteImages(html)
         
@@ -110,8 +76,6 @@ class HtmlImageProcessingTest {
 
     @Test
     fun `extractRemoteImages returns empty list for no images`() {
-        requireLibrary()
-
         val html = """<p>Hello world</p>"""
         val images = extractRemoteImages(html)
         

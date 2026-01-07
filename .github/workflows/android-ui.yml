@@ -64,6 +64,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             rust/letterbox-core/target/
+            rust/letterbox-proxy/target/
           key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-
@@ -84,10 +85,15 @@ jobs:
       - name: Gradle permissions
         run: chmod +x gradlew
 
-      - name: Build Android native libraries for x86_64
+      - name: Build Android native libraries for x86_64 (letterbox-core)
         run: |
           cargo ndk -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --release
         working-directory: rust/letterbox-core
+
+      - name: Build Android native libraries for x86_64 (letterbox-proxy)
+        run: |
+          cargo ndk -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --release
+        working-directory: rust/letterbox-proxy
 
       - name: Verify native libraries were generated
         run: |
@@ -97,6 +103,9 @@ jobs:
             echo "ERROR: No .so files found in jniLibs!"
             exit 1
           fi
+          echo "Verifying both letterbox_core and letterbox_proxy libraries:"
+          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_core*.so" | head -1 || (echo "ERROR: letterbox_core not found!" && exit 1)
+          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_proxy*.so" | head -1 || (echo "ERROR: letterbox_proxy not found!" && exit 1)
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1  # v4.4.4
