@@ -81,7 +81,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `parse multipart email extracts both text and HTML`() {
 
-        
         val emlContent = """
             Subject: Multipart Email
             From: sender@example.com
@@ -120,7 +119,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `empty payload throws ParseException Empty`() {
 
-        
         assertFailsWith<ParseException.Empty> {
             parseEml(ByteArray(0))
         }
@@ -129,7 +127,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `missing resource returns null`() {
 
-        
         val emlContent = """
             Subject: Simple
             From: test@test.com
@@ -148,7 +145,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `email with inline attachment extracts resource`() {
 
-        
         // Create a simple multipart email with an inline image
         val emlContent = """
             Subject: Email with Image
@@ -186,7 +182,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `handle can be used multiple times`() {
 
-        
         val emlContent = """
             Subject: Reusable Handle
             From: test@test.com
@@ -208,7 +203,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `special characters in subject are preserved`() {
 
-        
         val emlContent = """
             Subject: Test with émojis 🎉 and spëcial çhars
             From: test@test.com
@@ -227,7 +221,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `date field is extracted`() {
 
-        
         val emlContent = """
             Subject: Dated Email
             From: test@test.com
@@ -248,7 +241,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `malformed email still parses without crashing`() {
 
-        
         // Malformed but mail-parser is lenient
         val emlContent = "This is not a valid email format at all"
         
@@ -266,7 +258,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `parse email from path works with valid file`() {
 
-        
         val emlContent = """
             Subject: Path Test
             From: sender@example.com
@@ -292,7 +283,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `parse email from path throws for missing file`() {
 
-        
         assertFailsWith<ParseException.FileNotFound> {
             parseEmlFromPath("/nonexistent/path/email.eml")
         }
@@ -301,7 +291,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `get resource metadata returns inline asset info`() {
 
-        
         val emlContent = """
             Subject: Email with Image
             From: sender@example.com
@@ -334,7 +323,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `get resource content type returns mime type`() {
 
-        
         val emlContent = """
             Subject: Email with Image
             From: sender@example.com
@@ -373,7 +361,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `write attachment to path creates file`() {
 
-        
         val emlContent = """
             Subject: With Attachment
             From: sender@example.com
@@ -417,7 +404,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `write attachment to path returns false for invalid index`() {
 
-        
         val emlContent = """
             Subject: Simple
             From: test@test.com
@@ -442,7 +428,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `write resource to path creates file`() {
 
-        
         val emlContent = """
             Subject: Email with Image
             From: sender@example.com
@@ -483,7 +468,6 @@ class RustFfiIntegrationTest {
     @Test
     fun `write resource to path returns false for missing cid`() {
 
-        
         val emlContent = """
             Subject: Simple
             From: test@test.com
