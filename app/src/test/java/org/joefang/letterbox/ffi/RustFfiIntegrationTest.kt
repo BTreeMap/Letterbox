@@ -18,52 +18,28 @@ import kotlin.test.assertFailsWith
  * - Data passing (String, ByteArray) works correctly across the FFI boundary
  * - Error handling propagates correctly from Rust to Kotlin
  * - The opaque handle pattern works correctly
+ *
+ * Note: These tests require the native library (letterbox_core) to be built and
+ * available via LD_LIBRARY_PATH. The CI workflow builds the library before running tests.
  */
 class RustFfiIntegrationTest {
 
     companion object {
-        private var libraryLoaded = false
-        private var loadError: String? = null
-
+        /**
+         * Load the native library before running tests.
+         *
+         * The library should be available via LD_LIBRARY_PATH in CI.
+         * If this fails, the CI workflow needs to build the library first.
+         */
         @JvmStatic
         @BeforeClass
         fun loadNativeLibrary() {
-            try {
-                // Set the system property to override the library name for testing
-                // This allows us to load the host-compiled library instead of the Android one
-                val libPath = System.getProperty("uniffi.component.letterbox_core.libraryOverride")
-                    ?: System.getenv("LETTERBOX_CORE_LIB_PATH")
-                
-                if (libPath != null) {
-                    System.setProperty("uniffi.component.letterbox_core.libraryOverride", libPath)
-                }
-                
-                // Initialize the library
-                uniffiEnsureInitialized()
-                libraryLoaded = true
-            } catch (e: UnsatisfiedLinkError) {
-                loadError = "Native library not found: ${e.message}"
-            } catch (e: ExceptionInInitializerError) {
-                loadError = "Library initialization failed: ${e.cause?.message ?: e.message}"
-            } catch (e: Exception) {
-                loadError = "Failed to load native library: ${e.message}"
-            }
-        }
-    }
-
-    private fun requireLibrary() {
-        if (!libraryLoaded) {
-            org.junit.Assume.assumeTrue(
-                "Skipping test: $loadError",
-                libraryLoaded
-            )
+            uniffiEnsureInitialized()
         }
     }
 
     @Test
     fun `parse simple email returns correct subject`() {
-        requireLibrary()
-        
         val emlContent = """
             Subject: Hello World
             From: sender@example.com
@@ -83,8 +59,6 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `parse email with HTML body returns HTML`() {
-        requireLibrary()
-        
         val emlContent = """
             Subject: HTML Email
             From: sender@example.com
@@ -106,8 +80,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `parse multipart email extracts both text and HTML`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: Multipart Email
             From: sender@example.com
@@ -145,8 +118,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `empty payload throws ParseException Empty`() {
-        requireLibrary()
-        
+
         assertFailsWith<ParseException.Empty> {
             parseEml(ByteArray(0))
         }
@@ -154,8 +126,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `missing resource returns null`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: Simple
             From: test@test.com
@@ -173,8 +144,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `email with inline attachment extracts resource`() {
-        requireLibrary()
-        
+
         // Create a simple multipart email with an inline image
         val emlContent = """
             Subject: Email with Image
@@ -211,8 +181,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `handle can be used multiple times`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: Reusable Handle
             From: test@test.com
@@ -233,8 +202,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `special characters in subject are preserved`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: Test with émojis 🎉 and spëcial çhars
             From: test@test.com
@@ -252,8 +220,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `date field is extracted`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: Dated Email
             From: test@test.com
@@ -273,8 +240,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `malformed email still parses without crashing`() {
-        requireLibrary()
-        
+
         // Malformed but mail-parser is lenient
         val emlContent = "This is not a valid email format at all"
         
@@ -291,8 +257,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `parse email from path works with valid file`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: Path Test
             From: sender@example.com
@@ -317,8 +282,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `parse email from path throws for missing file`() {
-        requireLibrary()
-        
+
         assertFailsWith<ParseException.FileNotFound> {
             parseEmlFromPath("/nonexistent/path/email.eml")
         }
@@ -326,8 +290,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `get resource metadata returns inline asset info`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: Email with Image
             From: sender@example.com
@@ -359,8 +322,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `get resource content type returns mime type`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: Email with Image
             From: sender@example.com
@@ -398,8 +360,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `write attachment to path creates file`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: With Attachment
             From: sender@example.com
@@ -442,8 +403,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `write attachment to path returns false for invalid index`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: Simple
             From: test@test.com
@@ -467,8 +427,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `write resource to path creates file`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: Email with Image
             From: sender@example.com
@@ -508,8 +467,7 @@ class RustFfiIntegrationTest {
 
     @Test
     fun `write resource to path returns false for missing cid`() {
-        requireLibrary()
-        
+
         val emlContent = """
             Subject: Simple
             From: test@test.com

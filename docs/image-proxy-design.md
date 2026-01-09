@@ -6,10 +6,11 @@ This document describes the design of the privacy-preserving image proxy for Let
 
 ## Problem Statement
 
-The previous DuckDuckGo image proxy implementation had several issues:
-- **Format limitations**: SVG and other image formats would return HTTP 404 errors when DuckDuckGo couldn't decode them
-- **Dependency on third-party service**: Reliance on DuckDuckGo's availability and behavior
+Traditional image proxy approaches have several issues:
+- **Format limitations**: Third-party proxies may not support all image formats (SVG, WebP, etc.)
+- **Dependency on third-party service**: Reliance on external service availability and behavior
 - **Limited control**: No control over caching, rate limiting, or error handling
+- **Privacy concerns**: Third-party proxies can still log requests
 
 ## Solution Architecture
 

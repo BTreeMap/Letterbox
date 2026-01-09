@@ -743,51 +743,6 @@ pub fn extract_remote_images(html: String) -> Vec<RemoteImage> {
     images
 }
 
-/// Rewrite HTML to proxy remote images through DuckDuckGo.
-/// Uses proper HTML parsing and reconstruction instead of regex.
-///
-/// @param html The original HTML content
-/// @param proxy_base_url The DuckDuckGo proxy base URL (e.g., "https://external-content.duckduckgo.com/iu/?u=")
-/// @return HTML with rewritten image URLs
-#[uniffi::export]
-pub fn rewrite_image_urls(html: String, proxy_base_url: String) -> String {
-    use scraper::{Html, Selector};
-
-    let document = Html::parse_document(&html);
-    let img_selector = Selector::parse("img").unwrap();
-
-    let mut result = html.clone();
-    let mut replacements = Vec::new();
-
-    // Collect all img tags that need rewriting
-    for element in document.select(&img_selector) {
-        if let Some(src) = element.value().attr("src") {
-            // Only rewrite http:// and https:// URLs
-            if src.starts_with("http://") || src.starts_with("https://") {
-                // URL-encode the target URL
-                let encoded_src = urlencoding::encode(src);
-                let proxied_url = format!("{}{}", proxy_base_url, encoded_src);
-                replacements.push((src.to_string(), proxied_url));
-            }
-        }
-    }
-
-    // Apply replacements
-    for (original, proxied) in replacements {
-        // Replace src="original" with src="proxied"
-        result = result.replace(
-            &format!("src=\"{}\"", original),
-            &format!("src=\"{}\"", proxied),
-        );
-        result = result.replace(
-            &format!("src='{}'", original),
-            &format!("src='{}'", proxied),
-        );
-    }
-
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -22,8 +22,6 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 enum class ProxyMode {
     /** Use Cloudflare WARP via WireGuard tunnel (recommended) */
     WARP,
-    /** Use DuckDuckGo's image proxy (legacy, limited format support) */
-    DUCKDUCKGO,
     /** Load images directly without proxy (exposes IP address) */
     DIRECT
 }
@@ -72,7 +70,6 @@ class UserPreferencesRepository(private val context: Context) {
     val proxyMode: Flow<ProxyMode> = context.dataStore.data
         .map { preferences ->
             when (preferences[KEY_PROXY_MODE]) {
-                "DUCKDUCKGO" -> ProxyMode.DUCKDUCKGO
                 "DIRECT" -> ProxyMode.DIRECT
                 else -> ProxyMode.WARP // Default to WARP
             }

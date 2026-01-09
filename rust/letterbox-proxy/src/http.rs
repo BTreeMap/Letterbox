@@ -312,4 +312,127 @@ mod tests {
         assert!(limits.is_content_type_allowed("image/png"));
         assert!(!limits.is_content_type_allowed("image/jpeg"));
     }
+
+    // Additional comprehensive tests for image type detection
+
+    #[test]
+    fn test_guess_mime_type_webp() {
+        // WebP header: "RIFF" + 4 bytes + "WEBP"
+        let webp_data = [
+            0x52, 0x49, 0x46, 0x46, // RIFF
+            0x00, 0x00, 0x00, 0x00, // file size (placeholder)
+            0x57, 0x45, 0x42, 0x50, // WEBP
+        ];
+        assert_eq!(guess_mime_type(&webp_data), Some("image/webp"));
+    }
+
+    #[test]
+    fn test_guess_mime_type_jpeg_variants() {
+        // JPEG with JFIF marker
+        let jpeg_jfif = [0xFF, 0xD8, 0xFF, 0xE0];
+        assert_eq!(guess_mime_type(&jpeg_jfif), Some("image/jpeg"));
+
+        // JPEG with EXIF marker
+        let jpeg_exif = [0xFF, 0xD8, 0xFF, 0xE1];
+        assert_eq!(guess_mime_type(&jpeg_exif), Some("image/jpeg"));
+
+        // JPEG with APP2 marker
+        let jpeg_app2 = [0xFF, 0xD8, 0xFF, 0xE2];
+        assert_eq!(guess_mime_type(&jpeg_app2), Some("image/jpeg"));
+    }
+
+    #[test]
+    fn test_guess_mime_type_gif87a() {
+        let gif87a = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]; // GIF87a
+        assert_eq!(guess_mime_type(&gif87a), Some("image/gif"));
+    }
+
+    #[test]
+    fn test_guess_mime_type_gif89a() {
+        let gif89a = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]; // GIF89a
+        assert_eq!(guess_mime_type(&gif89a), Some("image/gif"));
+    }
+
+    #[test]
+    fn test_validate_image_data_svg_doctype() {
+        let svg_data = b"<!DOCTYPE svg PUBLIC><svg>";
+        assert!(validate_image_data(svg_data, "image/svg+xml"));
+    }
+
+    #[test]
+    fn test_validate_image_data_jpeg() {
+        let jpeg_data = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        assert!(validate_image_data(&jpeg_data, "image/jpeg"));
+    }
+
+    #[test]
+    fn test_validate_image_data_gif() {
+        let gif_data = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
+        assert!(validate_image_data(&gif_data, "image/gif"));
+    }
+
+    #[test]
+    fn test_validate_image_data_mismatch() {
+        // PNG data should not validate as JPEG
+        let png_data = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        assert!(!validate_image_data(&png_data, "image/jpeg"));
+        assert!(!validate_image_data(&png_data, "image/gif"));
+    }
+
+    #[test]
+    fn test_fetch_limits_all_image_types_allowed() {
+        let limits = FetchLimits::default();
+
+        // All standard image types should be allowed by default
+        assert!(limits.is_content_type_allowed("image/jpeg"));
+        assert!(limits.is_content_type_allowed("image/png"));
+        assert!(limits.is_content_type_allowed("image/gif"));
+        assert!(limits.is_content_type_allowed("image/webp"));
+        assert!(limits.is_content_type_allowed("image/svg+xml"));
+        assert!(limits.is_content_type_allowed("image/bmp"));
+        assert!(limits.is_content_type_allowed("image/x-icon"));
+        assert!(limits.is_content_type_allowed("image/vnd.microsoft.icon"));
+    }
+
+    #[test]
+    fn test_fetch_limits_non_images_rejected() {
+        let limits = FetchLimits::default();
+
+        // Non-image types should be rejected
+        assert!(!limits.is_content_type_allowed("text/html"));
+        assert!(!limits.is_content_type_allowed("application/javascript"));
+        assert!(!limits.is_content_type_allowed("application/json"));
+        assert!(!limits.is_content_type_allowed("text/css"));
+        assert!(!limits.is_content_type_allowed("application/xml"));
+    }
+
+    #[test]
+    fn test_fetch_limits_content_type_with_charset() {
+        let limits = FetchLimits::default();
+
+        // Content types with charset parameters should still be matched
+        assert!(limits.is_content_type_allowed("image/svg+xml; charset=utf-8"));
+        assert!(limits.is_content_type_allowed("image/png; charset=binary"));
+    }
+
+    #[test]
+    fn test_fetch_limits_case_insensitive() {
+        let limits = FetchLimits::default();
+
+        // Case variations should be handled
+        assert!(limits.is_content_type_allowed("IMAGE/PNG"));
+        assert!(limits.is_content_type_allowed("Image/Jpeg"));
+        assert!(limits.is_content_type_allowed("image/SVG+XML"));
+    }
+
+    #[test]
+    fn test_fetch_limits_default_values() {
+        let limits = FetchLimits::default();
+
+        // Verify default limits are sensible
+        assert_eq!(limits.max_size, 10 * 1024 * 1024); // 10 MB
+        assert_eq!(limits.max_redirects, 5);
+        assert_eq!(limits.timeout_seconds, 30);
+        assert!(!limits.allowed_content_types.is_empty());
+    }
 }

@@ -743,7 +743,7 @@ private fun SettingsContent(
                     style = MaterialTheme.typography.titleSmall
                 )
                 Text(
-                    text = "Load images through DuckDuckGo to hide your IP address",
+                    text = "Load images through a privacy proxy to hide your IP address",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

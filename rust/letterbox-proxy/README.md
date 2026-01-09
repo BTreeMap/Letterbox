@@ -4,11 +4,13 @@ Privacy-preserving image proxy for Letterbox using Cloudflare WARP over WireGuar
 
 ## Overview
 
-This crate provides a complete image proxy solution that fetches remote images through Cloudflare's WARP network, hiding the user's IP address from image servers. Unlike the previous DuckDuckGo proxy approach, this implementation:
+This crate provides a complete image proxy solution that fetches remote images through Cloudflare's WARP network, hiding the user's IP address from image servers.
 
-- Works with all image formats including SVG
-- Provides consistent performance
-- Uses a per-user WARP identity for better privacy
+Key features:
+- Supports all image formats including SVG, WebP, and ICO.
+- Provides consistent performance with in-app control.
+- Uses a per-user WARP identity for privacy.
+- No dependency on third-party image proxy services.
 
 ## Architecture
 
@@ -44,35 +46,43 @@ This crate provides a complete image proxy solution that fetches remote images t
 
 Handles Cloudflare WARP account creation and management:
 
-- **Key Generation**: Creates X25519 keypairs for WireGuard
-- **Registration**: Registers new device with Cloudflare API
-- **Configuration**: Fetches tunnel configuration (endpoints, addresses)
-- **Persistence**: Stores credentials in app-private storage
+| Feature | Description |
+|---------|-------------|
+| Key Generation | Creates X25519 keypairs for WireGuard |
+| Registration | Registers new device with Cloudflare API |
+| Configuration | Fetches tunnel configuration (endpoints, addresses) |
+| Persistence | Stores credentials in app-private storage |
 
 ### WireGuard Transport (`transport.rs`)
 
 Implements the WireGuard tunnel using boringtun:
 
-- **Encryption**: All traffic is encrypted with WireGuard
-- **Handshake**: Handles key exchange with WARP endpoints
-- **Keepalive**: Maintains tunnel connectivity
+| Feature | Description |
+|---------|-------------|
+| Encryption | All traffic encrypted with WireGuard |
+| Handshake | Handles key exchange with WARP endpoints |
+| Keepalive | Maintains tunnel connectivity |
 
 ### TCP/IP Stack (`tunnel.rs`)
 
 Uses smoltcp for userspace networking:
 
-- **TCP Connections**: Full TCP stack without kernel involvement
-- **Virtual Device**: Bridges smoltcp with WireGuard
-- **Connection Management**: Handles multiple concurrent connections
+| Feature | Description |
+|---------|-------------|
+| TCP Connections | Full TCP stack without kernel involvement |
+| Virtual Device | Bridges smoltcp with WireGuard |
+| Connection Management | Handles multiple concurrent connections |
 
 ### HTTP Client (`http.rs`)
 
 Fetches images with privacy protections:
 
-- **Cookie Stripping**: Never sends or stores cookies
-- **Referrer Blocking**: No referrer headers
-- **Content Validation**: Checks MIME types and magic bytes
-- **Size Limits**: Prevents DoS via large responses
+| Feature | Description |
+|---------|-------------|
+| Cookie Stripping | Never sends or stores cookies |
+| Referrer Blocking | No referrer headers sent |
+| Content Validation | Checks MIME types and magic bytes |
+| Size Limits | Prevents DoS via large responses |
 
 ## FFI API
 
@@ -116,13 +126,15 @@ cargo test
 RUST_LOG=debug cargo test -- --nocapture
 ```
 
-## Privacy Considerations
+## Privacy
 
-1. **IP Masking**: User's IP is never visible to image servers
-2. **No Tracking**: Cookies and referrers are stripped
-3. **Encrypted Transit**: All traffic is WireGuard-encrypted
-4. **Per-User Identity**: Each user has their own WARP identity
-5. **No DNS Leaks**: DNS is resolved through the tunnel
+| Feature | Description |
+|---------|-------------|
+| IP Masking | User's IP is never visible to image servers |
+| No Tracking | Cookies and referrers are stripped |
+| Encrypted Transit | All traffic is WireGuard-encrypted |
+| Per-User Identity | Each user has their own WARP identity |
+| No DNS Leaks | DNS is resolved through the tunnel |
 
 ## Legal
 
@@ -131,8 +143,10 @@ https://www.cloudflare.com/application/terms/
 
 ## Dependencies
 
-- `boringtun`: WireGuard implementation
-- `smoltcp`: TCP/IP stack
-- `rustls`: TLS 1.3 implementation
-- `reqwest`: HTTP client (for provisioning)
-- `x25519-dalek`: Curve25519 key generation
+| Crate | Purpose |
+|-------|---------|
+| boringtun | WireGuard implementation |
+| smoltcp | TCP/IP stack |
+| rustls | TLS 1.3 implementation |
+| reqwest | HTTP client (for provisioning) |
+| x25519-dalek | Curve25519 key generation |
