@@ -122,7 +122,7 @@ class ImageProxyIntegrationTest {
     }
 
     @Test
-    fun emailWithRemoteImages_clickShowButton_hidessBanner() {
+    fun emailWithRemoteImages_clickShowButton_hidesBanner() {
         // Launch activity with email containing remote images
         val intent = Intent(context, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
