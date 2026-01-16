@@ -365,6 +365,8 @@ private fun LetterboxScaffold(
     // Collect image loading preferences
     val alwaysLoadRemoteImages by preferencesRepository.alwaysLoadRemoteImages.collectAsState(initial = false)
     val enablePrivacyProxy by preferencesRepository.enablePrivacyProxy.collectAsState(initial = true)
+    val cloudflareTermsAccepted by preferencesRepository.cloudflareTermsAccepted.collectAsState(initial = false)
+    var showCloudflareTermsDialog by remember { mutableStateOf(false) }
     
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -608,9 +610,15 @@ private fun LetterboxScaffold(
                     }
                 },
                 enablePrivacyProxy = enablePrivacyProxy,
-                onEnablePrivacyProxyChange = {
-                    scope.launch {
-                        preferencesRepository.setEnablePrivacyProxy(it)
+                cloudflareTermsAccepted = cloudflareTermsAccepted,
+                onEnablePrivacyProxyChange = { newValue ->
+                    if (newValue && !cloudflareTermsAccepted) {
+                        // Show ToS dialog when user tries to enable proxy without accepting ToS
+                        showCloudflareTermsDialog = true
+                    } else {
+                        scope.launch {
+                            preferencesRepository.setEnablePrivacyProxy(newValue)
+                        }
                     }
                 },
                 onClearCache = {
@@ -619,6 +627,22 @@ private fun LetterboxScaffold(
                 }
             )
         }
+    }
+    
+    // Cloudflare WARP Terms of Service dialog
+    if (showCloudflareTermsDialog) {
+        CloudflareTermsDialog(
+            onAccept = {
+                showCloudflareTermsDialog = false
+                scope.launch {
+                    preferencesRepository.setCloudflareTermsAccepted(true)
+                    preferencesRepository.setEnablePrivacyProxy(true)
+                }
+            },
+            onDecline = {
+                showCloudflareTermsDialog = false
+            }
+        )
     }
     
     // About dialog
@@ -675,12 +699,62 @@ private fun LetterboxScaffold(
     }
 }
 
+/**
+ * Dialog for Cloudflare WARP Terms of Service consent.
+ * 
+ * This dialog is shown when the user enables the privacy proxy for the first time.
+ * Images are fetched through Cloudflare WARP infrastructure, which requires users
+ * to accept Cloudflare's Terms of Service.
+ */
+@Composable
+private fun CloudflareTermsDialog(
+    onAccept: () -> Unit,
+    onDecline: () -> Unit
+) {
+    val context = LocalContext.current
+    
+    AlertDialog(
+        onDismissRequest = onDecline,
+        title = { Text("Cloudflare WARP Terms") },
+        text = { 
+            Column {
+                Text(
+                    "The privacy proxy uses Cloudflare WARP to hide your IP address when loading remote images.\n\n" +
+                    "By enabling this feature, you agree to Cloudflare's Terms of Service and Privacy Policy.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                TextButton(
+                    onClick = {
+                        // Open Cloudflare Terms of Service in browser
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.cloudflare.com/application/terms/"))
+                        context.startActivity(intent)
+                    }
+                ) {
+                    Text("View Cloudflare Terms of Service")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onAccept) {
+                Text("Accept & Enable")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDecline) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
 @Composable
 private fun SettingsContent(
     cacheStats: CacheStats,
     alwaysLoadRemoteImages: Boolean,
     onAlwaysLoadRemoteImagesChange: (Boolean) -> Unit,
     enablePrivacyProxy: Boolean,
+    cloudflareTermsAccepted: Boolean,
     onEnablePrivacyProxyChange: (Boolean) -> Unit,
     onClearCache: () -> Unit
 ) {
@@ -743,7 +817,13 @@ private fun SettingsContent(
                     style = MaterialTheme.typography.titleSmall
                 )
                 Text(
-                    text = "Load images through a privacy proxy to hide your IP address",
+                    text = if (enablePrivacyProxy && cloudflareTermsAccepted) {
+                        "Images loaded through Cloudflare WARP to hide your IP"
+                    } else if (enablePrivacyProxy) {
+                        "Cloudflare terms acceptance required"
+                    } else {
+                        "Load images through a privacy proxy to hide your IP address"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

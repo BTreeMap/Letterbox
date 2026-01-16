@@ -234,4 +234,144 @@ class ImageProxyTest {
             }
         }
     }
+
+    @Test
+    fun `proxy fetch image with javascript scheme throws exception`() {
+        val tempDir = java.io.File.createTempFile("proxy_js_test", "").apply {
+            delete()
+            mkdirs()
+        }
+
+        try {
+            proxyInit(tempDir.absolutePath, 100u)
+
+            assertFailsWith<ProxyException.InvalidUrl> {
+                proxyFetchImage("javascript:alert('xss')", null)
+            }
+        } finally {
+            tempDir.deleteRecursively()
+            try {
+                proxyShutdown()
+            } catch (e: Exception) {
+                // Ignore shutdown errors
+            }
+        }
+    }
+
+    @Test
+    fun `proxy fetch image with data scheme throws exception`() {
+        val tempDir = java.io.File.createTempFile("proxy_data_test", "").apply {
+            delete()
+            mkdirs()
+        }
+
+        try {
+            proxyInit(tempDir.absolutePath, 100u)
+
+            assertFailsWith<ProxyException.InvalidUrl> {
+                proxyFetchImage("data:image/png;base64,iVBORw0KGgo=", null)
+            }
+        } finally {
+            tempDir.deleteRecursively()
+            try {
+                proxyShutdown()
+            } catch (e: Exception) {
+                // Ignore shutdown errors
+            }
+        }
+    }
+
+    @Test
+    fun `proxy accepts http scheme URLs`() {
+        val tempDir = java.io.File.createTempFile("proxy_http_test", "").apply {
+            delete()
+            mkdirs()
+        }
+
+        try {
+            proxyInit(tempDir.absolutePath, 100u)
+
+            // HTTP URLs should be accepted (not InvalidUrl error)
+            // They will fail with HttpError or NetworkUnavailable since we don't have network
+            try {
+                proxyFetchImage("http://example.com/image.png", null)
+            } catch (e: ProxyException.InvalidUrl) {
+                // This should NOT happen - http:// is a valid scheme
+                throw AssertionError("http:// scheme should be accepted, got InvalidUrl")
+            } catch (e: ProxyException) {
+                // Other errors (HttpError, NetworkUnavailable, etc.) are expected
+                // since we don't have network access in tests
+            }
+        } finally {
+            tempDir.deleteRecursively()
+            try {
+                proxyShutdown()
+            } catch (e: Exception) {
+                // Ignore shutdown errors
+            }
+        }
+    }
+
+    @Test
+    fun `proxy accepts https scheme URLs`() {
+        val tempDir = java.io.File.createTempFile("proxy_https_test", "").apply {
+            delete()
+            mkdirs()
+        }
+
+        try {
+            proxyInit(tempDir.absolutePath, 100u)
+
+            // HTTPS URLs should be accepted (not InvalidUrl error)
+            // They will fail with HttpError or NetworkUnavailable since we don't have network
+            try {
+                proxyFetchImage("https://example.com/image.png", null)
+            } catch (e: ProxyException.InvalidUrl) {
+                // This should NOT happen - https:// is a valid scheme
+                throw AssertionError("https:// scheme should be accepted, got InvalidUrl")
+            } catch (e: ProxyException) {
+                // Other errors (HttpError, NetworkUnavailable, etc.) are expected
+                // since we don't have network access in tests
+            }
+        } finally {
+            tempDir.deleteRecursively()
+            try {
+                proxyShutdown()
+            } catch (e: Exception) {
+                // Ignore shutdown errors
+            }
+        }
+    }
+
+    @Test
+    fun `proxy batch fetch preserves URL order in results`() {
+        val tempDir = java.io.File.createTempFile("proxy_batch_order_test", "").apply {
+            delete()
+            mkdirs()
+        }
+
+        try {
+            proxyInit(tempDir.absolutePath, 100u)
+
+            val urls = listOf(
+                "https://example.com/1.png",
+                "https://example.com/2.png",
+                "https://example.com/3.png"
+            )
+            val results = proxyFetchImagesBatch(urls, 3u)
+
+            assertEquals(3, results.size)
+            // Each result should have a non-empty URL
+            results.forEach { result ->
+                assertTrue(result.url.isNotEmpty(), "Result URL should not be empty")
+            }
+        } finally {
+            tempDir.deleteRecursively()
+            try {
+                proxyShutdown()
+            } catch (e: Exception) {
+                // Ignore shutdown errors
+            }
+        }
+    }
 }

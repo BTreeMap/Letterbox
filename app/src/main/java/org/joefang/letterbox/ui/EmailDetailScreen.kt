@@ -558,17 +558,25 @@ private fun EmailWebView(
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
-                // Security settings - always block direct network access
-                // When using proxy, we intercept and handle network loads in shouldInterceptRequest
-                // When not using proxy but allowNetworkLoads is true, WebView handles directly
-                val shouldBlockDirectAccess = !allowNetworkLoads || useProxy
+                // Security settings for network access:
+                // - When allowNetworkLoads=false: Block all network requests (default secure state)
+                // - When allowNetworkLoads=true: Allow network requests to be attempted
+                //   The shouldInterceptRequest callback will then either:
+                //   - Route through the privacy proxy (when useProxy=true)
+                //   - Let WebView handle directly (when useProxy=false)
+                //
+                // IMPORTANT: We must NOT block network loads when useProxy=true, because
+                // shouldInterceptRequest is only called when the WebView attempts to make
+                // a request. If blockNetworkLoads=true, no requests are attempted, and
+                // the proxy interception never happens.
+                val shouldBlockNetworkAccess = !allowNetworkLoads
                 
                 settings.apply {
                     allowFileAccess = false
                     allowContentAccess = false
                     javaScriptEnabled = false // Disable JS for security
-                    blockNetworkLoads = shouldBlockDirectAccess
-                    blockNetworkImage = shouldBlockDirectAccess
+                    blockNetworkLoads = shouldBlockNetworkAccess
+                    blockNetworkImage = shouldBlockNetworkAccess
                 }
 
                 // Custom WebViewClient to intercept URLs

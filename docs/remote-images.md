@@ -33,6 +33,17 @@ Access Settings from the main screen menu:
 - When enabled, all remote images load through the privacy proxy.
 - When disabled, images load directly from their source (exposes your IP address).
 
+### Cloudflare WARP Terms of Service
+
+When you first enable the privacy proxy, you will be asked to accept Cloudflare's Terms of Service. This is required because images are fetched through Cloudflare's WARP infrastructure. 
+
+The Terms of Service dialog:
+- Explains that images are fetched through Cloudflare WARP
+- Provides a link to view Cloudflare's Terms of Service
+- Requires explicit acceptance before the proxy is enabled
+
+Once you accept the terms, the proxy can be enabled or disabled without showing the dialog again.
+
 ## Technical Details
 
 ### Architecture
@@ -117,9 +128,17 @@ Run the Kotlin unit tests:
 ./gradlew :app:testProdDebugUnitTest
 ```
 
+Run the Android instrumented tests:
+```bash
+./gradlew :app:connectedProdDebugAndroidTest
+```
+
 Test coverage includes:
 - URL validation and content type checking
 - WARP configuration and persistence
 - WireGuard tunnel creation
 - Cache behavior
 - Error handling scenarios
+- Remote image banner display and interaction
+- Cloudflare ToS consent flow
+- Settings persistence across app restarts
