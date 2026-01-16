@@ -11,14 +11,14 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.joefang.letterbox.data.UserPreferencesRepository
 import org.junit.After
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /**
  * End-to-end tests for the Cloudflare WARP Terms of Service consent flow.
@@ -104,7 +104,7 @@ class CloudflareTermsConsentE2ETest {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             // Verify initial state
             val initialConsent = runBlocking { preferencesRepository.cloudflareTermsAccepted.first() }
-            assertFalse(initialConsent, "ToS should not be accepted initially")
+            assertFalse("ToS should not be accepted initially", initialConsent)
             
             // Open settings and trigger ToS dialog
             composeTestRule.onNodeWithContentDescription("More options").performClick()
@@ -139,11 +139,11 @@ class CloudflareTermsConsentE2ETest {
             
             // Verify consent is saved
             val consentAfterAccept = runBlocking { preferencesRepository.cloudflareTermsAccepted.first() }
-            assertTrue(consentAfterAccept, "ToS should be accepted after clicking Accept")
+            assertTrue("ToS should be accepted after clicking Accept", consentAfterAccept)
             
             // Verify proxy is enabled
             val proxyEnabled = runBlocking { preferencesRepository.enablePrivacyProxy.first() }
-            assertTrue(proxyEnabled, "Privacy proxy should be enabled after accepting ToS")
+            assertTrue("Privacy proxy should be enabled after accepting ToS", proxyEnabled)
         }
     }
 
@@ -152,7 +152,7 @@ class CloudflareTermsConsentE2ETest {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             // Verify initial state
             val initialConsent = runBlocking { preferencesRepository.cloudflareTermsAccepted.first() }
-            assertFalse(initialConsent, "ToS should not be accepted initially")
+            assertFalse("ToS should not be accepted initially", initialConsent)
             
             // Open settings and trigger ToS dialog
             composeTestRule.onNodeWithContentDescription("More options").performClick()
@@ -187,11 +187,11 @@ class CloudflareTermsConsentE2ETest {
             
             // Verify consent is NOT saved
             val consentAfterDecline = runBlocking { preferencesRepository.cloudflareTermsAccepted.first() }
-            assertFalse(consentAfterDecline, "ToS should not be accepted after clicking Cancel")
+            assertFalse("ToS should not be accepted after clicking Cancel", consentAfterDecline)
             
             // Verify proxy is NOT enabled
             val proxyEnabled = runBlocking { preferencesRepository.enablePrivacyProxy.first() }
-            assertFalse(proxyEnabled, "Privacy proxy should remain disabled after declining ToS")
+            assertFalse("Privacy proxy should remain disabled after declining ToS", proxyEnabled)
         }
     }
 
@@ -228,7 +228,7 @@ class CloudflareTermsConsentE2ETest {
             
             // Verify proxy is now enabled (direct toggle without dialog)
             val proxyEnabled = runBlocking { preferencesRepository.enablePrivacyProxy.first() }
-            assertTrue(proxyEnabled, "Privacy proxy should be enabled directly when ToS already accepted")
+            assertTrue("Privacy proxy should be enabled directly when ToS already accepted", proxyEnabled)
         }
     }
 
@@ -298,11 +298,11 @@ class CloudflareTermsConsentE2ETest {
             
             // Verify proxy is now disabled
             val proxyEnabled = runBlocking { preferencesRepository.enablePrivacyProxy.first() }
-            assertFalse(proxyEnabled, "Privacy proxy should be disabled")
+            assertFalse("Privacy proxy should be disabled", proxyEnabled)
             
             // Consent should still be saved
             val consentStillSaved = runBlocking { preferencesRepository.cloudflareTermsAccepted.first() }
-            assertTrue(consentStillSaved, "ToS consent should remain after disabling proxy")
+            assertTrue("ToS consent should remain after disabling proxy", consentStillSaved)
         }
     }
 }
