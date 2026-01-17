@@ -703,27 +703,13 @@ private fun EmailWebView(
                         
                         // Open HTTP/HTTPS links in external browser
                         if (url.startsWith("http://") || url.startsWith("https://")) {
-                            try {
-                                val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                ctx.startActivity(intent)
-                            } catch (e: Exception) {
-                                Log.w("EmailWebView", "Failed to open URL: $url", e)
-                            }
+                            openUrlInBrowser(ctx, url)
                             return true
                         }
                         
                         // Open mailto: links in email client
                         if (url.startsWith("mailto:")) {
-                            try {
-                                val intent = Intent(Intent.ACTION_SENDTO, android.net.Uri.parse(url)).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                ctx.startActivity(intent)
-                            } catch (e: Exception) {
-                                Log.w("EmailWebView", "Failed to open mailto: $url", e)
-                            }
+                            openMailtoLink(ctx, url)
                             return true
                         }
                         
@@ -811,6 +797,20 @@ private fun openUrlInBrowser(context: Context, url: String) {
         context.startActivity(intent)
     } catch (e: Exception) {
         Log.w("EmailWebView", "Failed to open URL: $url", e)
+    }
+}
+
+/**
+ * Open a mailto: link in the default email client.
+ */
+private fun openMailtoLink(context: Context, mailtoUrl: String) {
+    try {
+        val intent = Intent(Intent.ACTION_SENDTO, android.net.Uri.parse(mailtoUrl)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        Log.w("EmailWebView", "Failed to open mailto: $mailtoUrl", e)
     }
 }
 
