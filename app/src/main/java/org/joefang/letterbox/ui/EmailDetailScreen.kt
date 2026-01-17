@@ -797,6 +797,28 @@ private fun guessMimeType(cid: String, bytes: ByteArray): String {
 }
 
 /**
+ * Open a URL in the default browser.
+ */
+private fun openUrlInBrowser(context: Context, url: String) {
+    try {
+        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        Log.w("EmailWebView", "Failed to open URL: $url", e)
+    }
+}
+
+/**
+ * Copy text to the clipboard.
+ */
+private fun copyToClipboard(context: Context, label: String, text: String, toastMessage: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    val clip = android.content.ClipData.newPlainText(label, text)
+    clipboard.setPrimaryClip(clip)
+    android.widget.Toast.makeText(context, toastMessage, android.widget.Toast.LENGTH_SHORT).show()
+}
+
+/**
  * Show a context menu for links with options to open or copy.
  * 
  * This provides conventional UX for long-pressing links:
@@ -810,22 +832,8 @@ private fun showLinkContextMenu(context: Context, url: String) {
         .setTitle("Link options")
         .setItems(items) { _, which ->
             when (which) {
-                0 -> {
-                    // Open link in browser
-                    try {
-                        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
-                        context.startActivity(intent)
-                    } catch (e: Exception) {
-                        Log.w("EmailWebView", "Failed to open URL: $url", e)
-                    }
-                }
-                1 -> {
-                    // Copy link to clipboard
-                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    val clip = android.content.ClipData.newPlainText("Link URL", url)
-                    clipboard.setPrimaryClip(clip)
-                    android.widget.Toast.makeText(context, "Link copied", android.widget.Toast.LENGTH_SHORT).show()
-                }
+                0 -> openUrlInBrowser(context, url)
+                1 -> copyToClipboard(context, "Link URL", url, "Link copied")
             }
         }
         .show()
@@ -845,22 +853,8 @@ private fun showImageContextMenu(context: Context, imageUrl: String) {
         .setTitle("Image options")
         .setItems(items) { _, which ->
             when (which) {
-                0 -> {
-                    // Open image in browser
-                    try {
-                        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(imageUrl))
-                        context.startActivity(intent)
-                    } catch (e: Exception) {
-                        Log.w("EmailWebView", "Failed to open image URL: $imageUrl", e)
-                    }
-                }
-                1 -> {
-                    // Copy image URL to clipboard
-                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    val clip = android.content.ClipData.newPlainText("Image URL", imageUrl)
-                    clipboard.setPrimaryClip(clip)
-                    android.widget.Toast.makeText(context, "Image URL copied", android.widget.Toast.LENGTH_SHORT).show()
-                }
+                0 -> openUrlInBrowser(context, imageUrl)
+                1 -> copyToClipboard(context, "Image URL", imageUrl, "Image URL copied")
             }
         }
         .show()

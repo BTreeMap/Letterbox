@@ -14,6 +14,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.joefang.letterbox.data.UserPreferencesRepository
 import org.junit.After
+import org.junit.Assert
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -242,7 +243,7 @@ class ImageProxyIntegrationTest {
         
         // Verify the setting is persisted correctly
         val proxyEnabled = runBlocking { preferencesRepository.enablePrivacyProxy.first() }
-        org.junit.Assert.assertTrue("Privacy proxy should be enabled", proxyEnabled)
+        Assert.assertTrue("Privacy proxy should be enabled", proxyEnabled)
         
         // Launch activity with email containing remote images
         val intent = Intent(context, MainActivity::class.java).apply {
