@@ -799,7 +799,8 @@ private fun SettingsContent(
             }
             Switch(
                 checked = alwaysLoadRemoteImages,
-                onCheckedChange = onAlwaysLoadRemoteImagesChange
+                onCheckedChange = onAlwaysLoadRemoteImagesChange,
+                modifier = Modifier.testTag("alwaysLoadRemoteImagesSwitch")
             )
         }
         
@@ -830,7 +831,8 @@ private fun SettingsContent(
             }
             Switch(
                 checked = enablePrivacyProxy,
-                onCheckedChange = onEnablePrivacyProxyChange
+                onCheckedChange = onEnablePrivacyProxyChange,
+                modifier = Modifier.testTag("privacyProxySwitch")
             )
         }
         

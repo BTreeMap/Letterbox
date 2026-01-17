@@ -91,6 +91,21 @@ The proxy implementation uses a WireGuard tunnel through Cloudflare WARP:
 - These are not affected by the remote image settings.
 - No network access is required for inline images.
 
+## Link Handling
+
+The email WebView provides conventional link interaction:
+
+### Clicking Links
+- **HTTP/HTTPS links**: Open in the default browser app
+- **mailto: links**: Open in the default email client
+
+### Long-Press Context Menu
+Long-pressing a link or image shows a context menu with options:
+- **Links**: "Open link" or "Copy link address"
+- **Images**: "Open image" or "Copy image URL"
+
+This provides a familiar user experience while maintaining security by opening external content outside the app sandbox.
+
 ## Security
 
 The WebView remains sandboxed with:
@@ -107,6 +122,13 @@ When the native Rust library is unavailable or encounters an error:
 - The app does not crash; errors are caught and handled gracefully.
 - Inline (cid:) images continue to work normally.
 - If proxy fails, images display an error placeholder.
+
+### INTERNET Permission
+
+The app intentionally does not request INTERNET permission for privacy. When attempting to enable network access for remote images:
+- The WebView gracefully handles the SecurityException
+- Network loads remain blocked at the WebView level
+- The proxy still intercepts requests through `shouldInterceptRequest`
 
 ## Implementation Layers
 

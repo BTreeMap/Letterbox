@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -30,12 +29,11 @@ import java.io.File
  * - Remote images are blocked by default for privacy
  * - The "Show" button appears when email contains remote images
  * - Clicking "Show" enables image loading
- * - Images are loaded through the privacy proxy when enabled
- * - Cloudflare ToS consent is properly handled
+ * - Settings work correctly for image loading preferences
  * 
  * Note: These tests do not verify actual network connectivity or image rendering
- * as that would require a real network. Instead, they verify the UI flow and
- * settings integration work correctly.
+ * as the app intentionally doesn't have INTERNET permission for privacy.
+ * Instead, they verify the UI flow and settings integration work correctly.
  */
 @RunWith(AndroidJUnit4::class)
 class ImageProxyIntegrationTest {
@@ -184,6 +182,8 @@ class ImageProxyIntegrationTest {
             }
             
             // Verify the banner is NOT shown when always load is enabled
+            // Note: Even though the app doesn't have INTERNET permission,
+            // the UI behavior should be consistent - no banner when always load is enabled
             composeTestRule.onNodeWithText("Remote images are hidden", substring = true).assertDoesNotExist()
         }
     }
@@ -233,7 +233,7 @@ class ImageProxyIntegrationTest {
     }
 
     @Test
-    fun privacyProxyEnabled_imageLoadingThroughProxy() {
+    fun privacyProxyEnabled_settingIsPersisted() {
         // Ensure privacy proxy is enabled and ToS accepted
         runBlocking {
             preferencesRepository.setEnablePrivacyProxy(true)
@@ -242,7 +242,7 @@ class ImageProxyIntegrationTest {
         
         // Verify the setting is persisted correctly
         val proxyEnabled = runBlocking { preferencesRepository.enablePrivacyProxy.first() }
-        assert(proxyEnabled) { "Privacy proxy should be enabled" }
+        org.junit.Assert.assertTrue("Privacy proxy should be enabled", proxyEnabled)
         
         // Launch activity with email containing remote images
         val intent = Intent(context, MainActivity::class.java).apply {
@@ -263,7 +263,7 @@ class ImageProxyIntegrationTest {
                 }
             }
             
-            // Verify banner shows proxy information
+            // Verify banner mentions privacy proxy
             composeTestRule.onNodeWithText("privacy proxy", substring = true, ignoreCase = true).assertIsDisplayed()
         }
     }

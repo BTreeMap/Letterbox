@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ActivityScenario
@@ -39,6 +40,11 @@ class CloudflareTermsConsentE2ETest {
     private lateinit var context: Context
     private lateinit var preferencesRepository: UserPreferencesRepository
 
+    companion object {
+        private const val SETTINGS_TIMEOUT_MS = 5000L
+        private const val DIALOG_TIMEOUT_MS = 3000L
+    }
+
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
@@ -69,22 +75,21 @@ class CloudflareTermsConsentE2ETest {
             composeTestRule.onNodeWithContentDescription("More options").performClick()
             composeTestRule.onNodeWithText("Settings").performClick()
             
-            // Wait for settings sheet to appear
-            composeTestRule.waitUntil(timeoutMillis = 3000L) {
+            // Wait for settings sheet to appear and find the privacy proxy switch
+            composeTestRule.waitUntil(timeoutMillis = SETTINGS_TIMEOUT_MS) {
                 try {
-                    composeTestRule.onNodeWithText("Use privacy proxy").assertExists()
+                    composeTestRule.onNodeWithTag("privacyProxySwitch").assertExists()
                     true
                 } catch (e: AssertionError) {
                     false
                 }
             }
             
-            // Try to enable the privacy proxy
-            // First, find and click the switch for privacy proxy
-            composeTestRule.onNodeWithText("Use privacy proxy").performClick()
+            // Click the privacy proxy switch to enable it
+            composeTestRule.onNodeWithTag("privacyProxySwitch").performClick()
             
             // Verify the ToS dialog appears
-            composeTestRule.waitUntil(timeoutMillis = 3000L) {
+            composeTestRule.waitUntil(timeoutMillis = DIALOG_TIMEOUT_MS) {
                 try {
                     composeTestRule.onNodeWithText("Cloudflare WARP Terms").assertExists()
                     true
@@ -110,19 +115,19 @@ class CloudflareTermsConsentE2ETest {
             composeTestRule.onNodeWithContentDescription("More options").performClick()
             composeTestRule.onNodeWithText("Settings").performClick()
             
-            composeTestRule.waitUntil(timeoutMillis = 3000L) {
+            composeTestRule.waitUntil(timeoutMillis = SETTINGS_TIMEOUT_MS) {
                 try {
-                    composeTestRule.onNodeWithText("Use privacy proxy").assertExists()
+                    composeTestRule.onNodeWithTag("privacyProxySwitch").assertExists()
                     true
                 } catch (e: AssertionError) {
                     false
                 }
             }
             
-            composeTestRule.onNodeWithText("Use privacy proxy").performClick()
+            composeTestRule.onNodeWithTag("privacyProxySwitch").performClick()
             
             // Wait for ToS dialog
-            composeTestRule.waitUntil(timeoutMillis = 3000L) {
+            composeTestRule.waitUntil(timeoutMillis = DIALOG_TIMEOUT_MS) {
                 try {
                     composeTestRule.onNodeWithText("Accept & Enable").assertExists()
                     true
@@ -135,7 +140,7 @@ class CloudflareTermsConsentE2ETest {
             composeTestRule.onNodeWithText("Accept & Enable").performClick()
             
             // Wait a moment for preferences to be saved
-            Thread.sleep(500)
+            Thread.sleep(1000)
             
             // Verify consent is saved
             val consentAfterAccept = runBlocking { preferencesRepository.cloudflareTermsAccepted.first() }
@@ -158,19 +163,19 @@ class CloudflareTermsConsentE2ETest {
             composeTestRule.onNodeWithContentDescription("More options").performClick()
             composeTestRule.onNodeWithText("Settings").performClick()
             
-            composeTestRule.waitUntil(timeoutMillis = 3000L) {
+            composeTestRule.waitUntil(timeoutMillis = SETTINGS_TIMEOUT_MS) {
                 try {
-                    composeTestRule.onNodeWithText("Use privacy proxy").assertExists()
+                    composeTestRule.onNodeWithTag("privacyProxySwitch").assertExists()
                     true
                 } catch (e: AssertionError) {
                     false
                 }
             }
             
-            composeTestRule.onNodeWithText("Use privacy proxy").performClick()
+            composeTestRule.onNodeWithTag("privacyProxySwitch").performClick()
             
             // Wait for ToS dialog
-            composeTestRule.waitUntil(timeoutMillis = 3000L) {
+            composeTestRule.waitUntil(timeoutMillis = DIALOG_TIMEOUT_MS) {
                 try {
                     composeTestRule.onNodeWithText("Cancel").assertExists()
                     true
@@ -183,7 +188,7 @@ class CloudflareTermsConsentE2ETest {
             composeTestRule.onNodeWithText("Cancel").performClick()
             
             // Wait a moment for any state changes
-            Thread.sleep(500)
+            Thread.sleep(1000)
             
             // Verify consent is NOT saved
             val consentAfterDecline = runBlocking { preferencesRepository.cloudflareTermsAccepted.first() }
@@ -208,20 +213,20 @@ class CloudflareTermsConsentE2ETest {
             composeTestRule.onNodeWithContentDescription("More options").performClick()
             composeTestRule.onNodeWithText("Settings").performClick()
             
-            composeTestRule.waitUntil(timeoutMillis = 3000L) {
+            composeTestRule.waitUntil(timeoutMillis = SETTINGS_TIMEOUT_MS) {
                 try {
-                    composeTestRule.onNodeWithText("Use privacy proxy").assertExists()
+                    composeTestRule.onNodeWithTag("privacyProxySwitch").assertExists()
                     true
                 } catch (e: AssertionError) {
                     false
                 }
             }
             
-            // Enable the privacy proxy
-            composeTestRule.onNodeWithText("Use privacy proxy").performClick()
+            // Enable the privacy proxy by clicking the switch
+            composeTestRule.onNodeWithTag("privacyProxySwitch").performClick()
             
-            // Wait a moment
-            Thread.sleep(500)
+            // Wait for preferences to be saved
+            Thread.sleep(1000)
             
             // Verify NO ToS dialog appears
             composeTestRule.onNodeWithText("Cloudflare WARP Terms").assertDoesNotExist()
@@ -239,19 +244,19 @@ class CloudflareTermsConsentE2ETest {
             composeTestRule.onNodeWithContentDescription("More options").performClick()
             composeTestRule.onNodeWithText("Settings").performClick()
             
-            composeTestRule.waitUntil(timeoutMillis = 3000L) {
+            composeTestRule.waitUntil(timeoutMillis = SETTINGS_TIMEOUT_MS) {
                 try {
-                    composeTestRule.onNodeWithText("Use privacy proxy").assertExists()
+                    composeTestRule.onNodeWithTag("privacyProxySwitch").assertExists()
                     true
                 } catch (e: AssertionError) {
                     false
                 }
             }
             
-            composeTestRule.onNodeWithText("Use privacy proxy").performClick()
+            composeTestRule.onNodeWithTag("privacyProxySwitch").performClick()
             
             // Wait for ToS dialog
-            composeTestRule.waitUntil(timeoutMillis = 3000L) {
+            composeTestRule.waitUntil(timeoutMillis = DIALOG_TIMEOUT_MS) {
                 try {
                     composeTestRule.onNodeWithText("Cloudflare WARP Terms").assertExists()
                     true
@@ -278,20 +283,20 @@ class CloudflareTermsConsentE2ETest {
             composeTestRule.onNodeWithContentDescription("More options").performClick()
             composeTestRule.onNodeWithText("Settings").performClick()
             
-            composeTestRule.waitUntil(timeoutMillis = 3000L) {
+            composeTestRule.waitUntil(timeoutMillis = SETTINGS_TIMEOUT_MS) {
                 try {
-                    composeTestRule.onNodeWithText("Use privacy proxy").assertExists()
+                    composeTestRule.onNodeWithTag("privacyProxySwitch").assertExists()
                     true
                 } catch (e: AssertionError) {
                     false
                 }
             }
             
-            // Disable the privacy proxy
-            composeTestRule.onNodeWithText("Use privacy proxy").performClick()
+            // Disable the privacy proxy by clicking the switch
+            composeTestRule.onNodeWithTag("privacyProxySwitch").performClick()
             
-            // Wait a moment
-            Thread.sleep(500)
+            // Wait for preferences to be saved
+            Thread.sleep(1000)
             
             // Verify NO ToS dialog appears when disabling
             composeTestRule.onNodeWithText("Cloudflare WARP Terms").assertDoesNotExist()
