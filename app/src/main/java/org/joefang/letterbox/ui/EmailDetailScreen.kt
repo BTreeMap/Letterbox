@@ -704,7 +704,9 @@ private fun EmailWebView(
                         // Open HTTP/HTTPS links in external browser
                         if (url.startsWith("http://") || url.startsWith("https://")) {
                             try {
-                                val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                                val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
                                 ctx.startActivity(intent)
                             } catch (e: Exception) {
                                 Log.w("EmailWebView", "Failed to open URL: $url", e)
@@ -715,7 +717,9 @@ private fun EmailWebView(
                         // Open mailto: links in email client
                         if (url.startsWith("mailto:")) {
                             try {
-                                val intent = Intent(Intent.ACTION_SENDTO, android.net.Uri.parse(url))
+                                val intent = Intent(Intent.ACTION_SENDTO, android.net.Uri.parse(url)).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
                                 ctx.startActivity(intent)
                             } catch (e: Exception) {
                                 Log.w("EmailWebView", "Failed to open mailto: $url", e)
@@ -801,7 +805,9 @@ private fun guessMimeType(cid: String, bytes: ByteArray): String {
  */
 private fun openUrlInBrowser(context: Context, url: String) {
     try {
-        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
         context.startActivity(intent)
     } catch (e: Exception) {
         Log.w("EmailWebView", "Failed to open URL: $url", e)

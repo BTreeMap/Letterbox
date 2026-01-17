@@ -103,7 +103,13 @@ class BackNavigationTest {
                     false
                 }
             }
+            
+            // Wait for the email to be saved to history (database write)
+            composeTestRule.waitForIdle()
         }
+        
+        // Small delay to ensure database transaction completes after activity closes
+        composeTestRule.waitForIdle()
         
         // Now launch the app normally (simulating opening from launcher)
         val launcherIntent = Intent(context, MainActivity::class.java).apply {
@@ -126,6 +132,7 @@ class BackNavigationTest {
             
             // Click on the history entry to open the email
             composeTestRule.onNodeWithText("Test Email - Simple", substring = true).performClick()
+            composeTestRule.waitForIdle()
             
             // Wait for email detail screen to load
             composeTestRule.waitUntil(timeoutMillis = EMAIL_LOAD_TIMEOUT_MS) {
@@ -143,6 +150,7 @@ class BackNavigationTest {
             
             // Press the back arrow button
             composeTestRule.onNodeWithContentDescription("Back").performClick()
+            composeTestRule.waitForIdle()
             
             // Verify we're back on the home screen with the history list
             composeTestRule.waitUntil(timeoutMillis = EMAIL_LOAD_TIMEOUT_MS) {
