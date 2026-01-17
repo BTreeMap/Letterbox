@@ -222,11 +222,22 @@ class CloudflareTermsConsentE2ETest {
                 }
             }
             
+            // Wait for the DataStore to emit the cloudflareTermsAccepted value
+            // This ensures the collectAsState has received the actual value, not just the initial=false
+            composeTestRule.waitUntil(timeoutMillis = SETTINGS_TIMEOUT_MS) {
+                val termsAccepted = runBlocking { preferencesRepository.cloudflareTermsAccepted.first() }
+                termsAccepted == true
+            }
+            
+            // Additional wait for compose to recompose with the new state
+            composeTestRule.waitForIdle()
+            
             // Enable the privacy proxy by clicking the switch
             composeTestRule.onNodeWithTag("privacyProxySwitch").performClick()
             
             // Wait for preferences to be saved
-            Thread.sleep(1000)
+            composeTestRule.waitForIdle()
+            Thread.sleep(500)
             
             // Verify NO ToS dialog appears
             composeTestRule.onNodeWithText("Cloudflare WARP Terms").assertDoesNotExist()
