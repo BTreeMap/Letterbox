@@ -163,18 +163,15 @@ class EmailOpeningE2ETest {
             val isResumed = scenario.state.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
             assertTrue("Activity should be in RESUMED state but is ${scenario.state}", isResumed)
             
-            // Wait for email header to be displayed
+            // Wait for and verify email header is displayed
             composeTestRule.waitUntil(timeoutMillis = EMAIL_LOAD_TIMEOUT_MS) {
                 try {
-                    composeTestRule.onNodeWithText("From: sender@example.com", substring = true).assertExists()
+                    composeTestRule.onNodeWithText("From: sender@example.com", substring = true).assertIsDisplayed()
                     true
                 } catch (e: AssertionError) {
                     false
                 }
             }
-            
-            // Verify email content is displayed
-            composeTestRule.onNodeWithText("From: sender@example.com", substring = true).assertIsDisplayed()
         }
     }
 }
