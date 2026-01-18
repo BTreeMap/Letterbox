@@ -569,32 +569,14 @@ private fun EmailWebView(
                 // shouldInterceptRequest is only called when the WebView attempts to make
                 // a request. If blockNetworkLoads=true, no requests are attempted, and
                 // the proxy interception never happens.
-                //
-                // NOTE: Setting blockNetworkLoads=false requires INTERNET permission.
-                // If the app doesn't have this permission (privacy-focused design),
-                // we catch the SecurityException and keep network loads blocked.
-                // The proxy will still work through shouldInterceptRequest for requests
-                // that do get through.
                 val shouldBlockNetworkAccess = !allowNetworkLoads
                 
                 settings.apply {
                     allowFileAccess = false
                     allowContentAccess = false
                     javaScriptEnabled = false // Disable JS for security
-                    
-                    // Try to set network blocking preferences. This may throw SecurityException
-                    // if the app doesn't have INTERNET permission (intentional for privacy).
-                    try {
-                        blockNetworkLoads = shouldBlockNetworkAccess
-                        blockNetworkImage = shouldBlockNetworkAccess
-                    } catch (e: SecurityException) {
-                        // App doesn't have INTERNET permission (by design for privacy).
-                        // Keep network loads blocked - the proxy still intercepts requests
-                        // through shouldInterceptRequest.
-                        Log.d("EmailWebView", "INTERNET permission not granted, network loads will be blocked")
-                        blockNetworkLoads = true
-                        blockNetworkImage = true
-                    }
+                    blockNetworkLoads = shouldBlockNetworkAccess
+                    blockNetworkImage = shouldBlockNetworkAccess
                 }
 
                 // Custom WebViewClient to intercept URLs

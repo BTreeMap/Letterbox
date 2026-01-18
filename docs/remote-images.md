@@ -123,12 +123,21 @@ When the native Rust library is unavailable or encounters an error:
 - Inline (cid:) images continue to work normally.
 - If proxy fails, images display an error placeholder.
 
-### INTERNET Permission
+### Permissions
 
-The app intentionally does not request INTERNET permission for privacy. When attempting to enable network access for remote images:
-- The WebView gracefully handles the SecurityException
-- Network loads remain blocked at the WebView level
-- The proxy still intercepts requests through `shouldInterceptRequest`
+The app requires the following permissions:
+
+| Permission | Purpose |
+|------------|---------|
+| `INTERNET` | Required for the WireGuard tunnel to communicate with Cloudflare WARP endpoints |
+
+**Why INTERNET permission is needed:** The privacy proxy creates a WireGuard tunnel using UDP sockets to encrypt traffic and route it through Cloudflare. Without INTERNET permission, the proxy cannot establish network connections.
+
+**Privacy remains protected because:**
+1. Your IP address is hidden behind Cloudflare's infrastructure
+2. No tracking headers are sent
+3. Cookies are blocked
+4. The proxy only fetches images - it doesn't browse or track
 
 ## Implementation Layers
 

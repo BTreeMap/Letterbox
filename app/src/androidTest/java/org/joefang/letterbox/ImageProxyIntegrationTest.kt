@@ -32,9 +32,8 @@ import java.io.File
  * - Clicking "Show" enables image loading
  * - Settings work correctly for image loading preferences
  * 
- * Note: These tests do not verify actual network connectivity or image rendering
- * as the app intentionally doesn't have INTERNET permission for privacy.
- * Instead, they verify the UI flow and settings integration work correctly.
+ * Note: These tests verify the UI flow and settings integration work correctly.
+ * Actual image fetching is tested in the Rust proxy tests.
  */
 @RunWith(AndroidJUnit4::class)
 class ImageProxyIntegrationTest {
@@ -183,8 +182,6 @@ class ImageProxyIntegrationTest {
             }
             
             // Verify the banner is NOT shown when always load is enabled
-            // Note: Even though the app doesn't have INTERNET permission,
-            // the UI behavior should be consistent - no banner when always load is enabled
             composeTestRule.onNodeWithText("Remote images are hidden", substring = true).assertDoesNotExist()
         }
     }
