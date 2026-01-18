@@ -91,6 +91,9 @@ class EmailOpeningE2ETest {
                 }
             }
             
+            // Wait for Compose to settle before asserting visibility
+            composeTestRule.waitForIdle()
+            
             // Verify email details are displayed
             composeTestRule.onNodeWithText("Test Email - Simple", substring = true).assertIsDisplayed()
             composeTestRule.onNodeWithText("From: sender@example.com", substring = true).assertIsDisplayed()
@@ -121,6 +124,9 @@ class EmailOpeningE2ETest {
                 }
             }
             
+            // Wait for Compose to settle before asserting visibility
+            composeTestRule.waitForIdle()
+            
             // Verify email details are displayed
             composeTestRule.onNodeWithText("Test Email - Simple", substring = true).assertIsDisplayed()
             composeTestRule.onNodeWithText("From: sender@example.com", substring = true).assertIsDisplayed()
@@ -150,9 +156,22 @@ class EmailOpeningE2ETest {
                 }
             }
             
+            // Wait for Compose to settle before asserting visibility
+            composeTestRule.waitForIdle()
+            
             // Verify the activity is still active (not crashed)
             val isResumed = scenario.state.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
             assertTrue("Activity should be in RESUMED state but is ${scenario.state}", isResumed)
+            
+            // Wait for email header to be displayed
+            composeTestRule.waitUntil(timeoutMillis = EMAIL_LOAD_TIMEOUT_MS) {
+                try {
+                    composeTestRule.onNodeWithText("From: sender@example.com", substring = true).assertExists()
+                    true
+                } catch (e: AssertionError) {
+                    false
+                }
+            }
             
             // Verify email content is displayed
             composeTestRule.onNodeWithText("From: sender@example.com", substring = true).assertIsDisplayed()

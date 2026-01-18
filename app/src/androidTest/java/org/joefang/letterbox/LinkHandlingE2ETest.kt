@@ -155,8 +155,8 @@ Content-Type: text/html; charset=UTF-8
                 }
             }
             
-            // Give the WebView some time to process all link elements
-            Thread.sleep(1000)
+            // Wait for Compose to settle (allow WebView to process link elements)
+            composeTestRule.waitForIdle()
             
             // Verify the activity is still active (not crashed)
             val isResumed = scenario.state.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
@@ -198,8 +198,8 @@ Content-Type: text/html; charset=UTF-8
                     }
                 }
                 
-                // Give the WebView some time to process all elements
-                Thread.sleep(1000)
+                // Wait for Compose to settle (allow WebView to process all elements)
+                composeTestRule.waitForIdle()
                 
                 // Verify the activity is still active (not crashed)
                 val isResumed = scenario.state.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)

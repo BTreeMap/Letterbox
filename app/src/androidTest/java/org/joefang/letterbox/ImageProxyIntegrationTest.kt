@@ -113,6 +113,9 @@ class ImageProxyIntegrationTest {
                 }
             }
             
+            // Wait for Compose to settle before asserting visibility
+            composeTestRule.waitForIdle()
+            
             // Verify the remote images banner is displayed
             composeTestRule.onNodeWithText("Remote images are hidden", substring = true).assertIsDisplayed()
             composeTestRule.onNodeWithText("Show").assertIsDisplayed()
@@ -181,6 +184,9 @@ class ImageProxyIntegrationTest {
                 }
             }
             
+            // Wait for Compose to settle before asserting visibility
+            composeTestRule.waitForIdle()
+            
             // Verify the banner is NOT shown when always load is enabled
             composeTestRule.onNodeWithText("Remote images are hidden", substring = true).assertDoesNotExist()
         }
@@ -219,6 +225,9 @@ class ImageProxyIntegrationTest {
                         false
                     }
                 }
+                
+                // Wait for Compose to settle before asserting visibility
+                composeTestRule.waitForIdle()
                 
                 // Verify the remote images banner is displayed
                 // This email has both CID (inline) and remote images
@@ -261,6 +270,9 @@ class ImageProxyIntegrationTest {
                 }
             }
             
+            // Wait for Compose to settle before asserting visibility
+            composeTestRule.waitForIdle()
+            
             // Verify banner mentions privacy proxy
             composeTestRule.onNodeWithText("privacy proxy", substring = true, ignoreCase = true).assertIsDisplayed()
         }
@@ -286,6 +298,9 @@ class ImageProxyIntegrationTest {
                     false
                 }
             }
+            
+            // Wait for Compose to settle before asserting visibility
+            composeTestRule.waitForIdle()
             
             // Verify email headers are displayed correctly
             composeTestRule.onNodeWithText("From: sender@example.com", substring = true).assertIsDisplayed()
