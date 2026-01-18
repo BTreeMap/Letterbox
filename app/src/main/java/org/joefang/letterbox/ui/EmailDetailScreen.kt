@@ -558,17 +558,25 @@ private fun EmailWebView(
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
-                // Security settings - always block direct network access
-                // When using proxy, we intercept and handle network loads in shouldInterceptRequest
-                // When not using proxy but allowNetworkLoads is true, WebView handles directly
-                val shouldBlockDirectAccess = !allowNetworkLoads || useProxy
+                // Security settings for network access:
+                // - When allowNetworkLoads=false: Block all network requests (default secure state)
+                // - When allowNetworkLoads=true: Allow network requests to be attempted
+                //   The shouldInterceptRequest callback will then either:
+                //   - Route through the privacy proxy (when useProxy=true)
+                //   - Let WebView handle directly (when useProxy=false)
+                //
+                // IMPORTANT: We must NOT block network loads when useProxy=true, because
+                // shouldInterceptRequest is only called when the WebView attempts to make
+                // a request. If blockNetworkLoads=true, no requests are attempted, and
+                // the proxy interception never happens.
+                val shouldBlockNetworkAccess = !allowNetworkLoads
                 
                 settings.apply {
                     allowFileAccess = false
                     allowContentAccess = false
                     javaScriptEnabled = false // Disable JS for security
-                    blockNetworkLoads = shouldBlockDirectAccess
-                    blockNetworkImage = shouldBlockDirectAccess
+                    blockNetworkLoads = shouldBlockNetworkAccess
+                    blockNetworkImage = shouldBlockNetworkAccess
                 }
 
                 // Custom WebViewClient to intercept URLs
@@ -673,8 +681,42 @@ private fun EmailWebView(
                         view: WebView?,
                         request: WebResourceRequest?
                     ): Boolean {
-                        // Block all navigation for security
+                        val url = request?.url?.toString() ?: return true
+                        
+                        // Open HTTP/HTTPS links in external browser
+                        if (url.startsWith("http://") || url.startsWith("https://")) {
+                            openUrlInBrowser(ctx, url)
+                            return true
+                        }
+                        
+                        // Open mailto: links in email client
+                        if (url.startsWith("mailto:")) {
+                            openMailtoLink(ctx, url)
+                            return true
+                        }
+                        
+                        // Block all other navigation for security
                         return true
+                    }
+                }
+                
+                // Enable long-click for link context menu (copy URL, open in browser)
+                setOnLongClickListener { v ->
+                    val hitTestResult = (v as WebView).hitTestResult
+                    when (hitTestResult.type) {
+                        WebView.HitTestResult.SRC_ANCHOR_TYPE,
+                        WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
+                            val linkUrl = hitTestResult.extra ?: return@setOnLongClickListener false
+                            showLinkContextMenu(ctx, linkUrl)
+                            true
+                        }
+                        WebView.HitTestResult.IMAGE_TYPE -> {
+                            // For images, show image context menu
+                            val imageUrl = hitTestResult.extra ?: return@setOnLongClickListener false
+                            showImageContextMenu(ctx, imageUrl)
+                            true
+                        }
+                        else -> false
                     }
                 }
             }
@@ -724,4 +766,84 @@ private fun guessMimeType(cid: String, bytes: ByteArray): String {
     }
 
     return "application/octet-stream"
+}
+
+/**
+ * Open a URL in the default browser.
+ */
+private fun openUrlInBrowser(context: Context, url: String) {
+    try {
+        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        Log.w("EmailWebView", "Failed to open URL: $url", e)
+    }
+}
+
+/**
+ * Open a mailto: link in the default email client.
+ */
+private fun openMailtoLink(context: Context, mailtoUrl: String) {
+    try {
+        val intent = Intent(Intent.ACTION_SENDTO, android.net.Uri.parse(mailtoUrl)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        Log.w("EmailWebView", "Failed to open mailto: $mailtoUrl", e)
+    }
+}
+
+/**
+ * Copy text to the clipboard.
+ */
+private fun copyToClipboard(context: Context, label: String, text: String, toastMessage: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    val clip = android.content.ClipData.newPlainText(label, text)
+    clipboard.setPrimaryClip(clip)
+    android.widget.Toast.makeText(context, toastMessage, android.widget.Toast.LENGTH_SHORT).show()
+}
+
+/**
+ * Show a context menu for links with options to open or copy.
+ * 
+ * This provides conventional UX for long-pressing links:
+ * - Open link in browser
+ * - Copy link to clipboard
+ */
+private fun showLinkContextMenu(context: Context, url: String) {
+    val items = arrayOf("Open link", "Copy link address")
+    
+    android.app.AlertDialog.Builder(context)
+        .setTitle("Link options")
+        .setItems(items) { _, which ->
+            when (which) {
+                0 -> openUrlInBrowser(context, url)
+                1 -> copyToClipboard(context, "Link URL", url, "Link copied")
+            }
+        }
+        .show()
+}
+
+/**
+ * Show a context menu for images with options to open or copy URL.
+ * 
+ * This provides conventional UX for long-pressing images:
+ * - Open image in browser
+ * - Copy image URL to clipboard
+ */
+private fun showImageContextMenu(context: Context, imageUrl: String) {
+    val items = arrayOf("Open image", "Copy image URL")
+    
+    android.app.AlertDialog.Builder(context)
+        .setTitle("Image options")
+        .setItems(items) { _, which ->
+            when (which) {
+                0 -> openUrlInBrowser(context, imageUrl)
+                1 -> copyToClipboard(context, "Image URL", imageUrl, "Image URL copied")
+            }
+        }
+        .show()
 }

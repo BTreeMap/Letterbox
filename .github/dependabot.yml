@@ -1,0 +1,90 @@
+# Dependabot configuration for the Letterbox monorepo
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+
+updates:
+  # GitHub Actions - update workflow dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Gradle dependencies for Android app
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "android"
+    open-pull-requests-limit: 10
+    groups:
+      # Group Kotlin-related dependencies
+      kotlin:
+        patterns:
+          - "org.jetbrains.kotlin*"
+          - "kotlin*"
+      # Group AndroidX dependencies
+      androidx:
+        patterns:
+          - "androidx.*"
+      # Group Compose dependencies
+      compose:
+        patterns:
+          - "*compose*"
+      # Group testing dependencies
+      testing:
+        patterns:
+          - "*test*"
+          - "*junit*"
+          - "*espresso*"
+
+  # Cargo dependencies for letterbox-core (Rust library)
+  - package-ecosystem: "cargo"
+    directory: "/rust/letterbox-core"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(rust-core)"
+    labels:
+      - "dependencies"
+      - "rust"
+    open-pull-requests-limit: 5
+    groups:
+      # Group all Rust dependencies to reduce PR noise
+      rust-core:
+        patterns:
+          - "*"
+
+  # Cargo dependencies for letterbox-proxy (Rust WARP proxy)
+  - package-ecosystem: "cargo"
+    directory: "/rust/letterbox-proxy"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(rust-proxy)"
+    labels:
+      - "dependencies"
+      - "rust"
+    open-pull-requests-limit: 5
+    groups:
+      # Group all Rust proxy dependencies
+      rust-proxy:
+        patterns:
+          - "*"

@@ -33,6 +33,17 @@ Access Settings from the main screen menu:
 - When enabled, all remote images load through the privacy proxy.
 - When disabled, images load directly from their source (exposes your IP address).
 
+### Cloudflare WARP Terms of Service
+
+When you first enable the privacy proxy, you will be asked to accept Cloudflare's Terms of Service. This is required because images are fetched through Cloudflare's WARP infrastructure. 
+
+The Terms of Service dialog:
+- Explains that images are fetched through Cloudflare WARP
+- Provides a link to view Cloudflare's Terms of Service
+- Requires explicit acceptance before the proxy is enabled
+
+Once you accept the terms, the proxy can be enabled or disabled without showing the dialog again.
+
 ## Technical Details
 
 ### Architecture
@@ -80,6 +91,21 @@ The proxy implementation uses a WireGuard tunnel through Cloudflare WARP:
 - These are not affected by the remote image settings.
 - No network access is required for inline images.
 
+## Link Handling
+
+The email WebView provides conventional link interaction:
+
+### Clicking Links
+- **HTTP/HTTPS links**: Open in the default browser app
+- **mailto: links**: Open in the default email client
+
+### Long-Press Context Menu
+Long-pressing a link or image shows a context menu with options:
+- **Links**: "Open link" or "Copy link address"
+- **Images**: "Open image" or "Copy image URL"
+
+This provides a familiar user experience while maintaining security by opening external content outside the app sandbox.
+
 ## Security
 
 The WebView remains sandboxed with:
@@ -96,6 +122,22 @@ When the native Rust library is unavailable or encounters an error:
 - The app does not crash; errors are caught and handled gracefully.
 - Inline (cid:) images continue to work normally.
 - If proxy fails, images display an error placeholder.
+
+### Permissions
+
+The app requires the following permissions:
+
+| Permission | Purpose |
+|------------|---------|
+| `INTERNET` | Required for the WireGuard tunnel to communicate with Cloudflare WARP endpoints |
+
+**Why INTERNET permission is needed:** The privacy proxy creates a WireGuard tunnel using UDP sockets to encrypt traffic and route it through Cloudflare. Without INTERNET permission, the proxy cannot establish network connections.
+
+**Privacy remains protected because:**
+1. Your IP address is hidden behind Cloudflare's infrastructure
+2. No tracking headers are sent
+3. Cookies are blocked
+4. The proxy only fetches images - it doesn't browse or track
 
 ## Implementation Layers
 
@@ -117,9 +159,17 @@ Run the Kotlin unit tests:
 ./gradlew :app:testProdDebugUnitTest
 ```
 
+Run the Android instrumented tests:
+```bash
+./gradlew :app:connectedProdDebugAndroidTest
+```
+
 Test coverage includes:
 - URL validation and content type checking
 - WARP configuration and persistence
 - WireGuard tunnel creation
 - Cache behavior
 - Error handling scenarios
+- Remote image banner display and interaction
+- Cloudflare ToS consent flow
+- Settings persistence across app restarts
