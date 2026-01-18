@@ -19,7 +19,7 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0  # Full git history for version calculation
@@ -30,10 +30,10 @@ jobs:
 
       - name: Install Android build tools
         run: |
-          sdkmanager "build-tools;34.0.0"
+          sdkmanager "build-tools;36.0.0"
 
       - name: Download prod release APK from build workflow
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: letterbox-prod-release-unsigned-apk
           path: ./artifacts

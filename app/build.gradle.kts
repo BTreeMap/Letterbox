@@ -1,7 +1,6 @@
 plugins {
     alias(libs.plugins.androidApplication)
-    alias(libs.plugins.kotlinAndroid)
-    alias(libs.plugins.kapt)
+    alias(libs.plugins.ksp)
     id("org.jetbrains.kotlin.plugin.compose") version libs.versions.kotlin.get()
 }
 
@@ -211,12 +210,12 @@ logger.lifecycle("Version Info: name=${versionInfo.versionName}, code=${versionI
 
 android {
     namespace = "org.joefang.letterbox"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "org.joefang.letterbox"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = versionInfo.versionCode
         versionName = versionInfo.versionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -255,19 +254,19 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    @Suppress("DEPRECATION")
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildFeatures {
         compose = true
         buildConfig = true
+        resValues = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.7.3"
     }
     kotlin {
         jvmToolchain(17)
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
     packaging {
         resources {
@@ -279,16 +278,14 @@ android {
 
     testOptions {
         managedDevices {
-            localDevices {
-                create("pixel7Api34") {
-                    device = "Pixel 7"
-                    apiLevel = 34
-                    systemImageSource = "google"
-                }
+            val pixel7Api34 = localDevices.create("pixel7Api34") {
+                device = "Pixel 7"
+                apiLevel = 34
+                systemImageSource = "google"
             }
             groups {
                 create("ciPhones") {
-                    targetDevices.add(devices["pixel7Api34"])
+                    targetDevices.add(pixel7Api34)
                 }
             }
         }
@@ -353,6 +350,7 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
+    implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.compose.material3)
     implementation(libs.material)
     implementation(libs.coroutines.core)
@@ -361,21 +359,21 @@ dependencies {
     implementation(libs.room.ktx)
     implementation(libs.datastore.preferences)
     implementation(libs.jna) { artifact { type = "aar" } }
-    kapt(libs.room.compiler)
+    ksp(libs.room.compiler)
 
     testImplementation(libs.junit4)
     testImplementation(kotlin("test-junit"))
     testImplementation(libs.coroutines.test)
     testImplementation(libs.robolectric)
-    testImplementation("net.java.dev.jna:jna:5.14.0")
+    testImplementation("net.java.dev.jna:jna:5.18.1")
 
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.androidx.test.ext)
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(libs.compose.ui.test.junit4)
-    androidTestImplementation("androidx.test:core:1.5.0")
-    androidTestImplementation("androidx.test:runner:1.5.2")
-    androidTestImplementation("androidx.test:rules:1.5.0")
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:rules:1.7.0")
 
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)

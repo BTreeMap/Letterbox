@@ -70,10 +70,7 @@ impl WireGuardTransport {
             Some(25), // Persistent keepalive interval in seconds
             0,        // Index
             None,     // Rate limiter
-        )
-        .map_err(|e| ProxyError::TunnelError {
-            details: format!("Failed to create tunnel: {}", e),
-        })?;
+        );
 
         // Create UDP socket (bind to any available port)
         let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| ProxyError::TunnelError {
