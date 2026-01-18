@@ -1,6 +1,7 @@
 [versions]
 agp = "9.0.0"
 kotlin = "2.3.0"
+ksp = "2.3.4"
 coreKtx = "1.17.0"
 coroutines = "1.10.2"
 composeBom = "2026.01.00"
@@ -45,3 +46,4 @@ jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 androidApplication = { id = "com.android.application", version.ref = "agp" }
 kotlinAndroid = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kapt = { id = "org.jetbrains.kotlin.kapt", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

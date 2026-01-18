@@ -36,7 +36,7 @@ base64 = "0.22"
 rand = "0.8"
 
 # WireGuard tunnel (boringtun-based)
-boringtun = "0.6"
+boringtun = "0.7.0"
 
 # TCP/IP stack
 smoltcp = { version = "0.12", default-features = false, features = ["medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "socket-dns"] }

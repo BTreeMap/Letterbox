@@ -30,7 +30,7 @@ jobs:
 
       - name: Install Android build tools
         run: |
-          sdkmanager "build-tools;34.0.0"
+          sdkmanager "build-tools;36.0.0"
 
       - name: Download prod release APK from build workflow
         uses: actions/download-artifact@v7
