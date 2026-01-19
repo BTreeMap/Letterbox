@@ -57,7 +57,9 @@ cargo test
 
 ## Dependency overrides
 
-Gradle forces patched transitive versions in `build.gradle.kts` to satisfy Dependabot advisories without changing application source usage. The forced set currently upgrades buildscript/runtime transitive artifacts pulled in by Android Gradle Plugin tooling (protobuf-java, jdom2, jose4j, commons-lang3, httpclient) and Netty modules that may appear in transitive graphs. If any of these overrides cause incompatibilities, remove or adjust the specific entry and re-run `./gradlew buildEnvironment` or `./gradlew :app:dependencyInsight` to inspect the updated graph.
+- Gradle forces patched transitive versions in `build.gradle.kts` to satisfy Dependabot advisories without changing application source usage.
+- Overrides cover Android Gradle Plugin buildscript/runtime transitive artifacts (protobuf-java, jdom2, jose4j, commons-lang3, httpclient) and Netty modules when they appear in dependency graphs.
+- If any override causes incompatibilities, remove or adjust the specific entry and re-run `./gradlew buildEnvironment` or `./gradlew :app:dependencyInsight`.
 
 ## Testing
 
