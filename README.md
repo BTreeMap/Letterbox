@@ -55,6 +55,12 @@ cargo test
 - Override the native library path for tests with `LETTERBOX_CORE_LIB_PATH` or the `uniffi.component.letterbox_core.libraryOverride` system property (used by `RustFfiIntegrationTest`).
 - Gradle uses `gradle.properties` defaults (`org.gradle.jvmargs`, `android.useAndroidX`, Kotlin code style) and `gradle/libs.versions.toml` for dependency versions.
 
+## Dependency overrides
+
+- Gradle forces patched transitive versions in `build.gradle.kts` to satisfy Dependabot advisories without changing application source usage.
+- Overrides cover Android Gradle Plugin buildscript/runtime transitive artifacts (protobuf-java, jdom2, jose4j, commons-lang3, httpclient) and Netty modules when they appear in dependency graphs.
+- If any override causes incompatibilities, remove or adjust the specific entry and re-run `./gradlew buildEnvironment` or `./gradlew :app:dependencyInsight`.
+
 ## Testing
 
 - Rust core: `cargo test`.
