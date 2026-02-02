@@ -1,7 +1,7 @@
 [versions]
 agp = "9.0.0"
 kotlin = "2.3.0"
-ksp = "2.3.4"
+ksp = "2.3.5"
 coreKtx = "1.17.0"
 coroutines = "1.10.2"
 composeBom = "2026.01.00"
