@@ -206,7 +206,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5.0.0
+        uses: gradle/actions/setup-gradle@v5.0.1
 
       - name: Build Android native libraries (letterbox-core)
         run: |
