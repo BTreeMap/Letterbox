@@ -359,6 +359,7 @@ dependencies {
     implementation(libs.room.ktx)
     implementation(libs.datastore.preferences)
     implementation(libs.jna) { artifact { type = "aar" } }
+    implementation(libs.browser)
     ksp(libs.room.compiler)
 
     testImplementation(libs.junit4)
