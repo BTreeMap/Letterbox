@@ -1,16 +1,19 @@
 package org.joefang.letterbox.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.util.Log
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,13 +24,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -36,7 +42,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -44,6 +53,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +64,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
+import androidx.browser.customtabs.CustomTabsIntent
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.joefang.letterbox.data.ImageFetchResult
 import org.joefang.letterbox.data.ImageProxyService
@@ -106,7 +118,10 @@ fun EmailDetailScreen(
     var showMenu by remember { mutableStateOf(false) }
     var showDetailsDialog by remember { mutableStateOf(false) }
     var showAttachments by remember { mutableStateOf(email.attachments.isNotEmpty()) }
+    var linkSheetState by remember { mutableStateOf<LinkSheetState?>(null) }
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
     
     // Handle system back button/gesture
     BackHandler(onBack = onNavigateBack)
@@ -170,7 +185,8 @@ fun EmailDetailScreen(
                 }
             )
         },
-        modifier = modifier
+        modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -219,6 +235,17 @@ fun EmailDetailScreen(
                 getResource = email.getResource,
                 allowNetworkLoads = sessionLoadImages,
                 useProxy = useProxy,
+                onLinkLongPress = { rawUrl ->
+                    val trimmedRaw = rawUrl.trim()
+                    linkSheetState = LinkResolver.resolve(rawUrl).let { resolution ->
+                        val displayUrl = if (resolution.fixedUrl.isBlank()) trimmedRaw else resolution.fixedUrl
+                        LinkSheetState(
+                            fixedUrl = displayUrl,
+                            openAllowed = resolution.openAllowed,
+                            openUri = resolution.openUri
+                        )
+                    }
+                },
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f)
@@ -231,6 +258,19 @@ fun EmailDetailScreen(
         EmailDetailsDialog(
             email = email,
             onDismiss = { showDetailsDialog = false }
+        )
+    }
+
+    linkSheetState?.let { sheetState ->
+        LinkActionSheet(
+            state = sheetState,
+            onOpen = { uri ->
+                openUrlInCustomTabs(context, uri)
+            },
+            onCopy = { url ->
+                copyLinkToClipboard(context, snackbarHostState, coroutineScope, url)
+            },
+            onDismiss = { linkSheetState = null }
         )
     }
 }
@@ -551,7 +591,8 @@ private fun EmailWebView(
     getResource: (String) -> ByteArray?,
     modifier: Modifier = Modifier,
     allowNetworkLoads: Boolean = false,
-    useProxy: Boolean = true
+    useProxy: Boolean = true,
+    onLinkLongPress: (String) -> Unit
 ) {
     val context = LocalContext.current
     
@@ -707,15 +748,14 @@ private fun EmailWebView(
                         WebView.HitTestResult.SRC_ANCHOR_TYPE,
                         WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
                             val linkUrl = hitTestResult.extra ?: return@setOnLongClickListener false
-                            showLinkContextMenu(ctx, linkUrl)
-                            true
+                            if (linkUrl.isBlank()) {
+                                false
+                            } else {
+                                onLinkLongPress(linkUrl)
+                                true
+                            }
                         }
-                        WebView.HitTestResult.IMAGE_TYPE -> {
-                            // For images, show image context menu
-                            val imageUrl = hitTestResult.extra ?: return@setOnLongClickListener false
-                            showImageContextMenu(ctx, imageUrl)
-                            true
-                        }
+                        WebView.HitTestResult.IMAGE_TYPE -> false
                         else -> false
                     }
                 }
@@ -773,7 +813,7 @@ private fun guessMimeType(cid: String, bytes: ByteArray): String {
  */
 private fun openUrlInBrowser(context: Context, url: String) {
     try {
-        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
@@ -787,7 +827,7 @@ private fun openUrlInBrowser(context: Context, url: String) {
  */
 private fun openMailtoLink(context: Context, mailtoUrl: String) {
     try {
-        val intent = Intent(Intent.ACTION_SENDTO, android.net.Uri.parse(mailtoUrl)).apply {
+        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse(mailtoUrl)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
@@ -796,14 +836,105 @@ private fun openMailtoLink(context: Context, mailtoUrl: String) {
     }
 }
 
-/**
- * Copy text to the clipboard.
- */
-private fun copyToClipboard(context: Context, label: String, text: String, toastMessage: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-    val clip = android.content.ClipData.newPlainText(label, text)
+private data class LinkSheetState(
+    val fixedUrl: String,
+    val openAllowed: Boolean,
+    val openUri: Uri?
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LinkActionSheet(
+    state: LinkSheetState,
+    onOpen: (Uri) -> Unit,
+    onCopy: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "Link",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            SelectionContainer {
+                Text(
+                    text = state.fixedUrl,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (state.openAllowed && state.openUri != null) {
+                    Button(
+                        onClick = {
+                            onOpen(state.openUri)
+                            onDismiss()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(vertical = 12.dp)
+                    ) {
+                        Text("Open")
+                    }
+                }
+                Button(
+                    onClick = {
+                        onCopy(state.fixedUrl)
+                        onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(vertical = 12.dp)
+                ) {
+                    Text("Copy")
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(vertical = 12.dp)
+                ) {
+                    Text("Cancel")
+                }
+            }
+        }
+    }
+}
+
+private fun copyLinkToClipboard(
+    context: Context,
+    snackbarHostState: SnackbarHostState,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+    url: String
+) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    val clip = ClipData.newPlainText("Link", url)
     clipboard.setPrimaryClip(clip)
-    android.widget.Toast.makeText(context, toastMessage, android.widget.Toast.LENGTH_SHORT).show()
+    coroutineScope.launch {
+        snackbarHostState.showSnackbar("Link copied")
+    }
+}
+
+private fun openUrlInCustomTabs(context: Context, uri: Uri) {
+    val customTabsIntent = CustomTabsIntent.Builder().build()
+    try {
+        customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        customTabsIntent.launchUrl(context, uri)
+    } catch (e: Exception) {
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(Intent.createChooser(intent, "Open link").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
+    }
 }
 
 /**
@@ -813,37 +944,3 @@ private fun copyToClipboard(context: Context, label: String, text: String, toast
  * - Open link in browser
  * - Copy link to clipboard
  */
-private fun showLinkContextMenu(context: Context, url: String) {
-    val items = arrayOf("Open link", "Copy link address")
-    
-    android.app.AlertDialog.Builder(context)
-        .setTitle("Link options")
-        .setItems(items) { _, which ->
-            when (which) {
-                0 -> openUrlInBrowser(context, url)
-                1 -> copyToClipboard(context, "Link URL", url, "Link copied")
-            }
-        }
-        .show()
-}
-
-/**
- * Show a context menu for images with options to open or copy URL.
- * 
- * This provides conventional UX for long-pressing images:
- * - Open image in browser
- * - Copy image URL to clipboard
- */
-private fun showImageContextMenu(context: Context, imageUrl: String) {
-    val items = arrayOf("Open image", "Copy image URL")
-    
-    android.app.AlertDialog.Builder(context)
-        .setTitle("Image options")
-        .setItems(items) { _, which ->
-            when (which) {
-                0 -> openUrlInBrowser(context, imageUrl)
-                1 -> copyToClipboard(context, "Image URL", imageUrl, "Image URL copied")
-            }
-        }
-        .show()
-}
