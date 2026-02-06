@@ -312,6 +312,7 @@ val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
         "-t", "x86_64",
         "-o", cargoNdkOutput.absolutePath,
         "build",
+        "--manifest-path", rootProject.layout.projectDirectory.file("Cargo.toml").asFile.absolutePath,
         "--release"
     )
     onlyIf { rustBuildEnabled }
