@@ -67,7 +67,7 @@
       "matchUpdateTypes": ["major"],
       "automerge": false,
       "dependencyDashboardApproval": true,
-      "labels": ["dependencies", "no-stale", "major"]
+      "addLabels": ["major"]
     }
   ]
 }
