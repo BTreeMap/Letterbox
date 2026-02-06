@@ -80,7 +80,7 @@ open class RustBuffer : Structure() {
 
     @Suppress("TooGenericExceptionThrown")
     fun asByteBuffer() =
-        this.data?.getByteBuffer(0, this.len.toLong())?.also {
+        this.data?.getByteBuffer(0, this.len)?.also {
             it.order(ByteOrder.BIG_ENDIAN)
         }
 }
@@ -281,8 +281,9 @@ internal inline fun<T> uniffiTraitInterfaceCall(
     try {
         writeReturn(makeCall())
     } catch(e: kotlin.Exception) {
+        val err = try { e.stackTraceToString() } catch(_: Throwable) { "" }
         callStatus.code = UNIFFI_CALL_UNEXPECTED_ERROR
-        callStatus.error_buf = FfiConverterString.lower(e.toString())
+        callStatus.error_buf = FfiConverterString.lower(err)
     }
 }
 
@@ -299,8 +300,9 @@ internal inline fun<T, reified E: Throwable> uniffiTraitInterfaceCallWithError(
             callStatus.code = UNIFFI_CALL_ERROR
             callStatus.error_buf = lowerError(e)
         } else {
+            val err = try { e.stackTraceToString() } catch(_: Throwable) { "" }
             callStatus.code = UNIFFI_CALL_UNEXPECTED_ERROR
-            callStatus.error_buf = FfiConverterString.lower(e.toString())
+            callStatus.error_buf = FfiConverterString.lower(err)
         }
     }
 }
@@ -647,7 +649,7 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun ffi_letterbox_proxy_uniffi_contract_version(
     ): Int
-    
+
         
 }
 
@@ -774,7 +776,7 @@ internal object UniffiLib {
     ): Unit
     external fun ffi_letterbox_proxy_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    
+
         
 }
 
@@ -789,22 +791,22 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_clear_cache() != 61769.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_clear_cache() != 21602.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 62553.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 33129.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 9083.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 36091.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_init() != 40096.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_init() != 6889.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_shutdown() != 7441.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_shutdown() != 49173.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 5236.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 32604.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1098,6 +1100,8 @@ data class BatchImageResult (
     
 
     
+
+    
     companion object
 }
 
@@ -1156,6 +1160,8 @@ data class ImageResponse (
     var `finalUrl`: kotlin.String
     
 ){
+    
+
     
 
     
@@ -1222,6 +1228,8 @@ data class ProxyStatus (
     var `cacheSize`: kotlin.UInt
     
 ){
+    
+
     
 
     
@@ -1498,6 +1506,9 @@ sealed class ProxyException: kotlin.Exception() {
             get() = "details=${ `details` }"
     }
     
+
+    
+
 
     companion object ErrorHandler : UniffiRustCallStatusErrorHandler<ProxyException> {
         override fun lift(error_buf: RustBuffer.ByValue): ProxyException = FfiConverterTypeProxyError.lift(error_buf)

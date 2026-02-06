@@ -141,7 +141,7 @@ impl WarpProvisioner {
     ///
     /// Returns (private_key_base64, public_key_base64).
     pub fn generate_keypair() -> (String, String) {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut private_key_bytes = [0u8; 32];
         rng.fill_bytes(&mut private_key_bytes);
 

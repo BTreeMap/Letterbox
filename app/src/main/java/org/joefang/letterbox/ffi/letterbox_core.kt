@@ -81,7 +81,7 @@ open class RustBuffer : Structure() {
 
     @Suppress("TooGenericExceptionThrown")
     fun asByteBuffer() =
-        this.data?.getByteBuffer(0, this.len.toLong())?.also {
+        this.data?.getByteBuffer(0, this.len)?.also {
             it.order(ByteOrder.BIG_ENDIAN)
         }
 }
@@ -282,8 +282,9 @@ internal inline fun<T> uniffiTraitInterfaceCall(
     try {
         writeReturn(makeCall())
     } catch(e: kotlin.Exception) {
+        val err = try { e.stackTraceToString() } catch(_: Throwable) { "" }
         callStatus.code = UNIFFI_CALL_UNEXPECTED_ERROR
-        callStatus.error_buf = FfiConverterString.lower(e.toString())
+        callStatus.error_buf = FfiConverterString.lower(err)
     }
 }
 
@@ -300,8 +301,9 @@ internal inline fun<T, reified E: Throwable> uniffiTraitInterfaceCallWithError(
             callStatus.code = UNIFFI_CALL_ERROR
             callStatus.error_buf = lowerError(e)
         } else {
+            val err = try { e.stackTraceToString() } catch(_: Throwable) { "" }
             callStatus.code = UNIFFI_CALL_UNEXPECTED_ERROR
-            callStatus.error_buf = FfiConverterString.lower(e.toString())
+            callStatus.error_buf = FfiConverterString.lower(err)
         }
     }
 }
@@ -686,7 +688,7 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun ffi_letterbox_core_uniffi_contract_version(
     ): Int
-    
+
         
 }
 
@@ -860,7 +862,7 @@ internal object UniffiLib {
     ): Unit
     external fun ffi_letterbox_core_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    
+
         
 }
 
@@ -1371,7 +1373,6 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
 //
 
 
-//
 /**
  * Holds parsed email content in Rust memory.
  * Kotlin code holds a reference to this object and calls methods to retrieve content.
@@ -1543,11 +1544,11 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     @Suppress("UNUSED_PARAMETER")
     constructor(noHandle: NoHandle) {
         this.handle = 0
-        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+        this.cleanable = null
     }
 
     protected val handle: Long
-    protected val cleanable: UniffiCleaner.Cleanable
+    protected val cleanable: UniffiCleaner.Cleanable?
 
     private val wasDestroyed = AtomicBoolean(false)
     private val callCounter = AtomicLong(1)
@@ -1558,7 +1559,7 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
         if (this.wasDestroyed.compareAndSet(false, true)) {
             // This decrement always matches the initial count of 1 given at creation time.
             if (this.callCounter.decrementAndGet() == 0L) {
-                cleanable.clean()
+                cleanable?.clean()
             }
         }
     }
@@ -1586,7 +1587,7 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
         } finally {
             // This decrement always matches the increment we performed above.
             if (this.callCounter.decrementAndGet() == 0L) {
-                cleanable.clean()
+                cleanable?.clean()
             }
         }
     }
@@ -2056,6 +2057,8 @@ data class AddressInfo (
     
 
     
+
+    
     companion object
 }
 
@@ -2094,6 +2097,8 @@ data class AttachmentInfo (
     var `size`: kotlin.ULong
     
 ){
+    
+
     
 
     
@@ -2142,6 +2147,8 @@ data class RemoteImage (
     var `isTrackingPixel`: kotlin.Boolean
     
 ){
+    
+
     
 
     
@@ -2194,6 +2201,8 @@ data class ResourceMeta (
     var `isSmall`: kotlin.Boolean
     
 ){
+    
+
     
 
     
@@ -2265,6 +2274,9 @@ sealed class ParseException: kotlin.Exception() {
             get() = "details=${ `details` }"
     }
     
+
+    
+
 
     companion object ErrorHandler : UniffiRustCallStatusErrorHandler<ParseException> {
         override fun lift(error_buf: RustBuffer.ByValue): ParseException = FfiConverterTypeParseError.lift(error_buf)
