@@ -28,7 +28,7 @@ tokio = { version = "1.41", features = ["rt-multi-thread", "sync", "time", "net"
 futures = "0.3"
 
 # HTTP client for WARP provisioning (runs outside tunnel)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls", "cookies"] }
 
 # Cryptography for WireGuard key generation (use the version boringtun needs)
 x25519-dalek = "2.0.0"
