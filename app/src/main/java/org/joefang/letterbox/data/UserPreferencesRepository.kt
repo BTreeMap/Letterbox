@@ -118,4 +118,16 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[KEY_CLOUDFLARE_TERMS_ACCEPTED] = value
         }
     }
+
+    /**
+     * Atomically accept Cloudflare terms and enable privacy proxy in a single
+     * DataStore transaction. This ensures both values are persisted together,
+     * preventing partial writes where consent is saved but the proxy is not enabled.
+     */
+    suspend fun acceptCloudflareTermsAndEnableProxy() {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_CLOUDFLARE_TERMS_ACCEPTED] = true
+            preferences[KEY_ENABLE_PRIVACY_PROXY] = true
+        }
+    }
 }
