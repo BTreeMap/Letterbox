@@ -364,7 +364,7 @@ private fun LetterboxScaffold(
     
     // Collect image loading preferences
     val alwaysLoadRemoteImages by preferencesRepository.alwaysLoadRemoteImages.collectAsState(initial = false)
-    val enablePrivacyProxy by preferencesRepository.enablePrivacyProxy.collectAsState(initial = true)
+    val enablePrivacyProxy by preferencesRepository.enablePrivacyProxy.collectAsState(initial = false)
     val cloudflareTermsAccepted by preferencesRepository.cloudflareTermsAccepted.collectAsState(initial = false)
     var showCloudflareTermsDialog by remember { mutableStateOf(false) }
     
@@ -635,8 +635,7 @@ private fun LetterboxScaffold(
             onAccept = {
                 showCloudflareTermsDialog = false
                 scope.launch {
-                    preferencesRepository.setCloudflareTermsAccepted(true)
-                    preferencesRepository.setEnablePrivacyProxy(true)
+                    preferencesRepository.acceptCloudflareTermsAndEnableProxy()
                 }
             },
             onDecline = {

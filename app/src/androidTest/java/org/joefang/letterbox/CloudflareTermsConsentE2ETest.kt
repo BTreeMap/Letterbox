@@ -85,6 +85,12 @@ class CloudflareTermsConsentE2ETest {
                 }
             }
             
+            // Wait for compose to fully settle after loading the settings sheet
+            // This gives time for DataStore flows to emit and collectAsState to update
+            composeTestRule.waitForIdle()
+            composeTestRule.mainClock.advanceTimeBy(500)
+            composeTestRule.waitForIdle()
+            
             // Click the privacy proxy switch to enable it
             composeTestRule.onNodeWithTag("privacyProxySwitch").performClick()
             
@@ -124,6 +130,12 @@ class CloudflareTermsConsentE2ETest {
                 }
             }
             
+            // Wait for compose to fully settle after loading the settings sheet
+            // This gives time for DataStore flows to emit and collectAsState to update
+            composeTestRule.waitForIdle()
+            composeTestRule.mainClock.advanceTimeBy(500)
+            composeTestRule.waitForIdle()
+            
             composeTestRule.onNodeWithTag("privacyProxySwitch").performClick()
             
             // Wait for ToS dialog
@@ -139,7 +151,10 @@ class CloudflareTermsConsentE2ETest {
             // Accept the terms
             composeTestRule.onNodeWithText("Accept & Enable").performClick()
             
-            // Wait a moment for preferences to be saved
+            // Wait for preferences to be saved
+            composeTestRule.waitForIdle()
+            composeTestRule.mainClock.advanceTimeBy(500)
+            composeTestRule.waitForIdle()
             Thread.sleep(1000)
             
             // Verify consent is saved
@@ -171,6 +186,12 @@ class CloudflareTermsConsentE2ETest {
                     false
                 }
             }
+            
+            // Wait for compose to fully settle after loading the settings sheet
+            // This gives time for DataStore flows to emit and collectAsState to update
+            composeTestRule.waitForIdle()
+            composeTestRule.mainClock.advanceTimeBy(500)
+            composeTestRule.waitForIdle()
             
             composeTestRule.onNodeWithTag("privacyProxySwitch").performClick()
             
@@ -263,6 +284,12 @@ class CloudflareTermsConsentE2ETest {
                     false
                 }
             }
+            
+            // Wait for compose to fully settle after loading the settings sheet
+            // This gives time for DataStore flows to emit and collectAsState to update
+            composeTestRule.waitForIdle()
+            composeTestRule.mainClock.advanceTimeBy(500)
+            composeTestRule.waitForIdle()
             
             composeTestRule.onNodeWithTag("privacyProxySwitch").performClick()
             
