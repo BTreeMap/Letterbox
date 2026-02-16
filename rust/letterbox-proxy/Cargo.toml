@@ -33,7 +33,7 @@ reqwest = { version = "0.13.2", default-features = false, features = ["json", "r
 # Cryptography for WireGuard key generation (use the version boringtun needs)
 x25519-dalek = "2.0.1"
 base64 = "0.22.1"
-rand = "0.9.2"
+rand = "0.10.0"
 
 # WireGuard tunnel (boringtun-based)
 boringtun = "0.7.0"
