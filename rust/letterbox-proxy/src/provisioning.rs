@@ -15,7 +15,7 @@ use crate::config::{WarpAccountData, WarpConfig, WarpInterfaceConfig, WarpPeerCo
 use crate::error::ProxyError;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::Utc;
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use x25519_dalek::{PublicKey, StaticSecret};
 
