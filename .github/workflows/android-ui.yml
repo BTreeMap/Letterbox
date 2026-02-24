@@ -108,7 +108,7 @@ jobs:
           find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_proxy*.so" | head -1 || (echo "ERROR: letterbox_proxy not found!" && exit 1)
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5.0.1
+        uses: gradle/actions/setup-gradle@v5.0.2
 
       - name: Run instrumented UI tests (Gradle Managed Devices)
         run: |
