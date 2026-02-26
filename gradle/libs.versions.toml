@@ -40,6 +40,7 @@ junit4 = { module = "junit:junit", version.ref = "junit4" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 androidx-test-ext = { module = "androidx.test.ext:junit", version.ref = "androidxTestExt" }
 espresso-core = { module = "androidx.test.espresso:espresso-core", version.ref = "espressoCore" }
+espresso-intents = { module = "androidx.test.espresso:espresso-intents", version.ref = "espressoCore" }
 material = { module = "com.google.android.material:material", version.ref = "material" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 browser = { module = "androidx.browser:browser", version.ref = "browser" }
