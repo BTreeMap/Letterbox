@@ -281,7 +281,7 @@ android {
             val pixel7Api34 = localDevices.create("pixel7Api34") {
                 device = "Pixel 7"
                 apiLevel = 34
-                systemImageSource = "google"
+                systemImageSource = "aosp-atd"
             }
             groups {
                 create("ciPhones") {
@@ -376,6 +376,7 @@ dependencies {
     androidTestImplementation("androidx.test:core:1.7.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test:rules:1.7.0")
+    androidTestImplementation(libs.espresso.intents)
 
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
