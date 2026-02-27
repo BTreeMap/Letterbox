@@ -3,7 +3,7 @@ package org.joefang.letterbox
 import android.content.Context
 import android.content.Intent
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -30,7 +30,7 @@ import androidx.compose.ui.test.hasText
 class AttachmentInteractionE2ETest {
 
     @get:Rule
-    val composeTestRule = createComposeRule()
+    val composeTestRule = createEmptyComposeRule()
 
     private lateinit var context: Context
     private lateinit var testEmlFile: File

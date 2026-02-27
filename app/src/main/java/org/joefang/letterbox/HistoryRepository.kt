@@ -130,8 +130,12 @@ class HistoryRepository(
     init {
         // Load initial items from database
         scope.launch {
-            historyItemDao.getAllOrderedByAccess().collect { entities ->
-                _items.value = entities.map { it.toHistoryEntry() }
+            try {
+                historyItemDao.getAllOrderedByAccess().collect { entities ->
+                    _items.value = entities.map { it.toHistoryEntry() }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("HistoryRepository", "Error loading items", e)
             }
         }
     }
