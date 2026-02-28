@@ -33,9 +33,6 @@ echo ""
 # --- 1. Workflow output names in workflows README must match build.yml ---
 echo "--- Checking build.yml output names in workflows README ---"
 
-# Extract output keys from build.yml (under workflow_call.outputs)
-BUILD_OUTPUTS=$(grep -E '^\s{6}\w.*:$' "$BUILD_YML" | sed -n '/outputs:/,/^[^ ]/p' | grep -oP '^\s+\K\S+(?=:)' 2>/dev/null || true)
-# Simpler: just check the two known output names exist
 for output_name in "test-artifact-name" "prod-release-artifact-name"; do
   if grep -qF "$output_name" "$BUILD_YML" && grep -qF "$output_name" "$WORKFLOWS_README"; then
     pass "Workflow output '$output_name' found in both build.yml and workflows README"
@@ -97,14 +94,12 @@ echo ""
 echo "--- Checking androidTest file listing ---"
 
 if [ -d "$ANDROID_TEST_DIR" ]; then
-  MISSING_FILES=0
   for kt_file in "$ANDROID_TEST_DIR"/*.kt; do
-    basename=$(basename "$kt_file")
-    if grep -qF "$basename" "$WORKFLOWS_README"; then
-      pass "Test file '$basename' listed in workflows README"
+    kt_filename=$(basename "$kt_file")
+    if grep -qF "$kt_filename" "$WORKFLOWS_README"; then
+      pass "Test file '$kt_filename' listed in workflows README"
     else
-      fail "Test file '$basename' exists but is not listed in workflows README"
-      MISSING_FILES=$((MISSING_FILES + 1))
+      fail "Test file '$kt_filename' exists but is not listed in workflows README"
     fi
   done
 fi
