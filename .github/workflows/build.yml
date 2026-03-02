@@ -250,21 +250,21 @@ jobs:
           echo "prod-release=letterbox-prod-release-unsigned-apk" >> $GITHUB_OUTPUT
 
       - name: Upload test APK artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact-names.outputs.test }}
           path: app/build/outputs/apk/staging/debug/*.apk
           retention-days: 30
 
       - name: Upload prod release APK artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.artifact-names.outputs.prod-release }}
           path: app/build/outputs/apk/prod/release/*.apk
           retention-days: 30
 
       - name: Upload test androidTest APK artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: letterbox-staging-androidTest-apk
           path: app/build/outputs/apk/androidTest/staging/debug/*.apk

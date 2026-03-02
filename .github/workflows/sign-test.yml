@@ -28,7 +28,7 @@ jobs:
           sdkmanager "build-tools;36.0.0"
 
       - name: Download test APK from build workflow
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: letterbox-staging-apk
           path: ./artifacts
@@ -67,7 +67,7 @@ jobs:
           rm -f "$UNSIGNED_APK"
 
       - name: Upload signed test APK artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: letterbox-staging-signed-apk
           path: ./artifacts/*.apk
