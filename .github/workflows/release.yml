@@ -114,7 +114,7 @@ jobs:
           unzip -l app/build/outputs/apk/prod/release/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in prod release APK!" && exit 1)
 
       - name: Upload release APK artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: letterbox-prod-release-unsigned-apk
           path: app/build/outputs/apk/prod/release/*.apk
@@ -136,7 +136,7 @@ jobs:
           sdkmanager "build-tools;36.0.0"
 
       - name: Download release APK
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: letterbox-prod-release-unsigned-apk
           path: ./artifacts

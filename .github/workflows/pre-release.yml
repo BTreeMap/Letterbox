@@ -33,7 +33,7 @@ jobs:
           sdkmanager "build-tools;36.0.0"
 
       - name: Download prod release APK from build workflow
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: letterbox-prod-release-unsigned-apk
           path: ./artifacts
