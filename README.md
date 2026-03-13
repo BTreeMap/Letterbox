@@ -24,8 +24,10 @@ Letterbox is an Android application built with Jetpack Compose that opens and in
 
 - `app/`: Android application module, Compose UI, Room data layer, UniFFI bindings, and Gradle tasks to build native artifacts.
 - `rust/letterbox-core/`: Rust library that parses emails with `mail-parser` and exposes UniFFI bindings for Kotlin/Android.
+- `rust/letterbox-proxy/`: Rust library implementing a privacy-preserving image proxy using Cloudflare WARP.
+- `docs/`: Project documentation (architecture, troubleshooting, versioning, signing, and more).
 - `gradle/`, `build.gradle.kts`, `settings.gradle.kts`: Gradle wrapper and version catalog configuration for the Android project.
-- `Cargo.toml`: Rust workspace definition pointing to `rust/letterbox-core`.
+- `Cargo.toml`: Rust workspace definition for `rust/letterbox-core` and `rust/letterbox-proxy`.
 - `LICENSE`: MIT license for the project.
 
 ## Quickstart
