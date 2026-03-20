@@ -3,8 +3,8 @@ plugins {
 }
 
 val forcedDependencies = listOf(
-    "com.google.protobuf:protobuf-java:4.34.0",
-    "com.google.protobuf:protobuf-kotlin:4.34.0",
+    "com.google.protobuf:protobuf-java:4.34.1",
+    "com.google.protobuf:protobuf-kotlin:4.34.1",
     "io.netty:netty-codec:4.2.10.Final",
     "io.netty:netty-codec-http:4.2.10.Final",
     "io.netty:netty-codec-http2:4.2.10.Final",
