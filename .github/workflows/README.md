@@ -13,11 +13,11 @@ This directory contains the CI/CD workflows for the Letterbox project. The workf
 
 **Jobs:**
 - **lint-and-test**: Runs Rust format checks, Rust tests, Android lint, and Android unit tests
-- **build**: Builds debug and release APKs with native libraries for all architectures
+- **build**: Builds staging debug and prod release APKs with native libraries for all architectures
 
 **Outputs:**
-- `debug-artifact-name`: Name of the uploaded debug APK artifact
-- `release-artifact-name`: Name of the uploaded release APK artifact
+- `test-artifact-name`: Name of the uploaded staging debug APK artifact
+- `prod-release-artifact-name`: Name of the uploaded prod release (unsigned) APK artifact
 
 ### 2. `android-ui.yml` - Android UI Tests
 **Trigger:** On completion of the Build workflow (via `workflow_run`).
@@ -120,13 +120,21 @@ The `android-ui.yml` workflow runs instrumented tests using Gradle Managed Devic
 
 ```bash
 # Run UI tests locally
-./gradlew pixel7Api34DebugAndroidTest
+./gradlew pixel7Api34StagingDebugAndroidTest
 ```
 
-Test files are located in `app/src/androidTest/java/com/btreemap/letterbox/`:
+Test files are located in `app/src/androidTest/java/org/joefang/letterbox/`:
 - `HomeScreenTest.kt` - Core UI element tests
 - `NavigationTest.kt` - Navigation flow tests
+- `BackNavigationTest.kt` - Back navigation behavior tests
 - `AccessibilityTest.kt` - Accessibility compliance tests
+- `EmailDetailScreenTest.kt` - Email detail screen tests
+- `EmailOpeningE2ETest.kt` - End-to-end email opening tests
+- `AttachmentInteractionE2ETest.kt` - Attachment interaction tests
+- `HistoryFeaturesE2ETest.kt` - History feature tests
+- `LinkHandlingE2ETest.kt` - Link handling tests
+- `CloudflareTermsConsentE2ETest.kt` - Cloudflare consent flow tests
+- `ImageProxyIntegrationTest.kt` - Image proxy integration tests
 
 ## Artifact Retention Policies
 
