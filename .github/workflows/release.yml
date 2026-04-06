@@ -38,7 +38,7 @@ jobs:
           java-version: "21"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android components
         run: |
@@ -129,7 +129,7 @@ jobs:
       contents: write  # Required for uploading to release
     steps:
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android build tools
         run: |
