@@ -15,7 +15,7 @@ path = "uniffi-bindgen.rs"
 thiserror = "2.0.18"
 mail-parser = "0.11.1"
 uniffi = { version = "0.31.0", features = ["cli"] }
-scraper = "0.26.0"
+scraper = "0.27.0"
 url = "2.5.8"
 
 [build-dependencies]
