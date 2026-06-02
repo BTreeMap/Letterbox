@@ -367,7 +367,7 @@ dependencies {
     testImplementation(kotlin("test-junit"))
     testImplementation(libs.coroutines.test)
     testImplementation(libs.robolectric)
-    testImplementation("net.java.dev.jna:jna:5.18.1")
+    testImplementation("net.java.dev.jna:jna:5.19.0")
 
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.androidx.test.ext)
