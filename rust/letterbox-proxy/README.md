@@ -53,7 +53,7 @@ Handles Cloudflare WARP account creation and management:
 | Configuration | Fetches tunnel configuration (endpoints, addresses) |
 | Persistence | Stores credentials in app-private storage |
 
-### WireGuard Transport (`transport.rs`)
+### WireGuard Transport (`tunnel/transport.rs`)
 
 Implements the WireGuard tunnel using boringtun:
 
@@ -63,7 +63,7 @@ Implements the WireGuard tunnel using boringtun:
 | Handshake | Handles key exchange with WARP endpoints |
 | Keepalive | Maintains tunnel connectivity |
 
-### TCP/IP Stack (`tunnel.rs`)
+### TCP/IP Stack (`tunnel/stack.rs`)
 
 Uses smoltcp for userspace networking:
 

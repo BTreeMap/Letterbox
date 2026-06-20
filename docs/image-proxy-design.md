@@ -314,27 +314,32 @@ Link: https://www.cloudflare.com/application/terms/
 ## Future Enhancements
 
 1. **HTTP/2 support**: Multiplexed connections for faster parallel fetches
-2. **DNS-over-HTTPS**: Resolve hostnames through the tunnel
-3. **Persistent disk cache**: Survive app restarts
-4. **Compression**: Compress cached images
-5. **Metrics**: Track bandwidth, cache hit rate, error rates
+2. **Persistent disk cache**: Survive app restarts
+3. **Compression**: Compress cached images
+4. **Metrics**: Track bandwidth, cache hit rate, error rates
+
+> DNS-over-HTTPS (resolving hostnames through the tunnel via Cloudflare
+> `1.1.1.1`) is already implemented in `src/tunnel/dns.rs`.
 
 ## Dependencies
 
+Versions below are indicative; `rust/letterbox-proxy/Cargo.toml` is the source of
+truth (Renovate keeps it current).
+
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| boringtun | 0.6 | WireGuard implementation |
-| smoltcp | 0.12 | TCP/IP stack |
+| boringtun | 0.7 | WireGuard implementation |
+| smoltcp | 0.13 | TCP/IP stack |
 | rustls | 0.23 | TLS library |
-| reqwest | 0.12 | HTTP client (for provisioning) |
-| x25519-dalek | 2.0.0-rc.3 | Key generation |
-| uniffi | 0.30 | FFI bindings |
-| tokio | 1.41 | Async runtime |
-| lru | 0.12 | Cache implementation |
+| reqwest | 0.13 | HTTP client (for provisioning) |
+| x25519-dalek | 2.0 | Key generation |
+| uniffi | 0.31 | FFI bindings |
+| tokio | 1.49 | Async runtime |
+| lru | 0.18 | Cache implementation |
 
 ## Testing Strategy
 
-### Unit Tests (41 tests)
+### Unit Tests
 
 - Configuration serialization/deserialization
 - Key generation and parsing

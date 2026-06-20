@@ -18,14 +18,17 @@ Letterbox is an Android application built with Jetpack Compose that opens and in
 - Parses messages through the `letterbox-core` Rust crate using UniFFI bindings (`parseEml`, `parseEmlFromPath`) to extract headers, bodies, inline resources, and attachments.
 - Displays message content with Jetpack Compose screens (`MainActivity`, `EmailDetailScreen`) and supports sharing the currently opened email via a FileProvider.
 - Stores recent files with a content-addressable history that deduplicates blobs and enforces limits (`HistoryRepository`, Room entities in `data/`).
+- Loads remote images privately: blocked by default, then fetched through the `letterbox-proxy` crate (Cloudflare WARP over WireGuard) to hide the user's IP and strip tracking headers/cookies (see [docs/remote-images.md](docs/remote-images.md)).
 - Provides product flavors (`prod`, `staging`) and hooks to build native libraries for multiple ABIs with `cargo ndk` when enabled via a Gradle property.
 
 ## Repository layout
 
 - `app/`: Android application module, Compose UI, Room data layer, UniFFI bindings, and Gradle tasks to build native artifacts.
 - `rust/letterbox-core/`: Rust library that parses emails with `mail-parser` and exposes UniFFI bindings for Kotlin/Android.
+- `rust/letterbox-proxy/`: Rust library for the privacy-preserving image proxy (Cloudflare WARP over WireGuard), exposed via UniFFI.
+- `docs/`: Architecture, design, and operational docs (`architecture.md`, `image-proxy-design.md`, `deduplication.md`, `full-text-search.md`, signing/versioning, troubleshooting, and `agents/` for AI-agent standards).
 - `gradle/`, `build.gradle.kts`, `settings.gradle.kts`: Gradle wrapper and version catalog configuration for the Android project.
-- `Cargo.toml`: Rust workspace definition pointing to `rust/letterbox-core`.
+- `Cargo.toml`: Rust workspace definition with members `rust/letterbox-core` and `rust/letterbox-proxy`.
 - `LICENSE`: MIT license for the project.
 
 ## Quickstart
