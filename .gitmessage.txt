@@ -1,0 +1,15 @@
+# <type>(<scope>): <subject>   <-- 70 chars max; imperative; capitalized; no trailing period
+#
+# <body>   <-- blank line above; wrap at 72 cols; explain WHAT and WHY, not how
+#
+# <footer> <-- e.g. "Resolves #123" or "BREAKING CHANGE: <migration path>"
+#
+# ----------------------------------------------------------------------
+# Conventional Commits — full rules: .github/skills/git-commits/SKILL.md
+#
+# Types:  feat fix refactor docs style perf test build ci chore revert
+# Scopes: proxy core tunnel warp ui app ffi ci build docs
+#
+# Enable this template (one-time, per clone):
+#   git config commit.template .gitmessage.txt
+# ----------------------------------------------------------------------
