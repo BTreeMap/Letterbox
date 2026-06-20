@@ -43,14 +43,10 @@ pub struct TunnelDiagnostics {
     pub endpoint_host: String,
     /// Endpoint IPv4 address.
     pub endpoint_ipv4: String,
-    /// Endpoint IPv6 address.
-    pub endpoint_ipv6: String,
     /// Endpoint UDP port.
     pub endpoint_port: u16,
     /// Local tunnel IPv4 address.
     pub local_address_ipv4: String,
-    /// Local tunnel IPv6 address.
-    pub local_address_ipv6: String,
     /// Whether WARP is enabled on the account.
     pub warp_enabled: bool,
     /// Account type (e.g. `free`).
@@ -233,6 +229,7 @@ fn build_diagnostics(
     public_key: &str,
 ) -> TunnelDiagnostics {
     let stats: TunnelStats = tunnel.stats();
+    let endpoint = tunnel.endpoint();
     TunnelDiagnostics {
         connection_state: if tunnel.is_connected() {
             ConnectionState::Connected
@@ -243,11 +240,9 @@ fn build_diagnostics(
         public_key: public_key.to_string(),
         peer_public_key: config.peer.public_key.clone(),
         endpoint_host: config.peer.endpoint_host.clone(),
-        endpoint_ipv4: config.peer.endpoint_ipv4.clone(),
-        endpoint_ipv6: config.peer.endpoint_ipv6.clone(),
-        endpoint_port: config.peer.endpoint_port,
+        endpoint_ipv4: endpoint.ip().to_string(),
+        endpoint_port: endpoint.port(),
         local_address_ipv4: config.interface.address_ipv4.clone(),
-        local_address_ipv6: config.interface.address_ipv6.clone(),
         warp_enabled: config.warp_enabled,
         account_type: config.account_type.clone(),
         account_id: config.account.account_id.clone(),

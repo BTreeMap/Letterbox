@@ -803,22 +803,22 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_check_for_update() != 18874) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_check_for_update() != 8783) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_clear_cache() != 62065) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_diagnostics() != 22821) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_diagnostics() != 157) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 49417) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 63800) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 10495) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 3727) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_url() != 63176) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_url() != 15037) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_init() != 3960) {
@@ -827,7 +827,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_shutdown() != 19042) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 30414) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 33270) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1505,11 +1505,6 @@ data class WarpDiagnostics (
     var `endpointIpv4`: kotlin.String
     , 
     /**
-     * Endpoint IPv6 address.
-     */
-    var `endpointIpv6`: kotlin.String
-    , 
-    /**
      * Endpoint UDP port.
      */
     var `endpointPort`: kotlin.UShort
@@ -1518,11 +1513,6 @@ data class WarpDiagnostics (
      * Local tunnel IPv4 address.
      */
     var `localAddressIpv4`: kotlin.String
-    , 
-    /**
-     * Local tunnel IPv6 address.
-     */
-    var `localAddressIpv6`: kotlin.String
     , 
     /**
      * Whether WARP is enabled on the account.
@@ -1585,9 +1575,7 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
             FfiConverterUShort.read(buf),
-            FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterString.read(buf),
@@ -1607,10 +1595,8 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
             FfiConverterString.allocationSize(value.`peerPublicKey`) +
             FfiConverterString.allocationSize(value.`endpointHost`) +
             FfiConverterString.allocationSize(value.`endpointIpv4`) +
-            FfiConverterString.allocationSize(value.`endpointIpv6`) +
             FfiConverterUShort.allocationSize(value.`endpointPort`) +
             FfiConverterString.allocationSize(value.`localAddressIpv4`) +
-            FfiConverterString.allocationSize(value.`localAddressIpv6`) +
             FfiConverterBoolean.allocationSize(value.`warpEnabled`) +
             FfiConverterString.allocationSize(value.`accountType`) +
             FfiConverterString.allocationSize(value.`accountId`) +
@@ -1628,10 +1614,8 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
             FfiConverterString.write(value.`peerPublicKey`, buf)
             FfiConverterString.write(value.`endpointHost`, buf)
             FfiConverterString.write(value.`endpointIpv4`, buf)
-            FfiConverterString.write(value.`endpointIpv6`, buf)
             FfiConverterUShort.write(value.`endpointPort`, buf)
             FfiConverterString.write(value.`localAddressIpv4`, buf)
-            FfiConverterString.write(value.`localAddressIpv6`, buf)
             FfiConverterBoolean.write(value.`warpEnabled`, buf)
             FfiConverterString.write(value.`accountType`, buf)
             FfiConverterString.write(value.`accountId`, buf)

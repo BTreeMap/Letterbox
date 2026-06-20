@@ -148,11 +148,9 @@ private fun DiagnosticsBody(
     SectionLabel("Endpoint")
     DiagnosticRow("Host", diagnostics.endpointHost)
     DiagnosticRow("IPv4", "${diagnostics.endpointIpv4}:${diagnostics.endpointPort}")
-    DiagnosticRow("IPv6", diagnostics.endpointIpv6.ifBlank { "—" })
 
-    SectionLabel("Local addresses")
+    SectionLabel("Local address")
     DiagnosticRow("IPv4", diagnostics.localAddressIpv4)
-    DiagnosticRow("IPv6", diagnostics.localAddressIpv6.ifBlank { "—" })
 
     SectionLabel("Session")
     DiagnosticRow(
@@ -227,10 +225,8 @@ private fun formatDiagnostics(d: WarpDiagnostics): String = buildString {
     appendLine("account_id=${d.accountId}")
     appendLine("endpoint_host=${d.endpointHost}")
     appendLine("endpoint_ipv4=${d.endpointIpv4}")
-    appendLine("endpoint_ipv6=${d.endpointIpv6}")
     appendLine("endpoint_port=${d.endpointPort}")
     appendLine("local_address_ipv4=${d.localAddressIpv4}")
-    appendLine("local_address_ipv6=${d.localAddressIpv6}")
     appendLine("last_handshake_secs=${d.lastHandshakeSecs ?: "never"}")
     appendLine("tx_bytes=${d.txBytes}")
     appendLine("rx_bytes=${d.rxBytes}")

@@ -31,8 +31,6 @@ pub struct WarpPeerConfig {
     pub endpoint_host: String,
     /// Endpoint IPv4 address
     pub endpoint_ipv4: String,
-    /// Endpoint IPv6 address
-    pub endpoint_ipv6: String,
     /// Endpoint port
     pub endpoint_port: u16,
 }
@@ -42,8 +40,6 @@ pub struct WarpPeerConfig {
 pub struct WarpInterfaceConfig {
     /// IPv4 address for the tunnel interface
     pub address_ipv4: String,
-    /// IPv6 address for the tunnel interface
-    pub address_ipv6: String,
 }
 
 /// Complete WARP configuration.
@@ -257,12 +253,10 @@ mod tests {
                 public_key: "peer-key".to_string(),
                 endpoint_host: "engage.cloudflareclient.com".to_string(),
                 endpoint_ipv4: "162.159.192.1".to_string(),
-                endpoint_ipv6: "2606:4700:d0::a29f:c001".to_string(),
                 endpoint_port: 2408,
             },
             interface: WarpInterfaceConfig {
                 address_ipv4: "172.16.0.2".to_string(),
-                address_ipv6: "fd01:db8:1111:2222::2".to_string(),
             },
             warp_enabled: true,
             account_type: "free".to_string(),
@@ -321,12 +315,10 @@ mod tests {
                 public_key: "pubkey".to_string(),
                 endpoint_host: "example.com".to_string(),
                 endpoint_ipv4: "1.2.3.4".to_string(),
-                endpoint_ipv6: "::1".to_string(),
                 endpoint_port: 51820,
             },
             interface: WarpInterfaceConfig {
                 address_ipv4: "10.0.0.1".to_string(),
-                address_ipv6: "fd00::1".to_string(),
             },
             warp_enabled: true,
             account_type: "free".to_string(),

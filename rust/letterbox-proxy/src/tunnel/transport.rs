@@ -21,6 +21,18 @@ use std::time::{Duration, Instant};
 /// Maximum WireGuard datagram size (IPv6 jumbo headroom).
 const MAX_DATAGRAM: usize = 65_535;
 
+/// Fixed Cloudflare WARP UDP endpoint.
+///
+/// The provisioning response advertises a rotating endpoint, but a single stable
+/// anycast address/port is used for the data plane so connectivity does not
+/// depend on whatever the control plane happened to return. WARP accepts the
+/// WireGuard data channel on several well-known ports; `500` is chosen because
+/// UDP/500 (IKE) is rarely throttled on mobile carrier networks.
+pub const WARP_ENDPOINT_IPV4: &str = "162.159.192.8";
+
+/// Fixed Cloudflare WARP UDP endpoint port (see [`WARP_ENDPOINT_IPV4`]).
+pub const WARP_ENDPOINT_PORT: u16 = 500;
+
 /// Persistent keepalive interval negotiated with the WARP peer (seconds).
 const PERSISTENT_KEEPALIVE_SECS: u16 = 25;
 
@@ -83,14 +95,11 @@ impl WireGuardTransport {
             None,
         );
 
-        let endpoint: SocketAddr = format!(
-            "{}:{}",
-            config.peer.endpoint_ipv4, config.peer.endpoint_port
-        )
-        .parse()
-        .map_err(|e| ProxyError::TunnelError {
-            details: format!("Invalid endpoint address: {e}"),
-        })?;
+        let endpoint: SocketAddr = format!("{WARP_ENDPOINT_IPV4}:{WARP_ENDPOINT_PORT}")
+            .parse()
+            .map_err(|e| ProxyError::TunnelError {
+                details: format!("Invalid endpoint address: {e}"),
+            })?;
 
         let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| ProxyError::TunnelError {
             details: format!("Failed to bind UDP socket: {e}"),
@@ -271,12 +280,10 @@ mod tests {
                 public_key: peer_public,
                 endpoint_host: "127.0.0.1".to_string(),
                 endpoint_ipv4: "127.0.0.1".to_string(),
-                endpoint_ipv6: "::1".to_string(),
                 endpoint_port: 51820,
             },
             interface: WarpInterfaceConfig {
                 address_ipv4: "172.16.0.2/32".to_string(),
-                address_ipv6: "fd01::2/128".to_string(),
             },
             warp_enabled: true,
             account_type: "test".to_string(),
@@ -314,8 +321,10 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_is_exposed() {
+    fn endpoint_is_fixed_warp_anycast() {
         let transport = WireGuardTransport::new(&test_config()).unwrap();
-        assert_eq!(transport.endpoint().port(), 51820);
+        let endpoint = transport.endpoint();
+        assert_eq!(endpoint.ip().to_string(), WARP_ENDPOINT_IPV4);
+        assert_eq!(endpoint.port(), WARP_ENDPOINT_PORT);
     }
 }

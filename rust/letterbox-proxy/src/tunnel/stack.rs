@@ -333,12 +333,10 @@ mod tests {
                 public_key: peer_public,
                 endpoint_host: "127.0.0.1".to_string(),
                 endpoint_ipv4: "127.0.0.1".to_string(),
-                endpoint_ipv6: "::1".to_string(),
                 endpoint_port: 51820,
             },
             interface: WarpInterfaceConfig {
                 address_ipv4: "172.16.0.2/32".to_string(),
-                address_ipv6: "fd01::2/128".to_string(),
             },
             warp_enabled: true,
             account_type: "test".to_string(),

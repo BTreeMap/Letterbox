@@ -89,7 +89,6 @@ struct InterfaceData {
 #[derive(Debug, Deserialize)]
 struct AddressData {
     v4: String,
-    v6: String,
 }
 
 /// Peer configuration data.
@@ -104,7 +103,6 @@ struct PeerData {
 struct EndpointData {
     host: String,
     v4: String,
-    v6: String,
 }
 
 /// Account details in config response.
@@ -290,12 +288,10 @@ impl WarpProvisioner {
                 public_key: peer.public_key,
                 endpoint_host,
                 endpoint_ipv4: peer.endpoint.v4,
-                endpoint_ipv6: peer.endpoint.v6,
                 endpoint_port,
             },
             interface: WarpInterfaceConfig {
                 address_ipv4: config_response.config.interface.addresses.v4,
-                address_ipv6: config_response.config.interface.addresses.v6,
             },
             warp_enabled: config_response.warp_enabled,
             account_type,

@@ -16,8 +16,13 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant as SmoltcpInstant;
 use std::collections::VecDeque;
 
-/// WireGuard's tunnel MTU. Packets larger than this are fragmented by smoltcp.
-const WIREGUARD_MTU: usize = 1420;
+/// Tunnel MTU. Packets larger than this are fragmented by smoltcp.
+///
+/// Conservatively set to the IPv6 minimum link MTU (1280) rather than the usual
+/// WireGuard 1420. On mobile networks the underlying L2 MTU is not guaranteed to
+/// be 1500, so the WireGuard overhead can push 1420-byte inner packets past the
+/// real path MTU and cause silent UDP drops. 1280 always fits with room to spare.
+const WIREGUARD_MTU: usize = 1280;
 
 /// A smoltcp device whose "wire" is the WireGuard transport.
 pub struct VirtualDevice {

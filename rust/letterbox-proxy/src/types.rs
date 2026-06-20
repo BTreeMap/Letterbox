@@ -64,14 +64,10 @@ pub struct WarpDiagnostics {
     pub endpoint_host: String,
     /// Endpoint IPv4 address.
     pub endpoint_ipv4: String,
-    /// Endpoint IPv6 address.
-    pub endpoint_ipv6: String,
     /// Endpoint UDP port.
     pub endpoint_port: u16,
     /// Local tunnel IPv4 address.
     pub local_address_ipv4: String,
-    /// Local tunnel IPv6 address.
-    pub local_address_ipv6: String,
     /// Whether WARP is enabled on the account.
     pub warp_enabled: bool,
     /// Account type (e.g. `free`).
