@@ -1,63 +1,101 @@
 # AGENTS.md
 
-Guidance for humans and AI agents contributing to **Letterbox**. This file
-follows the open [`AGENTS.md`](https://agents.md) convention so that any
-compatible tool — not a single vendor — can discover it.
+Letterbox is a privacy-focused Android app (Kotlin / Jetpack Compose) backed by
+two Rust crates exposed over UniFFI. Treat this repo as a monorepo: one Gradle
+module plus a Cargo workspace. Vendor-neutral by design (the open
+[`AGENTS.md`](https://agents.md) convention). Nested `AGENTS.md` files in `app/`,
+`rust/letterbox-core/`, and `rust/letterbox-proxy/` add module-local rules — the
+file closest to your working directory wins.
 
-## Project layout
+## Tooling & Commands
 
-* `app/` — Android application (Kotlin, Jetpack Compose).
-* `rust/letterbox-core/` — Core Rust crate, exposed to Android via UniFFI.
-* `rust/letterbox-proxy/` — WARP image-proxy Rust crate (tunnel, provisioning,
-  HTTP), exposed via UniFFI.
-* `docs/` — Architecture and design notes.
-* `.github/workflows/` — CI (build, lint, tests, real WARP smoke test).
+Use `cargo` for Rust and the Gradle wrapper (`./gradlew`) for Android. Never use
+a system-wide `gradle`, and never hand-edit generated artifacts.
 
-## Build & test commands
+| Task | Command |
+|------|---------|
+| Core Rust tests | `cargo test` in `rust/letterbox-core` |
+| Proxy Rust tests | `cargo test` in `rust/letterbox-proxy` |
+| Rust lint | `cargo clippy --all-targets -- -D warnings` |
+| Rust format | `cargo fmt --all` (verify with `--all -- --check`) |
+| Android unit tests | `./gradlew test --no-daemon` (auto-builds host Rust libs) |
+| Android lint | `./gradlew lint --no-daemon` |
+| Assemble APK | `./gradlew :app:assembleProdDebug` (`-PrustBuild=true` for device libs) |
+| Live WARP smoke test | `cargo test -p letterbox-proxy --test warp_real -- --ignored --nocapture` |
 
-* Rust tests: `cargo test` in each crate (`rust/letterbox-core`,
-  `rust/letterbox-proxy`).
-* Rust lint/format: `cargo clippy --all-targets -- -D warnings` and
-  `cargo fmt --all -- --check`.
-* Android unit tests: `./gradlew test` (depends on `cargoHostBuild`).
-* Real Cloudflare WARP end-to-end test (live network, non-blocking in CI):
-  `cargo test -p letterbox-proxy --test warp_real -- --ignored --nocapture`.
+`./gradlew test` triggers `cargoHostBuild`, so you never need to build the Rust
+libraries by hand before running Android tests.
 
-## Commit message standards
+## Boundaries & Constraints
 
-All hand-authored commits MUST follow the
-[Conventional Commits](https://www.conventionalcommits.org/) specification. The
-full, authoritative rules — schema, approved types, scopes, body/footer rules,
-and examples — live in the repository skill:
+* Never commit secrets, signing keystores, or WARP credentials. Keystore and
+  release wiring uses documented Gradle properties / env vars — see
+  `docs/signing.md`.
+* Do not hand-edit UniFFI-generated bindings under
+  `app/src/main/java/org/joefang/letterbox/ffi/`. Change the Rust `#[uniffi]`
+  surface in the relevant crate and regenerate instead.
+* Do not loosen lints to make code compile. `clippy` runs with `-D warnings`;
+  fix the root cause rather than adding `#[allow(...)]`.
+* Do not persist blobs with direct file writes. Use `HistoryRepository`, the
+  content-addressable store (`docs/deduplication.md`).
+* Do not run search/sort ad hoc. Go through the Room FTS4 layer
+  (`docs/full-text-search.md`).
+* Do not push tags or trigger releases unless explicitly asked — the release
+  flow lives in `.github/workflows/`.
+* Do not rewrite Renovate bot commits (the `⬆️`-prefixed ones); they
+  intentionally bypass the commit conventions below.
 
-* [`.github/skills/git-commits/SKILL.md`](.github/skills/git-commits/SKILL.md)
+## Engineering Standards (mandatory, every session)
 
-Quick reference:
+Enforced on all hand-authored Rust. Full rationale, examples, and the autonomous
+execution contract: `docs/agents/engineering-standards.md`.
+
+* **Make invalid states unrepresentable.** Encode invariants in the type system
+  so invalid states fail at compile time, not at runtime.
+* **Idiomatic error handling.** Return `Result` / `Option`; never swallow errors
+  or `unwrap()` on fallible paths outside tests.
+* **Zero-cost abstractions.** Prefer generics + traits + monomorphization over
+  `Box<dyn>`; reserve dynamic dispatch for genuine runtime polymorphism.
+* **No appeasement clones.** Do not reach for `.clone()`, `Rc`, or `Arc` just to
+  satisfy the borrow checker. Redesign ownership and data flow instead.
+* **Ruthless refactoring.** Prune dead code and rewrite unsound interfaces; the
+  app ships from `main` with no external API-stability obligation.
+* **500-line file limit.** Split any source file approaching 500 lines into
+  cohesive submodules.
+
+## Agent Operating Protocol
+
+* Operate autonomously. Resolve ambiguity by making the most reasonable
+  technical assumption, documenting it, and proceeding — do not stall for
+  permission on routine, reversible work.
+* Maintain an explicit, continuously updated task list for multi-step work.
+* Delegate discrete, context-heavy subtasks to keep the working context focused.
+* On verifiable completion, emit an explicit final status message and halt;
+  never stop silently mid-task.
+
+## Commit Standards
+
+Hand-authored commits follow [Conventional Commits](https://www.conventionalcommits.org/).
+Authoritative schema, approved types, and scopes live in the repository skill:
+[`.github/skills/git-commits/SKILL.md`](.github/skills/git-commits/SKILL.md).
 
 ```text
-<type>(<scope>): <subject>     # subject line <= 70 chars, imperative, capitalized, no trailing period
-
-<body>                          # wrap at 72 cols; explain what & why, not how
-
-<footer>                        # e.g. "Resolves #123" or "BREAKING CHANGE: ..."
+<type>(<scope>): <subject>     # <= 70 chars, imperative, capitalized, no trailing period
 ```
 
-* **Types:** `feat`, `fix`, `refactor`, `docs`, `style`, `perf`, `test`,
-  `build`, `ci`, `chore`, `revert`.
-* **Common scopes:** `proxy`, `core`, `tunnel`, `warp`, `ui`, `app`, `ffi`,
-  `ci`, `build`, `docs`.
+These standards are documentation, not a blocking gate (no commit-lint hook), so
+automated and historical commits are never blocked. Enable the optional template
+per clone with `git config commit.template .gitmessage.txt`.
 
-A git-native commit template is provided as an optional aid. Enable it per
-clone with:
+## Domain Documentation (load just-in-time)
 
-```sh
-git config commit.template .gitmessage.txt
-```
+Read the matching file only when your task touches that domain:
 
-These standards are **documentation, not a blocking gate**: there is no
-commit-lint hook or CI check that rejects non-conforming messages. This is
-deliberate, so that automated commits and historical commits are never blocked.
-
-**Exception:** automated dependency-update commits from the Renovate bot use an
-`⬆️` emoji prefix (configured in `renovate.json`) and do not follow Conventional
-Commits. This is intentional; do not rewrite bot commits.
+* Overall architecture & data flow → `docs/architecture.md`
+* Engineering standards (full) & execution contract → `docs/agents/engineering-standards.md`
+* Image proxy / WARP / WireGuard → `docs/image-proxy-design.md`, `docs/remote-images.md`
+* History dedup & content-addressable store → `docs/deduplication.md`
+* Full-text search (FTS4) → `docs/full-text-search.md`
+* Signing & versioning → `docs/signing.md`, `docs/versioning.md`
+* Dependency policy (Renovate) → `docs/renovate.md`
+* Build / test troubleshooting → `docs/troubleshooting.md`
