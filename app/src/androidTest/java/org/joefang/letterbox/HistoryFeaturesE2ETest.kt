@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
+import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
@@ -37,11 +38,17 @@ class HistoryFeaturesE2ETest {
     private lateinit var database: LetterboxDatabase
     private lateinit var scenario: ActivityScenario<MainActivity>
 
-    // Test data
+    // Test data.
+    //
+    // `displayName` mirrors `subject` to match production ingestion, where
+    // `EmailViewModel.ingestFromUri` stores the parsed subject as the display
+    // name (falling back to the filename only when the subject is blank). The
+    // history list renders `displayName`, so the on-screen text the assertions
+    // look for is the subject.
     private val email1 = HistoryItemEntity(
         id = 1,
         blobHash = "hash1",
-        displayName = "Invoice",
+        displayName = "Invoice from Amazon",
         originalUri = "content://1",
         lastAccessed = 1000,
         subject = "Invoice from Amazon",
@@ -55,7 +62,7 @@ class HistoryFeaturesE2ETest {
     private val email2 = HistoryItemEntity(
         id = 2,
         blobHash = "hash2",
-        displayName = "Meeting",
+        displayName = "Meeting with Team",
         originalUri = "content://2",
         lastAccessed = 2000,
         subject = "Meeting with Team",
@@ -69,7 +76,7 @@ class HistoryFeaturesE2ETest {
     private val email3 = HistoryItemEntity(
         id = 3,
         blobHash = "hash3",
-        displayName = "Newsletter",
+        displayName = "Weekly Newsletter",
         originalUri = "content://3",
         lastAccessed = 3000,
         subject = "Weekly Newsletter",
@@ -253,10 +260,11 @@ class HistoryFeaturesE2ETest {
         // However, the dialog is on top.
         composeTestRule.onNode(hasText("Clear") and androidx.compose.ui.test.hasClickAction()).performClick()
 
-        // Dismiss settings sheet by pressing back
-        scenario.onActivity { activity ->
-            activity.onBackPressedDispatcher.onBackPressed()
-        }
+        // Dismiss the settings sheet. The ModalBottomSheet lives in its own
+        // window with its own back dispatcher, so pressing back on the activity's
+        // dispatcher would finish the activity instead of closing the sheet.
+        // Espresso.pressBack() targets the focused (sheet) window and dismisses it.
+        Espresso.pressBack()
 
         // Verify empty state
         composeTestRule.waitUntil(timeoutMillis = 5000) {
