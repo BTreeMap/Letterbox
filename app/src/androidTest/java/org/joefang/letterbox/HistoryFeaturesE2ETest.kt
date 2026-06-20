@@ -86,6 +86,9 @@ class HistoryFeaturesE2ETest {
         database = LetterboxDatabase.getInstance(context)
 
         runBlocking {
+            // Mark onboarding complete so the main UI is reachable.
+            TestPreferences.seedOnboarded(context)
+
             // Clear existing data
             database.historyItemDao().deleteAll()
 

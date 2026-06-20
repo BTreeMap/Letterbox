@@ -48,6 +48,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -77,8 +79,14 @@ import org.joefang.letterbox.data.LetterboxDatabase
 import org.joefang.letterbox.data.SortDirection
 import org.joefang.letterbox.data.SortField
 import org.joefang.letterbox.data.UserPreferencesRepository
+import org.joefang.letterbox.data.ImageProxyService
 import org.joefang.letterbox.ui.EmailDetailScreen
+import org.joefang.letterbox.ui.DiagnosticsDialog
+import org.joefang.letterbox.ui.OnboardingScreen
+import org.joefang.letterbox.ui.UpdateAvailableDialog
+import org.joefang.letterbox.ui.UpToDateDialog
 import org.joefang.letterbox.ui.theme.LetterboxTheme
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
@@ -106,6 +114,18 @@ private object TimeConstants {
  */
 private object FileConstants {
     const val MAX_FILENAME_LENGTH = 50
+}
+
+/** Minimum interval between automatic update checks (24 hours). */
+private const val UPDATE_CHECK_INTERVAL_MS = 86_400_000L
+
+/** UI state for the manual "Check for updates" flow. */
+private sealed interface UpdateUiState {
+    data object Idle : UpdateUiState
+    data object Checking : UpdateUiState
+    data class UpToDate(val currentVersion: String) : UpdateUiState
+    data class Available(val result: org.joefang.letterbox.ffi.proxy.UpdateResult) : UpdateUiState
+    data class Failed(val message: String) : UpdateUiState
 }
 
 class MainActivity : ComponentActivity() {
@@ -148,6 +168,30 @@ class MainActivity : ComponentActivity() {
                     // Collect preferences
                     val enablePrivacyProxy by preferencesRepository.enablePrivacyProxy.collectAsState(initial = true)
                     val alwaysLoadRemoteImages by preferencesRepository.alwaysLoadRemoteImages.collectAsState(initial = false)
+                    val cloudflareTermsAccepted by preferencesRepository.cloudflareTermsAccepted.collectAsState(initial = false)
+                    val onboardingCompleted by preferencesRepository.onboardingCompleted.collectAsState(initial = true)
+                    val scope = rememberCoroutineScope()
+
+                    // First-launch onboarding establishes network consent.
+                    if (!onboardingCompleted) {
+                        OnboardingScreen(
+                            onAccept = {
+                                scope.launch { preferencesRepository.completeOnboarding(acceptedTerms = true) }
+                            },
+                            onDecline = {
+                                scope.launch { preferencesRepository.completeOnboarding(acceptedTerms = false) }
+                            }
+                        )
+                        return@Surface
+                    }
+
+                    // Throttled, silent update check on launch (once per day),
+                    // only when the user has consented to tunnelled networking.
+                    if (cloudflareTermsAccepted) {
+                        LaunchedEffect(Unit) {
+                            maybeAutoCheckForUpdate(snackbarHostState)
+                        }
+                    }
 
                     // Show error message if any
                     LaunchedEffect(uiState.errorMessage) {
@@ -193,7 +237,8 @@ class MainActivity : ComponentActivity() {
                                 onShowImages = {
                                     viewModel.enableSessionImageLoading()
                                 },
-                                useProxy = enablePrivacyProxy
+                                useProxy = enablePrivacyProxy,
+                                cloudflareTermsAccepted = cloudflareTermsAccepted
                             )
                         }
                         else -> {
@@ -320,6 +365,36 @@ class MainActivity : ComponentActivity() {
             viewModel.setError("Failed to share email: ${e.message}")
         }
     }
+
+    /**
+     * Silently check GitHub for a newer release at most once per day, tunnelled
+     * through WARP. If an update is found, surface a snackbar linking to the
+     * release page. Failures are ignored so a flaky network never disrupts launch.
+     */
+    private suspend fun maybeAutoCheckForUpdate(snackbarHostState: SnackbarHostState) {
+        val now = System.currentTimeMillis()
+        val last = preferencesRepository.lastUpdateCheckEpochMillis.first()
+        if (now - last < UPDATE_CHECK_INTERVAL_MS) return
+
+        val result = try {
+            ImageProxyService.getInstance(this).checkForUpdate(BuildConfig.VERSION_NAME)
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Auto update check failed: ${e.message}")
+            return
+        }
+        preferencesRepository.setLastUpdateCheck(now)
+
+        if (result.updateAvailable) {
+            val action = snackbarHostState.showSnackbar(
+                message = "Update available: ${result.latestVersion}",
+                actionLabel = "View",
+                duration = SnackbarDuration.Long
+            )
+            if (action == SnackbarResult.ActionPerformed && result.releaseUrl.isNotBlank()) {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.releaseUrl)))
+            }
+        }
+    }
 }
 
 @Composable
@@ -367,6 +442,9 @@ private fun LetterboxScaffold(
     val enablePrivacyProxy by preferencesRepository.enablePrivacyProxy.collectAsState(initial = false)
     val cloudflareTermsAccepted by preferencesRepository.cloudflareTermsAccepted.collectAsState(initial = false)
     var showCloudflareTermsDialog by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
+    var updateUiState by remember { mutableStateOf<UpdateUiState>(UpdateUiState.Idle) }
+    val context = LocalContext.current
     
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -624,9 +702,59 @@ private fun LetterboxScaffold(
                 onClearCache = {
                     showSettingsSheet = false
                     showClearCacheDialog = true
+                },
+                appVersion = BuildConfig.VERSION_NAME,
+                onOpenDiagnostics = {
+                    showSettingsSheet = false
+                    showDiagnostics = true
+                },
+                onCheckForUpdate = {
+                    if (updateUiState != UpdateUiState.Checking) {
+                        updateUiState = UpdateUiState.Checking
+                        scope.launch {
+                            updateUiState = try {
+                                val result = ImageProxyService.getInstance(context)
+                                    .checkForUpdate(BuildConfig.VERSION_NAME)
+                                preferencesRepository.setLastUpdateCheck(System.currentTimeMillis())
+                                if (result.updateAvailable) {
+                                    UpdateUiState.Available(result)
+                                } else {
+                                    UpdateUiState.UpToDate(BuildConfig.VERSION_NAME)
+                                }
+                            } catch (e: Exception) {
+                                UpdateUiState.Failed(e.message ?: "Update check failed")
+                            }
+                        }
+                    }
                 }
             )
         }
+    }
+
+    // WARP diagnostics dialog
+    if (showDiagnostics) {
+        DiagnosticsDialog(onDismiss = { showDiagnostics = false })
+    }
+
+    // Update check dialogs
+    when (val update = updateUiState) {
+        is UpdateUiState.Available -> UpdateAvailableDialog(
+            result = update.result,
+            onDismiss = { updateUiState = UpdateUiState.Idle }
+        )
+        is UpdateUiState.UpToDate -> UpToDateDialog(
+            currentVersion = update.currentVersion,
+            onDismiss = { updateUiState = UpdateUiState.Idle }
+        )
+        is UpdateUiState.Failed -> AlertDialog(
+            onDismissRequest = { updateUiState = UpdateUiState.Idle },
+            title = { Text("Update check failed") },
+            text = { Text(update.message) },
+            confirmButton = {
+                TextButton(onClick = { updateUiState = UpdateUiState.Idle }) { Text("OK") }
+            }
+        )
+        UpdateUiState.Checking, UpdateUiState.Idle -> Unit
     }
     
     // Cloudflare WARP Terms of Service dialog
@@ -755,7 +883,10 @@ private fun SettingsContent(
     enablePrivacyProxy: Boolean,
     cloudflareTermsAccepted: Boolean,
     onEnablePrivacyProxyChange: (Boolean) -> Unit,
-    onClearCache: () -> Unit
+    onClearCache: () -> Unit,
+    appVersion: String,
+    onOpenDiagnostics: () -> Unit,
+    onCheckForUpdate: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -878,7 +1009,69 @@ private fun SettingsContent(
                 )
             }
         }
-        
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        // About & developer section
+        Text(
+            text = "About",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Version",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text(
+                    text = appVersion,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            TextButton(
+                onClick = onCheckForUpdate,
+                modifier = Modifier.testTag("checkForUpdatesButton")
+            ) {
+                Text("Check for updates")
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "WARP diagnostics",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text(
+                    text = "Inspect the WireGuard tunnel and connection state",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            TextButton(
+                onClick = onOpenDiagnostics,
+                modifier = Modifier.testTag("openDiagnosticsButton")
+            ) {
+                Text("Open")
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
     }
 }

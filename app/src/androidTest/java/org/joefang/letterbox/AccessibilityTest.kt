@@ -16,6 +16,7 @@ import org.joefang.letterbox.data.LetterboxDatabase
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 
 /**
@@ -29,8 +30,12 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class AccessibilityTest {
 
-    @get:Rule
     val composeTestRule = createAndroidComposeRule<MainActivity>()
+
+    // Seed onboarding completion before the activity launches so the main UI is
+    // shown immediately instead of the first-launch consent screen.
+    @get:Rule
+    val rules: RuleChain = RuleChain.outerRule(OnboardingRule()).around(composeTestRule)
 
     @Before
     fun setup() {

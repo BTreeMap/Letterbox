@@ -84,6 +84,7 @@ Content-Type: text/html; charset=UTF-8
         
         // Reset preferences
         runBlocking {
+            preferencesRepository.completeOnboarding(acceptedTerms = true)
             preferencesRepository.setAlwaysLoadRemoteImages(false)
             preferencesRepository.setEnablePrivacyProxy(true)
             preferencesRepository.setCloudflareTermsAccepted(true)

@@ -113,7 +113,8 @@ fun EmailDetailScreen(
     hasRemoteImages: Boolean = false,
     sessionLoadImages: Boolean = false,
     onShowImages: (() -> Unit)? = null,
-    useProxy: Boolean = true
+    useProxy: Boolean = true,
+    cloudflareTermsAccepted: Boolean = false
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showDetailsDialog by remember { mutableStateOf(false) }
@@ -226,14 +227,15 @@ fun EmailDetailScreen(
             }
 
             // WebView for HTML content
-            // When sessionLoadImages is true and useProxy is true, images are loaded 
-            // through the WARP privacy proxy. Otherwise, images are blocked by default.
+            // Remote images only load over the network once the user has accepted
+            // the Cloudflare WARP terms (network consent) AND opted to show images;
+            // they are then fetched through the WARP privacy proxy.
             val processedHtml = email.bodyHtml ?: "<p>No content available</p>"
-            
+
             EmailWebView(
                 html = processedHtml,
                 getResource = email.getResource,
-                allowNetworkLoads = sessionLoadImages,
+                allowNetworkLoads = sessionLoadImages && cloudflareTermsAccepted,
                 useProxy = useProxy,
                 onLinkLongPress = { rawUrl ->
                     val trimmedRaw = rawUrl.trim()

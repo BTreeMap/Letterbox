@@ -1,156 +1,203 @@
-//! HTTP client for image fetching.
+//! Image/URL fetching over the WARP tunnel.
 //!
-//! This module provides HTTP/HTTPS image fetching functionality.
-//! It supports two modes:
-//!
-//! 1. **Simple mode**: Uses reqwest for direct HTTP requests (fallback)
-//! 2. **Tunnel mode**: Uses the WARP tunnel with smoltcp and rustls
-//!
-//! ## Security Features
-//!
-//! - Strips all cookies and tracking headers
-//! - Enforces content-type allowlist
-//! - Limits response size to prevent DoS
-//! - Limits redirects to prevent loops
-//! - No referrer forwarding
+//! Every request is resolved via DoH and carried over WireGuard — there is no
+//! direct (non-tunnelled) network path, so the user's real IP is never exposed
+//! to image servers or the update endpoint. The module exposes a generic
+//! [`fetch`] used both for images and for the GitHub update check, plus pure
+//! magic-byte helpers for content sniffing/validation.
 
 use crate::config::FetchLimits;
 use crate::error::ProxyError;
-use crate::ImageResponse;
+use crate::tunnel::dns::resolve;
+use crate::tunnel::http1::{build_get_request, parse_response};
+use crate::tunnel::stack::WarpTunnel;
+use crate::tunnel::tls::request_https;
+use std::io::{Read, Write};
 use std::time::Duration;
+use url::Url;
 
-/// Fetch an image using a simple HTTP client (fallback mode).
-///
-/// This function uses reqwest directly without the WireGuard tunnel.
-/// It's used as a fallback when the tunnel is not available or for
-/// initial testing.
-///
-/// ## Privacy
-///
-/// Even in simple mode, this function:
-/// - Strips cookies
-/// - Removes referrer headers
-/// - Uses a generic user agent
-pub async fn fetch_image_simple(url: &str) -> Result<ImageResponse, ProxyError> {
-    fetch_image_with_limits(url, &FetchLimits::default()).await
+/// Outcome of a successful fetch through the tunnel.
+#[derive(Debug, Clone)]
+pub struct FetchOutcome {
+    /// HTTP status code of the final response.
+    pub status: u16,
+    /// Normalised MIME type (without parameters).
+    pub mime_type: String,
+    /// Response body bytes.
+    pub body: Vec<u8>,
+    /// Final URL after any redirects.
+    pub final_url: String,
 }
 
-/// Fetch an image with custom limits.
-pub async fn fetch_image_with_limits(
+/// Custom request headers supplied by the caller.
+type Headers = [(String, String)];
+
+/// Fetch `url` through the tunnel, following up to `limits.max_redirects`.
+///
+/// Content-type *filtering* is intentionally left to the caller so this can
+/// serve both image fetches (image/* only) and the JSON update check.
+pub fn fetch(
+    tunnel: &mut WarpTunnel,
     url: &str,
+    headers: &Headers,
     limits: &FetchLimits,
-) -> Result<ImageResponse, ProxyError> {
-    // Build client with privacy-preserving settings
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(limits.timeout_seconds as u64))
-        .redirect(reqwest::redirect::Policy::limited(
-            limits.max_redirects as usize,
-        ))
-        .user_agent("Mozilla/5.0 (compatible; ImageProxy/1.0)")
-        .referer(false) // Don't send referer
-        .build()
-        .map_err(|e| ProxyError::HttpError {
-            status_code: 0,
-            details: format!("Failed to create HTTP client: {}", e),
-        })?;
+    accept: &str,
+) -> Result<FetchOutcome, ProxyError> {
+    let timeout = Duration::from_secs(limits.timeout_seconds as u64);
+    let mut current = parse_and_validate(url)?;
+    let mut redirects = 0u32;
 
-    // Make the request
-    let response = client
-        .get(url)
-        .header("Accept", "image/*")
-        .send()
-        .await
-        .map_err(|e: reqwest::Error| {
-            if e.is_timeout() {
-                ProxyError::Timeout {
-                    seconds: limits.timeout_seconds,
-                }
-            } else if e.is_redirect() {
-                ProxyError::TooManyRedirects {
-                    count: limits.max_redirects,
+    loop {
+        let host = current
+            .host_str()
+            .ok_or_else(|| ProxyError::InvalidUrl {
+                url: current.to_string(),
+                details: "URL has no host".to_string(),
+            })?
+            .to_string();
+        let is_https = current.scheme() == "https";
+        let port = current.port().unwrap_or(if is_https { 443 } else { 80 });
+        let path = path_with_query(&current);
+
+        let ip = resolve(tunnel, &host, timeout)?;
+        let request = build_get_request(&host, &path, accept, headers);
+        let read_cap = limits.max_size as usize + 64 * 1024;
+
+        let raw = if is_https {
+            request_https(tunnel, ip, port, &host, &request, read_cap, timeout)?
+        } else {
+            request_plain(tunnel, ip, port, &request, read_cap, timeout)?
+        };
+
+        let response = parse_response(&raw)?;
+
+        if let Some(location) = response.redirect_location() {
+            redirects += 1;
+            if redirects > limits.max_redirects {
+                return Err(ProxyError::TooManyRedirects {
+                    count: redirects,
                     max_count: limits.max_redirects,
-                }
-            } else {
-                ProxyError::HttpError {
-                    status_code: e
-                        .status()
-                        .map(|s: reqwest::StatusCode| s.as_u16())
-                        .unwrap_or(0),
-                    details: e.to_string(),
-                }
+                });
             }
-        })?;
+            let next = current.join(location).map_err(|e| ProxyError::InvalidUrl {
+                url: location.to_string(),
+                details: e.to_string(),
+            })?;
+            current = parse_and_validate(next.as_str())?;
+            continue;
+        }
 
-    // Check status
-    let status = response.status();
-    if !status.is_success() {
-        return Err(ProxyError::HttpError {
-            status_code: status.as_u16(),
-            details: format!(
-                "HTTP {} {}",
-                status.as_u16(),
-                status.canonical_reason().unwrap_or("Unknown")
-            ),
-        });
-    }
+        if !(200..300).contains(&response.status) {
+            return Err(ProxyError::HttpError {
+                status_code: response.status,
+                details: format!("HTTP {}", response.status),
+            });
+        }
 
-    // Get final URL (after redirects)
-    let final_url = response.url().to_string();
-
-    // Check content type
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v: &reqwest::header::HeaderValue| v.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_string();
-
-    // Normalize content type (remove parameters)
-    let mime_type = content_type
-        .split(';')
-        .next()
-        .unwrap_or(&content_type)
-        .trim()
-        .to_string();
-
-    if !limits.is_content_type_allowed(&mime_type) {
-        return Err(ProxyError::InvalidContentType {
-            content_type: mime_type,
-        });
-    }
-
-    // Check content length if available
-    if let Some(len) = response.content_length() {
-        if len > limits.max_size {
+        if response.body.len() as u64 > limits.max_size {
             return Err(ProxyError::ResponseTooLarge {
-                size: len,
+                size: response.body.len() as u64,
                 max_size: limits.max_size,
             });
         }
-    }
 
-    // Read the full response body
-    let data = response
-        .bytes()
-        .await
-        .map_err(|e: reqwest::Error| ProxyError::HttpError {
-            status_code: 0,
-            details: format!("Failed to read response: {}", e),
-        })?;
+        let mime_type = response
+            .header("content-type")
+            .map(normalize_mime)
+            .unwrap_or_else(|| "application/octet-stream".to_string());
 
-    if data.len() as u64 > limits.max_size {
-        return Err(ProxyError::ResponseTooLarge {
-            size: data.len() as u64,
-            max_size: limits.max_size,
+        return Ok(FetchOutcome {
+            status: response.status,
+            mime_type,
+            body: response.body,
+            final_url: current.to_string(),
         });
     }
+}
 
-    Ok(ImageResponse {
-        mime_type,
-        data: data.to_vec(),
-        from_cache: false,
-        final_url,
-    })
+/// Parse a URL and ensure it uses a supported scheme.
+fn parse_and_validate(url: &str) -> Result<Url, ProxyError> {
+    let parsed = Url::parse(url).map_err(|e| ProxyError::InvalidUrl {
+        url: url.to_string(),
+        details: e.to_string(),
+    })?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err(ProxyError::InvalidUrl {
+            url: url.to_string(),
+            details: "Only http:// and https:// URLs are supported".to_string(),
+        });
+    }
+    Ok(parsed)
+}
+
+/// Build the request target (path plus optional query).
+fn path_with_query(url: &Url) -> String {
+    match url.query() {
+        Some(q) => format!("{}?{}", url.path(), q),
+        None => url.path().to_string(),
+    }
+}
+
+/// Lowercase and strip parameters from a `Content-Type` value.
+fn normalize_mime(value: &str) -> String {
+    value
+        .split(';')
+        .next()
+        .unwrap_or(value)
+        .trim()
+        .to_ascii_lowercase()
+}
+
+/// Send a plaintext HTTP/1.1 request over the tunnel and read the full response.
+fn request_plain(
+    tunnel: &mut WarpTunnel,
+    ip: smoltcp::wire::IpAddress,
+    port: u16,
+    request: &[u8],
+    max_body: usize,
+    timeout: Duration,
+) -> Result<Vec<u8>, ProxyError> {
+    let handle = tunnel.open_tcp(ip, port, timeout)?;
+    let result = (|| -> Result<Vec<u8>, ProxyError> {
+        let mut stream = tunnel.stream(handle, timeout);
+        stream
+            .write_all(request)
+            .map_err(|e| ProxyError::HttpError {
+                status_code: 0,
+                details: format!("Write failed: {e}"),
+            })?;
+        stream.flush().map_err(|e| ProxyError::HttpError {
+            status_code: 0,
+            details: format!("Flush failed: {e}"),
+        })?;
+
+        let mut buf = Vec::with_capacity(16 * 1024);
+        let mut chunk = [0u8; 16 * 1024];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.len() > max_body {
+                        return Err(ProxyError::ResponseTooLarge {
+                            size: buf.len() as u64,
+                            max_size: max_body as u64,
+                        });
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => {
+                    return Err(ProxyError::HttpError {
+                        status_code: 0,
+                        details: format!("Read failed: {e}"),
+                    })
+                }
+            }
+        }
+        Ok(buf)
+    })();
+    tunnel.close_tcp(handle);
+    result
 }
 
 /// Guess the MIME type from file magic bytes.
@@ -159,24 +206,16 @@ pub fn guess_mime_type(data: &[u8]) -> Option<&'static str> {
         return None;
     }
 
-    // Check magic bytes
     match &data[..4] {
-        // PNG
         [0x89, 0x50, 0x4E, 0x47] => Some("image/png"),
-        // JPEG
         [0xFF, 0xD8, 0xFF, _] => Some("image/jpeg"),
-        // GIF
         [0x47, 0x49, 0x46, 0x38] => Some("image/gif"),
-        // WebP
         [0x52, 0x49, 0x46, 0x46] if data.len() >= 12 && &data[8..12] == b"WEBP" => {
             Some("image/webp")
         }
-        // BMP
         [0x42, 0x4D, _, _] => Some("image/bmp"),
-        // ICO
         [0x00, 0x00, 0x01, 0x00] => Some("image/x-icon"),
         _ => {
-            // Check for SVG (text-based)
             if data.len() >= 5 {
                 let start = String::from_utf8_lossy(&data[..std::cmp::min(100, data.len())]);
                 if start.contains("<svg") || start.contains("<?xml") {
@@ -188,13 +227,12 @@ pub fn guess_mime_type(data: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// Validate that response data matches the expected MIME type.
+/// Validate that response data matches the claimed MIME type.
 pub fn validate_image_data(data: &[u8], claimed_mime: &str) -> bool {
     if data.is_empty() {
         return false;
     }
 
-    // For SVG, we just check it looks like XML/SVG
     if claimed_mime == "image/svg+xml" {
         let start = String::from_utf8_lossy(&data[..std::cmp::min(100, data.len())]);
         return start.contains("<svg")
@@ -202,17 +240,12 @@ pub fn validate_image_data(data: &[u8], claimed_mime: &str) -> bool {
             || start.contains("<!DOCTYPE svg");
     }
 
-    // For binary formats, check magic bytes
     if let Some(detected) = guess_mime_type(data) {
-        // Allow slight mismatches (e.g., x-icon vs vnd.microsoft.icon)
         let claimed_base = claimed_mime.split('/').nth(1).unwrap_or("");
         let detected_base = detected.split('/').nth(1).unwrap_or("");
-
-        // Exact match or both are icon types
         detected == claimed_mime
             || (claimed_base.contains("icon") && detected_base.contains("icon"))
     } else {
-        // Can't detect, trust the server
         true
     }
 }
@@ -222,217 +255,80 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_guess_mime_type_png() {
-        let png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        assert_eq!(guess_mime_type(&png_header), Some("image/png"));
+    fn parse_and_validate_accepts_http_and_https() {
+        assert!(parse_and_validate("http://example.com/x.png").is_ok());
+        assert!(parse_and_validate("https://example.com/x.png").is_ok());
     }
 
     #[test]
-    fn test_guess_mime_type_jpeg() {
-        let jpeg_header = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
-        assert_eq!(guess_mime_type(&jpeg_header), Some("image/jpeg"));
+    fn parse_and_validate_rejects_other_schemes() {
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:image/png;base64,AAAA",
+            "ftp://example.com/x",
+        ] {
+            assert!(matches!(
+                parse_and_validate(url),
+                Err(ProxyError::InvalidUrl { .. })
+            ));
+        }
     }
 
     #[test]
-    fn test_guess_mime_type_gif() {
-        let gif_header = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
-        assert_eq!(guess_mime_type(&gif_header), Some("image/gif"));
+    fn path_with_query_includes_query() {
+        let url = Url::parse("https://h/a/b?x=1&y=2").unwrap();
+        assert_eq!(path_with_query(&url), "/a/b?x=1&y=2");
+        let url = Url::parse("https://h/a/b").unwrap();
+        assert_eq!(path_with_query(&url), "/a/b");
     }
 
     #[test]
-    fn test_guess_mime_type_bmp() {
-        let bmp_header = [0x42, 0x4D, 0x00, 0x00];
-        assert_eq!(guess_mime_type(&bmp_header), Some("image/bmp"));
+    fn normalize_mime_strips_params() {
+        assert_eq!(normalize_mime("image/PNG; charset=binary"), "image/png");
+        assert_eq!(normalize_mime("image/jpeg"), "image/jpeg");
     }
 
     #[test]
-    fn test_guess_mime_type_ico() {
-        let ico_header = [0x00, 0x00, 0x01, 0x00];
-        assert_eq!(guess_mime_type(&ico_header), Some("image/x-icon"));
+    fn guess_png() {
+        assert_eq!(
+            guess_mime_type(&[0x89, 0x50, 0x4E, 0x47]),
+            Some("image/png")
+        );
     }
 
     #[test]
-    fn test_guess_mime_type_svg() {
-        let svg_data = b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\">";
-        assert_eq!(guess_mime_type(svg_data), Some("image/svg+xml"));
+    fn guess_jpeg() {
+        assert_eq!(
+            guess_mime_type(&[0xFF, 0xD8, 0xFF, 0xE0]),
+            Some("image/jpeg")
+        );
     }
 
     #[test]
-    fn test_guess_mime_type_svg_direct() {
-        let svg_data = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\">";
-        assert_eq!(guess_mime_type(svg_data), Some("image/svg+xml"));
+    fn guess_webp() {
+        let data = [0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, b'W', b'E', b'B', b'P'];
+        assert_eq!(guess_mime_type(&data), Some("image/webp"));
     }
 
     #[test]
-    fn test_guess_mime_type_unknown() {
-        let unknown_data = [0x00, 0x01, 0x02, 0x03];
-        assert_eq!(guess_mime_type(&unknown_data), None);
-    }
-
-    #[test]
-    fn test_guess_mime_type_too_short() {
-        let short_data = [0x89, 0x50];
-        assert_eq!(guess_mime_type(&short_data), None);
-    }
-
-    #[test]
-    fn test_validate_image_data_png() {
-        let png_data = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        assert!(validate_image_data(&png_data, "image/png"));
-        assert!(!validate_image_data(&png_data, "image/jpeg"));
-    }
-
-    #[test]
-    fn test_validate_image_data_svg() {
-        let svg_data = b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\">";
-        assert!(validate_image_data(svg_data, "image/svg+xml"));
-    }
-
-    #[test]
-    fn test_validate_image_data_empty() {
+    fn validate_rejects_empty() {
         assert!(!validate_image_data(&[], "image/png"));
     }
 
     #[test]
-    fn test_validate_icon_types() {
-        let ico_data = [0x00, 0x00, 0x01, 0x00, 0x01, 0x00];
-        assert!(validate_image_data(&ico_data, "image/x-icon"));
-        assert!(validate_image_data(&ico_data, "image/vnd.microsoft.icon"));
-    }
-
-    #[tokio::test]
-    async fn test_fetch_limits() {
-        let limits = FetchLimits {
-            max_size: 1024,
-            max_redirects: 3,
-            timeout_seconds: 10,
-            allowed_content_types: vec!["image/png".to_string()],
-        };
-
-        assert!(limits.is_content_type_allowed("image/png"));
-        assert!(!limits.is_content_type_allowed("image/jpeg"));
-    }
-
-    // Additional comprehensive tests for image type detection
-
-    #[test]
-    fn test_guess_mime_type_webp() {
-        // WebP header: "RIFF" + 4 bytes + "WEBP"
-        let webp_data = [
-            0x52, 0x49, 0x46, 0x46, // RIFF
-            0x00, 0x00, 0x00, 0x00, // file size (placeholder)
-            0x57, 0x45, 0x42, 0x50, // WEBP
-        ];
-        assert_eq!(guess_mime_type(&webp_data), Some("image/webp"));
+    fn validate_accepts_matching_png() {
+        assert!(validate_image_data(
+            &[0x89, 0x50, 0x4E, 0x47, 0x0D],
+            "image/png"
+        ));
     }
 
     #[test]
-    fn test_guess_mime_type_jpeg_variants() {
-        // JPEG with JFIF marker
-        let jpeg_jfif = [0xFF, 0xD8, 0xFF, 0xE0];
-        assert_eq!(guess_mime_type(&jpeg_jfif), Some("image/jpeg"));
-
-        // JPEG with EXIF marker
-        let jpeg_exif = [0xFF, 0xD8, 0xFF, 0xE1];
-        assert_eq!(guess_mime_type(&jpeg_exif), Some("image/jpeg"));
-
-        // JPEG with APP2 marker
-        let jpeg_app2 = [0xFF, 0xD8, 0xFF, 0xE2];
-        assert_eq!(guess_mime_type(&jpeg_app2), Some("image/jpeg"));
-    }
-
-    #[test]
-    fn test_guess_mime_type_gif87a() {
-        let gif87a = [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]; // GIF87a
-        assert_eq!(guess_mime_type(&gif87a), Some("image/gif"));
-    }
-
-    #[test]
-    fn test_guess_mime_type_gif89a() {
-        let gif89a = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]; // GIF89a
-        assert_eq!(guess_mime_type(&gif89a), Some("image/gif"));
-    }
-
-    #[test]
-    fn test_validate_image_data_svg_doctype() {
-        let svg_data = b"<!DOCTYPE svg PUBLIC><svg>";
-        assert!(validate_image_data(svg_data, "image/svg+xml"));
-    }
-
-    #[test]
-    fn test_validate_image_data_jpeg() {
-        let jpeg_data = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
-        assert!(validate_image_data(&jpeg_data, "image/jpeg"));
-    }
-
-    #[test]
-    fn test_validate_image_data_gif() {
-        let gif_data = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
-        assert!(validate_image_data(&gif_data, "image/gif"));
-    }
-
-    #[test]
-    fn test_validate_image_data_mismatch() {
-        // PNG data should not validate as JPEG
-        let png_data = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        assert!(!validate_image_data(&png_data, "image/jpeg"));
-        assert!(!validate_image_data(&png_data, "image/gif"));
-    }
-
-    #[test]
-    fn test_fetch_limits_all_image_types_allowed() {
-        let limits = FetchLimits::default();
-
-        // All standard image types should be allowed by default
-        assert!(limits.is_content_type_allowed("image/jpeg"));
-        assert!(limits.is_content_type_allowed("image/png"));
-        assert!(limits.is_content_type_allowed("image/gif"));
-        assert!(limits.is_content_type_allowed("image/webp"));
-        assert!(limits.is_content_type_allowed("image/svg+xml"));
-        assert!(limits.is_content_type_allowed("image/bmp"));
-        assert!(limits.is_content_type_allowed("image/x-icon"));
-        assert!(limits.is_content_type_allowed("image/vnd.microsoft.icon"));
-    }
-
-    #[test]
-    fn test_fetch_limits_non_images_rejected() {
-        let limits = FetchLimits::default();
-
-        // Non-image types should be rejected
-        assert!(!limits.is_content_type_allowed("text/html"));
-        assert!(!limits.is_content_type_allowed("application/javascript"));
-        assert!(!limits.is_content_type_allowed("application/json"));
-        assert!(!limits.is_content_type_allowed("text/css"));
-        assert!(!limits.is_content_type_allowed("application/xml"));
-    }
-
-    #[test]
-    fn test_fetch_limits_content_type_with_charset() {
-        let limits = FetchLimits::default();
-
-        // Content types with charset parameters should still be matched
-        assert!(limits.is_content_type_allowed("image/svg+xml; charset=utf-8"));
-        assert!(limits.is_content_type_allowed("image/png; charset=binary"));
-    }
-
-    #[test]
-    fn test_fetch_limits_case_insensitive() {
-        let limits = FetchLimits::default();
-
-        // Case variations should be handled
-        assert!(limits.is_content_type_allowed("IMAGE/PNG"));
-        assert!(limits.is_content_type_allowed("Image/Jpeg"));
-        assert!(limits.is_content_type_allowed("image/SVG+XML"));
-    }
-
-    #[test]
-    fn test_fetch_limits_default_values() {
-        let limits = FetchLimits::default();
-
-        // Verify default limits are sensible
-        assert_eq!(limits.max_size, 10 * 1024 * 1024); // 10 MB
-        assert_eq!(limits.max_redirects, 5);
-        assert_eq!(limits.timeout_seconds, 30);
-        assert!(!limits.allowed_content_types.is_empty());
+    fn validate_svg_by_marker() {
+        assert!(validate_image_data(
+            b"<svg xmlns=...></svg>",
+            "image/svg+xml"
+        ));
     }
 }

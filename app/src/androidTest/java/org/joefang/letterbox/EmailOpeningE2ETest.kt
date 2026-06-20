@@ -11,6 +11,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -47,6 +48,10 @@ class EmailOpeningE2ETest {
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
+
+        // Mark onboarding complete so the main UI is reachable without the
+        // first-launch network-consent screen.
+        runBlocking { TestPreferences.seedOnboarded(context) }
         
         // Copy test EML from test APK assets to a location accessible via FileProvider
         // Note: Test assets are in the test APK, not the application APK, so we need

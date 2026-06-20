@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -46,6 +47,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val KEY_ENABLE_PRIVACY_PROXY = booleanPreferencesKey("enable_privacy_proxy")
         private val KEY_PROXY_MODE = stringPreferencesKey("proxy_mode")
         private val KEY_CLOUDFLARE_TERMS_ACCEPTED = booleanPreferencesKey("cloudflare_terms_accepted")
+        private val KEY_ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
+        private val KEY_LAST_UPDATE_CHECK = longPreferencesKey("last_update_check_epoch_millis")
     }
     
     /**
@@ -81,6 +84,26 @@ class UserPreferencesRepository(private val context: Context) {
     val cloudflareTermsAccepted: Flow<Boolean> = context.dataStore.data
         .map { preferences ->
             preferences[KEY_CLOUDFLARE_TERMS_ACCEPTED] ?: false
+        }
+
+    /**
+     * Flow of whether the first-launch onboarding has been completed.
+     *
+     * Completing onboarding implies the user has agreed to the Cloudflare WARP
+     * terms, since continuing past the onboarding screen constitutes acceptance.
+     */
+    val onboardingCompleted: Flow<Boolean> = context.dataStore.data
+        .map { preferences ->
+            preferences[KEY_ONBOARDING_COMPLETED] ?: false
+        }
+
+    /**
+     * Flow of the epoch-millis timestamp of the last successful update check,
+     * or 0 if an update check has never run.
+     */
+    val lastUpdateCheckEpochMillis: Flow<Long> = context.dataStore.data
+        .map { preferences ->
+            preferences[KEY_LAST_UPDATE_CHECK] ?: 0L
         }
     
     /**
@@ -128,6 +151,28 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { preferences ->
             preferences[KEY_CLOUDFLARE_TERMS_ACCEPTED] = true
             preferences[KEY_ENABLE_PRIVACY_PROXY] = true
+        }
+    }
+
+    /**
+     * Complete first-launch onboarding.
+     *
+     * @param acceptedTerms whether the user agreed to the Cloudflare WARP terms
+     * (true when they continue into the app, false if they opt out of network features).
+     */
+    suspend fun completeOnboarding(acceptedTerms: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_ONBOARDING_COMPLETED] = true
+            preferences[KEY_CLOUDFLARE_TERMS_ACCEPTED] = acceptedTerms
+        }
+    }
+
+    /**
+     * Record the timestamp of a completed update check.
+     */
+    suspend fun setLastUpdateCheck(epochMillis: Long) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_LAST_UPDATE_CHECK] = epochMillis
         }
     }
 }

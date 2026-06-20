@@ -635,18 +635,24 @@ internal object IntegrityCheckingUniffiLib {
         uniffiCheckContractApiVersion(this)
         uniffiCheckApiChecksums(this)
     }
+    external fun uniffi_letterbox_proxy_checksum_func_proxy_check_for_update(
+    ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_clear_cache(
-    ): Short
+    ): Int
+    external fun uniffi_letterbox_proxy_checksum_func_proxy_diagnostics(
+    ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_fetch_image(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch(
-    ): Short
+    ): Int
+    external fun uniffi_letterbox_proxy_checksum_func_proxy_fetch_url(
+    ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_init(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_shutdown(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_status(
-    ): Short
+    ): Int
     external fun ffi_letterbox_proxy_uniffi_contract_version(
     ): Int
 
@@ -660,11 +666,17 @@ internal object UniffiLib {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "letterbox_proxy"))
         
     }
+    external fun uniffi_letterbox_proxy_fn_func_proxy_check_for_update(`currentVersion`: RustBuffer.ByValue,`repo`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_letterbox_proxy_fn_func_proxy_clear_cache(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_letterbox_proxy_fn_func_proxy_diagnostics(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_letterbox_proxy_fn_func_proxy_fetch_image(`url`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_proxy_fn_func_proxy_fetch_images_batch(`urls`: RustBuffer.ByValue,`maxConcurrent`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_letterbox_proxy_fn_func_proxy_fetch_url(`url`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_proxy_fn_func_proxy_init(`storagePath`: RustBuffer.ByValue,`maxCacheSize`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -687,7 +699,7 @@ internal object UniffiLib {
     external fun ffi_letterbox_proxy_rust_future_free_u8(`handle`: Long,
     ): Unit
     external fun ffi_letterbox_proxy_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
-    ): Byte
+    ): Int
     external fun ffi_letterbox_proxy_rust_future_poll_i8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
     external fun ffi_letterbox_proxy_rust_future_cancel_i8(`handle`: Long,
@@ -703,7 +715,7 @@ internal object UniffiLib {
     external fun ffi_letterbox_proxy_rust_future_free_u16(`handle`: Long,
     ): Unit
     external fun ffi_letterbox_proxy_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
-    ): Short
+    ): Int
     external fun ffi_letterbox_proxy_rust_future_poll_i16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
     external fun ffi_letterbox_proxy_rust_future_cancel_i16(`handle`: Long,
@@ -791,22 +803,31 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_clear_cache() != 21602.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_check_for_update() != 18874) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 33129.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_clear_cache() != 62065) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 36091.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_diagnostics() != 22821) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_init() != 6889.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 49417) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_shutdown() != 49173.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 10495) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 32604.toShort()) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_url() != 63176) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_init() != 3960) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_shutdown() != 19042) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 30414) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -910,6 +931,10 @@ public object FfiConverterUShort: FfiConverter<UShort, Short> {
         return value.toUShort()
     }
 
+    fun lift(value: Int): UShort {
+        return value.toUShort()
+    }
+
     override fun read(buf: ByteBuffer): UShort {
         return lift(buf.getShort())
     }
@@ -968,6 +993,29 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
 
     override fun write(value: ULong, buf: ByteBuffer) {
         buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterFloat: FfiConverter<Float, Float> {
+    override fun lift(value: Float): Float {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Float {
+        return buf.getFloat()
+    }
+
+    override fun lower(value: Float): Float {
+        return value
+    }
+
+    override fun allocationSize(value: Float) = 4UL
+
+    override fun write(value: Float, buf: ByteBuffer) {
+        buf.putFloat(value)
     }
 }
 
@@ -1077,22 +1125,22 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
  */
 data class BatchImageResult (
     /**
-     * URL that was requested
+     * URL that was requested.
      */
     var `url`: kotlin.String
     , 
     /**
-     * Whether the fetch was successful
+     * Whether the fetch was successful.
      */
     var `success`: kotlin.Boolean
     , 
     /**
-     * Image response if successful
+     * Image response if successful.
      */
     var `response`: ImageResponse?
     , 
     /**
-     * Error message if failed
+     * Error message if failed.
      */
     var `error`: kotlin.String?
     
@@ -1136,26 +1184,89 @@ public object FfiConverterTypeBatchImageResult: FfiConverterRustBuffer<BatchImag
 
 
 /**
- * Result of a successful image fetch operation.
+ * Result of a generic tunnelled fetch (non-image content).
  */
-data class ImageResponse (
+data class HttpFetchResponse (
     /**
-     * MIME type of the image (e.g., "image/png", "image/svg+xml")
+     * HTTP status code of the final response.
+     */
+    var `status`: kotlin.UShort
+    , 
+    /**
+     * Normalised MIME type.
      */
     var `mimeType`: kotlin.String
     , 
     /**
-     * Raw image bytes
+     * Raw response body.
      */
     var `data`: kotlin.ByteArray
     , 
     /**
-     * Whether this response was served from cache
+     * Final URL after redirects.
+     */
+    var `finalUrl`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeHttpFetchResponse: FfiConverterRustBuffer<HttpFetchResponse> {
+    override fun read(buf: ByteBuffer): HttpFetchResponse {
+        return HttpFetchResponse(
+            FfiConverterUShort.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: HttpFetchResponse) = (
+            FfiConverterUShort.allocationSize(value.`status`) +
+            FfiConverterString.allocationSize(value.`mimeType`) +
+            FfiConverterByteArray.allocationSize(value.`data`) +
+            FfiConverterString.allocationSize(value.`finalUrl`)
+    )
+
+    override fun write(value: HttpFetchResponse, buf: ByteBuffer) {
+            FfiConverterUShort.write(value.`status`, buf)
+            FfiConverterString.write(value.`mimeType`, buf)
+            FfiConverterByteArray.write(value.`data`, buf)
+            FfiConverterString.write(value.`finalUrl`, buf)
+    }
+}
+
+
+
+/**
+ * Result of a successful image fetch operation.
+ */
+data class ImageResponse (
+    /**
+     * MIME type of the image (e.g., "image/png", "image/svg+xml").
+     */
+    var `mimeType`: kotlin.String
+    , 
+    /**
+     * Raw image bytes.
+     */
+    var `data`: kotlin.ByteArray
+    , 
+    /**
+     * Whether this response was served from cache.
      */
     var `fromCache`: kotlin.Boolean
     , 
     /**
-     * Final URL after redirects (if any)
+     * Final URL after redirects (if any).
      */
     var `finalUrl`: kotlin.String
     
@@ -1203,27 +1314,32 @@ public object FfiConverterTypeImageResponse: FfiConverterRustBuffer<ImageRespons
  */
 data class ProxyStatus (
     /**
-     * Whether the proxy is initialized and ready
+     * Whether the proxy is initialized and ready.
      */
     var `ready`: kotlin.Boolean
     , 
     /**
-     * Whether WARP is enabled on this device
+     * Whether WARP is enabled on this device.
      */
     var `warpEnabled`: kotlin.Boolean
     , 
     /**
-     * Current WireGuard endpoint (if connected)
+     * Whether the WireGuard tunnel currently has a live session.
+     */
+    var `tunnelConnected`: kotlin.Boolean
+    , 
+    /**
+     * Current WireGuard endpoint (if provisioned).
      */
     var `endpoint`: kotlin.String?
     , 
     /**
-     * Last error message (if any)
+     * Last error message (if any).
      */
     var `lastError`: kotlin.String?
     , 
     /**
-     * Number of cached images
+     * Number of cached images.
      */
     var `cacheSize`: kotlin.UInt
     
@@ -1244,6 +1360,7 @@ public object FfiConverterTypeProxyStatus: FfiConverterRustBuffer<ProxyStatus> {
         return ProxyStatus(
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterUInt.read(buf),
@@ -1253,6 +1370,7 @@ public object FfiConverterTypeProxyStatus: FfiConverterRustBuffer<ProxyStatus> {
     override fun allocationSize(value: ProxyStatus) = (
             FfiConverterBoolean.allocationSize(value.`ready`) +
             FfiConverterBoolean.allocationSize(value.`warpEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`tunnelConnected`) +
             FfiConverterOptionalString.allocationSize(value.`endpoint`) +
             FfiConverterOptionalString.allocationSize(value.`lastError`) +
             FfiConverterUInt.allocationSize(value.`cacheSize`)
@@ -1261,9 +1379,267 @@ public object FfiConverterTypeProxyStatus: FfiConverterRustBuffer<ProxyStatus> {
     override fun write(value: ProxyStatus, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`ready`, buf)
             FfiConverterBoolean.write(value.`warpEnabled`, buf)
+            FfiConverterBoolean.write(value.`tunnelConnected`, buf)
             FfiConverterOptionalString.write(value.`endpoint`, buf)
             FfiConverterOptionalString.write(value.`lastError`, buf)
             FfiConverterUInt.write(value.`cacheSize`, buf)
+    }
+}
+
+
+
+/**
+ * Result of an in-app update check.
+ */
+data class UpdateResult (
+    /**
+     * Whether a newer release is available.
+     */
+    var `updateAvailable`: kotlin.Boolean
+    , 
+    /**
+     * Running version as reported by the caller.
+     */
+    var `currentVersion`: kotlin.String
+    , 
+    /**
+     * Latest release version (no leading `v`).
+     */
+    var `latestVersion`: kotlin.String
+    , 
+    /**
+     * Latest release git tag.
+     */
+    var `latestTag`: kotlin.String
+    , 
+    /**
+     * Release notes.
+     */
+    var `changelog`: kotlin.String
+    , 
+    /**
+     * Release page URL.
+     */
+    var `releaseUrl`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeUpdateResult: FfiConverterRustBuffer<UpdateResult> {
+    override fun read(buf: ByteBuffer): UpdateResult {
+        return UpdateResult(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: UpdateResult) = (
+            FfiConverterBoolean.allocationSize(value.`updateAvailable`) +
+            FfiConverterString.allocationSize(value.`currentVersion`) +
+            FfiConverterString.allocationSize(value.`latestVersion`) +
+            FfiConverterString.allocationSize(value.`latestTag`) +
+            FfiConverterString.allocationSize(value.`changelog`) +
+            FfiConverterString.allocationSize(value.`releaseUrl`)
+    )
+
+    override fun write(value: UpdateResult, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`updateAvailable`, buf)
+            FfiConverterString.write(value.`currentVersion`, buf)
+            FfiConverterString.write(value.`latestVersion`, buf)
+            FfiConverterString.write(value.`latestTag`, buf)
+            FfiConverterString.write(value.`changelog`, buf)
+            FfiConverterString.write(value.`releaseUrl`, buf)
+    }
+}
+
+
+
+/**
+ * Full WireGuard/WARP diagnostics for the in-app debug screen.
+ *
+ * This intentionally includes the private key so power users can fully inspect
+ * and reproduce the tunnel; the Android UI hides it behind an explicit reveal.
+ */
+data class WarpDiagnostics (
+    /**
+     * `"connected"` or `"disconnected"`.
+     */
+    var `connectionState`: kotlin.String
+    , 
+    /**
+     * WireGuard private key (base64).
+     */
+    var `privateKey`: kotlin.String
+    , 
+    /**
+     * Derived WireGuard public key (base64).
+     */
+    var `publicKey`: kotlin.String
+    , 
+    /**
+     * WARP peer public key (base64).
+     */
+    var `peerPublicKey`: kotlin.String
+    , 
+    /**
+     * Endpoint hostname.
+     */
+    var `endpointHost`: kotlin.String
+    , 
+    /**
+     * Endpoint IPv4 address.
+     */
+    var `endpointIpv4`: kotlin.String
+    , 
+    /**
+     * Endpoint IPv6 address.
+     */
+    var `endpointIpv6`: kotlin.String
+    , 
+    /**
+     * Endpoint UDP port.
+     */
+    var `endpointPort`: kotlin.UShort
+    , 
+    /**
+     * Local tunnel IPv4 address.
+     */
+    var `localAddressIpv4`: kotlin.String
+    , 
+    /**
+     * Local tunnel IPv6 address.
+     */
+    var `localAddressIpv6`: kotlin.String
+    , 
+    /**
+     * Whether WARP is enabled on the account.
+     */
+    var `warpEnabled`: kotlin.Boolean
+    , 
+    /**
+     * Account type (e.g. `free`).
+     */
+    var `accountType`: kotlin.String
+    , 
+    /**
+     * Cloudflare account/device identifier.
+     */
+    var `accountId`: kotlin.String
+    , 
+    /**
+     * Seconds since the last completed handshake, if any.
+     */
+    var `lastHandshakeSecs`: kotlin.ULong?
+    , 
+    /**
+     * Plaintext bytes transmitted into the tunnel.
+     */
+    var `txBytes`: kotlin.ULong
+    , 
+    /**
+     * Plaintext bytes received from the tunnel.
+     */
+    var `rxBytes`: kotlin.ULong
+    , 
+    /**
+     * Estimated packet loss in `[0.0, 1.0]`.
+     */
+    var `estimatedLoss`: kotlin.Float
+    , 
+    /**
+     * Estimated round-trip time in milliseconds, if measured.
+     */
+    var `rttMs`: kotlin.UInt?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagnostics> {
+    override fun read(buf: ByteBuffer): WarpDiagnostics {
+        return WarpDiagnostics(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WarpDiagnostics) = (
+            FfiConverterString.allocationSize(value.`connectionState`) +
+            FfiConverterString.allocationSize(value.`privateKey`) +
+            FfiConverterString.allocationSize(value.`publicKey`) +
+            FfiConverterString.allocationSize(value.`peerPublicKey`) +
+            FfiConverterString.allocationSize(value.`endpointHost`) +
+            FfiConverterString.allocationSize(value.`endpointIpv4`) +
+            FfiConverterString.allocationSize(value.`endpointIpv6`) +
+            FfiConverterUShort.allocationSize(value.`endpointPort`) +
+            FfiConverterString.allocationSize(value.`localAddressIpv4`) +
+            FfiConverterString.allocationSize(value.`localAddressIpv6`) +
+            FfiConverterBoolean.allocationSize(value.`warpEnabled`) +
+            FfiConverterString.allocationSize(value.`accountType`) +
+            FfiConverterString.allocationSize(value.`accountId`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastHandshakeSecs`) +
+            FfiConverterULong.allocationSize(value.`txBytes`) +
+            FfiConverterULong.allocationSize(value.`rxBytes`) +
+            FfiConverterFloat.allocationSize(value.`estimatedLoss`) +
+            FfiConverterOptionalUInt.allocationSize(value.`rttMs`)
+    )
+
+    override fun write(value: WarpDiagnostics, buf: ByteBuffer) {
+            FfiConverterString.write(value.`connectionState`, buf)
+            FfiConverterString.write(value.`privateKey`, buf)
+            FfiConverterString.write(value.`publicKey`, buf)
+            FfiConverterString.write(value.`peerPublicKey`, buf)
+            FfiConverterString.write(value.`endpointHost`, buf)
+            FfiConverterString.write(value.`endpointIpv4`, buf)
+            FfiConverterString.write(value.`endpointIpv6`, buf)
+            FfiConverterUShort.write(value.`endpointPort`, buf)
+            FfiConverterString.write(value.`localAddressIpv4`, buf)
+            FfiConverterString.write(value.`localAddressIpv6`, buf)
+            FfiConverterBoolean.write(value.`warpEnabled`, buf)
+            FfiConverterString.write(value.`accountType`, buf)
+            FfiConverterString.write(value.`accountId`, buf)
+            FfiConverterOptionalULong.write(value.`lastHandshakeSecs`, buf)
+            FfiConverterULong.write(value.`txBytes`, buf)
+            FfiConverterULong.write(value.`rxBytes`, buf)
+            FfiConverterFloat.write(value.`estimatedLoss`, buf)
+            FfiConverterOptionalUInt.write(value.`rttMs`, buf)
     }
 }
 
@@ -1753,6 +2129,70 @@ public object FfiConverterTypeProxyError : FfiConverterRustBuffer<ProxyException
 /**
  * @suppress
  */
+public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
+    override fun read(buf: ByteBuffer): kotlin.UInt? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterUInt.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.UInt?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterUInt.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.UInt?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterUInt.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
     override fun read(buf: ByteBuffer): kotlin.String? {
         if (buf.get().toInt() == 0) {
@@ -1938,10 +2378,24 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     }
 }
         /**
-         * Clear the image cache.
+         * Check for a newer release through the tunnel.
          *
-         * Removes all cached images from memory. This does not affect
-         * the WireGuard tunnel or WARP credentials.
+         * Pass the running version (e.g. `"v1.2.3"`); `repo` defaults to the official
+         * distribution slug when empty.
+         */
+    @Throws(ProxyException::class) fun `proxyCheckForUpdate`(`currentVersion`: kotlin.String, `repo`: kotlin.String?): UpdateResult {
+            return FfiConverterTypeUpdateResult.lift(
+    uniffiRustCallWithError(ProxyException) { _status ->
+    UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_check_for_update(
+    
+        FfiConverterString.lower(`currentVersion`),FfiConverterOptionalString.lower(`repo`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Clear the in-memory image cache.
          */
     @Throws(ProxyException::class) fun `proxyClearCache`()
         = 
@@ -1954,31 +2408,21 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     
 
         /**
-         * Fetch a single image through the privacy proxy.
-         *
-         * This function:
-         * 1. Checks the cache for a cached response
-         * 2. Establishes/reuses the WireGuard tunnel
-         * 3. Fetches the image via HTTPS through the tunnel
-         * 4. Caches the response for future requests
-         *
-         * # Arguments
-         *
-         * * `url` - The URL of the image to fetch
-         * * `headers` - Optional custom headers to include in the request
-         *
-         * # Returns
-         *
-         * An `ImageResponse` containing the image data and metadata.
-         *
-         * # Errors
-         *
-         * Returns a `ProxyError` if:
-         * - The proxy is not initialized
-         * - The URL is invalid
-         * - The tunnel cannot be established
-         * - The HTTP request fails
-         * - The response is not a valid image
+         * Collect full WireGuard/WARP diagnostics, provisioning the tunnel if needed.
+         */
+    @Throws(ProxyException::class) fun `proxyDiagnostics`(): WarpDiagnostics {
+            return FfiConverterTypeWarpDiagnostics.lift(
+    uniffiRustCallWithError(ProxyException) { _status ->
+    UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_diagnostics(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Fetch a single image through the WARP tunnel.
          */
     @Throws(ProxyException::class) fun `proxyFetchImage`(`url`: kotlin.String, `headers`: Map<kotlin.String, kotlin.String>?): ImageResponse {
             return FfiConverterTypeImageResponse.lift(
@@ -1992,28 +2436,10 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     
 
         /**
-         * Fetch multiple images in parallel through the privacy proxy.
+         * Fetch multiple images through the tunnel.
          *
-         * This function efficiently fetches multiple images by:
-         * 1. Checking the cache for each URL
-         * 2. Reusing the same WireGuard tunnel for all requests
-         * 3. Making concurrent HTTP requests
-         * 4. Returning results as they complete
-         *
-         * # Arguments
-         *
-         * * `urls` - List of image URLs to fetch
-         * * `max_concurrent` - Maximum number of concurrent fetches (1-32)
-         *
-         * # Returns
-         *
-         * A list of `BatchImageResult` structs, one per URL, in the same order.
-         * Each result indicates success or failure for that specific URL.
-         *
-         * # Thread Safety
-         *
-         * This function uses internal parallelism and is safe to call from
-         * multiple threads simultaneously.
+         * Requests are serviced by the single shared tunnel, so they are processed in
+         * order; `max_concurrent` is accepted for API stability but currently advisory.
          */
     @Throws(ProxyException::class) fun `proxyFetchImagesBatch`(`urls`: List<kotlin.String>, `maxConcurrent`: kotlin.UInt): List<BatchImageResult> {
             return FfiConverterSequenceTypeBatchImageResult.lift(
@@ -2027,27 +2453,25 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     
 
         /**
+         * Fetch an arbitrary URL through the tunnel (non-image content allowed).
+         */
+    @Throws(ProxyException::class) fun `proxyFetchUrl`(`url`: kotlin.String, `headers`: Map<kotlin.String, kotlin.String>?): HttpFetchResponse {
+            return FfiConverterTypeHttpFetchResponse.lift(
+    uniffiRustCallWithError(ProxyException) { _status ->
+    UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_fetch_url(
+    
+        FfiConverterString.lower(`url`),FfiConverterOptionalMapStringString.lower(`headers`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Initialize the image proxy.
          *
-         * This function must be called before any other proxy functions.
-         * It will:
-         * 1. Load or create WARP credentials
-         * 2. Initialize the WireGuard tunnel (lazy)
-         * 3. Set up the image cache
-         *
-         * # Arguments
-         *
-         * * `storage_path` - Path to store WARP credentials and cache
-         * * `max_cache_size` - Maximum number of images to cache in memory
-         *
-         * # Returns
-         *
-         * `Ok(())` on success, or a `ProxyError` on failure.
-         *
-         * # Thread Safety
-         *
-         * This function is thread-safe and can be called multiple times.
-         * Subsequent calls with the same storage path are no-ops.
+         * Loads or creates persisted configuration and prepares the in-memory cache.
+         * WARP provisioning and the WireGuard handshake are deferred until the first
+         * fetch so initialization stays fast and works offline.
          */
     @Throws(ProxyException::class) fun `proxyInit`(`storagePath`: kotlin.String, `maxCacheSize`: kotlin.UInt)
         = 
@@ -2060,15 +2484,7 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     
 
         /**
-         * Shut down the image proxy and release resources.
-         *
-         * This function:
-         * 1. Closes the WireGuard tunnel
-         * 2. Clears the image cache
-         * 3. Saves any pending state
-         *
-         * After calling this, `proxy_init()` must be called again before
-         * fetching images.
+         * Shut down the proxy, dropping the tunnel and cache.
          */
     @Throws(ProxyException::class) fun `proxyShutdown`()
         = 
@@ -2082,16 +2498,6 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
 
         /**
          * Get the current proxy status.
-         *
-         * Returns information about the proxy's state including:
-         * - Whether it's ready to fetch images
-         * - WARP enablement status
-         * - Current endpoint
-         * - Cache statistics
-         *
-         * # Returns
-         *
-         * A `ProxyStatus` struct with current state information.
          */
     @Throws(ProxyException::class) fun `proxyStatus`(): ProxyStatus {
             return FfiConverterTypeProxyStatus.lift(

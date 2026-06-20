@@ -39,7 +39,13 @@ rand = "0.10.0"
 boringtun = "0.7.0"
 
 # TCP/IP stack
-smoltcp = { version = "0.13.0", default-features = false, features = ["medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "socket-dns"] }
+#
+# The `std` feature is required so that smoltcp's `SocketSet`, socket buffers
+# and interface storage can use owned (`Vec`-backed) `ManagedSlice` storage.
+# This lets the tunnel own all of its smoltcp storage for its whole lifetime
+# without resorting to `Box::leak` for `'static` borrows. Name resolution runs
+# over DNS-over-HTTPS through the tunnel, so only the TCP socket is needed.
+smoltcp = { version = "0.13.0", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp"] }
 
 # TLS for HTTPS connections
 rustls = { version = "0.23.36", default-features = false, features = ["ring", "std"] }

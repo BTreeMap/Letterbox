@@ -5,12 +5,18 @@ import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.joefang.letterbox.ffi.proxy.BatchImageResult
+import org.joefang.letterbox.ffi.proxy.HttpFetchResponse
 import org.joefang.letterbox.ffi.proxy.ImageResponse
 import org.joefang.letterbox.ffi.proxy.ProxyException
 import org.joefang.letterbox.ffi.proxy.ProxyStatus
+import org.joefang.letterbox.ffi.proxy.UpdateResult
+import org.joefang.letterbox.ffi.proxy.WarpDiagnostics
+import org.joefang.letterbox.ffi.proxy.proxyCheckForUpdate
 import org.joefang.letterbox.ffi.proxy.proxyClearCache
+import org.joefang.letterbox.ffi.proxy.proxyDiagnostics
 import org.joefang.letterbox.ffi.proxy.proxyFetchImage
 import org.joefang.letterbox.ffi.proxy.proxyFetchImagesBatch
+import org.joefang.letterbox.ffi.proxy.proxyFetchUrl
 import org.joefang.letterbox.ffi.proxy.proxyInit
 import org.joefang.letterbox.ffi.proxy.proxyShutdown
 import org.joefang.letterbox.ffi.proxy.proxyStatus
@@ -152,6 +158,50 @@ class ImageProxyService private constructor(private val context: Context) {
             android.util.Log.e(TAG, "Failed to get proxy status: ${e.message}", e)
             null
         }
+    }
+
+    /**
+     * Collect full WireGuard/WARP diagnostics for the debug screen.
+     *
+     * This forces the tunnel to provision and perform a handshake if it has not
+     * already, so it doubles as a connectivity self-test.
+     */
+    suspend fun getDiagnostics(): WarpDiagnostics = withContext(Dispatchers.IO) {
+        if (!initialized) {
+            initialize()
+        }
+        proxyDiagnostics()
+    }
+
+    /**
+     * Fetch an arbitrary URL through the WARP tunnel (non-image content allowed).
+     *
+     * Used by the update checker so the request to GitHub never leaks the real IP.
+     */
+    suspend fun fetchUrl(
+        url: String,
+        headers: Map<String, String>? = null
+    ): HttpFetchResponse = withContext(Dispatchers.IO) {
+        if (!initialized) {
+            check(initialize()) { "Proxy not initialized" }
+        }
+        proxyFetchUrl(url, headers)
+    }
+
+    /**
+     * Check GitHub releases for a newer version, tunnelled through WARP.
+     *
+     * @param currentVersion the running version (e.g. "v1.2.3")
+     * @param repo optional "owner/name"; defaults to the official distribution repo
+     */
+    suspend fun checkForUpdate(
+        currentVersion: String,
+        repo: String? = null
+    ): UpdateResult = withContext(Dispatchers.IO) {
+        if (!initialized) {
+            check(initialize()) { "Proxy not initialized" }
+        }
+        proxyCheckForUpdate(currentVersion, repo)
     }
     
     /**

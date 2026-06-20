@@ -52,6 +52,7 @@ class BackNavigationTest {
         
         // Clear history database to ensure tests start with clean state
         runBlocking {
+            TestPreferences.seedOnboarded(context)
             LetterboxDatabase.getInstance(context).historyItemDao().deleteAll()
         }
         

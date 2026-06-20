@@ -154,6 +154,24 @@ impl WarpProvisioner {
         (private_b64, public_b64)
     }
 
+    /// Derive the base64 WireGuard public key from a base64 private key.
+    ///
+    /// Used for diagnostics, where only the private key is persisted.
+    pub fn public_key_from_private(private_b64: &str) -> Result<String, ProxyError> {
+        let bytes: [u8; 32] = BASE64
+            .decode(private_b64)
+            .map_err(|e| ProxyError::CryptoError {
+                details: format!("Invalid private key: {e}"),
+            })?
+            .try_into()
+            .map_err(|_| ProxyError::CryptoError {
+                details: "Private key must be 32 bytes".to_string(),
+            })?;
+        let secret = StaticSecret::from(bytes);
+        let public = PublicKey::from(&secret);
+        Ok(BASE64.encode(public.as_bytes()))
+    }
+
     /// Get the current timestamp in the format expected by Cloudflare.
     fn get_timestamp() -> String {
         Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string()
@@ -310,6 +328,34 @@ impl WarpProvisioner {
             let body = response.text().await.unwrap_or_default();
             return Err(ProxyError::ProvisioningFailed {
                 details: format!("Enable WARP failed with status {}: {}", status, body),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Delete a WARP device registration.
+    ///
+    /// Used to clean up ephemeral accounts (e.g. created by integration tests)
+    /// so they do not accumulate on Cloudflare's side.
+    pub async fn delete_device(&self, account: &WarpAccountData) -> Result<(), ProxyError> {
+        let url = format!("{}/{}/reg/{}", API_BASE, API_VERSION, account.account_id);
+
+        let response = self
+            .client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", account.access_token))
+            .send()
+            .await
+            .map_err(|e| ProxyError::ProvisioningFailed {
+                details: format!("Delete device request failed: {e}"),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(ProxyError::ProvisioningFailed {
+                details: format!("Delete device failed with status {status}: {body}"),
             });
         }
 

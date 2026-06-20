@@ -14,6 +14,7 @@ import androidx.test.espresso.intent.Intents
 import androidx.test.espresso.intent.matcher.IntentMatchers
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
 import org.hamcrest.Matchers
 import org.junit.After
 import org.junit.Before
@@ -40,6 +41,9 @@ class AttachmentInteractionE2ETest {
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
         Intents.init()
+
+        // Mark onboarding complete so the main UI is reachable.
+        runBlocking { TestPreferences.seedOnboarded(context) }
 
         // Create a simple EML with an attachment
         val boundary = "boundary123"

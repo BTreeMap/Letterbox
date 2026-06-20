@@ -52,6 +52,9 @@ class CloudflareTermsConsentE2ETest {
         
         // Reset preferences to defaults - no ToS acceptance, proxy disabled
         runBlocking {
+            // Mark onboarding complete (without granting consent) so the main UI
+            // is reachable and the per-switch consent flow can be exercised.
+            preferencesRepository.completeOnboarding(acceptedTerms = false)
             preferencesRepository.setCloudflareTermsAccepted(false)
             preferencesRepository.setEnablePrivacyProxy(false)
             preferencesRepository.setAlwaysLoadRemoteImages(false)

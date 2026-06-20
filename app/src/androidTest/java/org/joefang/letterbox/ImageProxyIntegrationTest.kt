@@ -57,6 +57,7 @@ class ImageProxyIntegrationTest {
         
         // Reset preferences to defaults before each test
         runBlocking {
+            preferencesRepository.completeOnboarding(acceptedTerms = true)
             preferencesRepository.setAlwaysLoadRemoteImages(false)
             preferencesRepository.setEnablePrivacyProxy(true)
             preferencesRepository.setCloudflareTermsAccepted(true)
