@@ -28,7 +28,11 @@ const API_BASE: &str = "https://api.cloudflareclient.com";
 /// Default headers for API requests.
 fn default_headers() -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(reqwest::header::ACCEPT_ENCODING, "gzip".parse().unwrap());
+    // Note: we deliberately do NOT advertise `Accept-Encoding: gzip`. reqwest is
+    // built without the `gzip` feature, so it cannot transparently decompress a
+    // gzipped body. Cloudflare honours that header and returns a gzip-compressed
+    // payload, which then fails JSON decoding ("error decoding response body").
+    // Omitting it makes Cloudflare return plain JSON that reqwest can parse.
     headers.insert(
         reqwest::header::USER_AGENT,
         "okhttp/3.12.1".parse().unwrap(),
