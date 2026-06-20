@@ -142,6 +142,51 @@ jobs:
         # and letterbox-proxy libraries to target/release/ before running tests
         run: ./gradlew test --no-daemon
 
+  warp-smoke-test:
+    name: Real WARP smoke test
+    runs-on: ubuntu-latest
+    # The full privacy path (provision a real WARP device -> WireGuard handshake
+    # -> DoH -> TLS -> HTTP image fetch -> delete device) is exercised against
+    # live Cloudflare here. It is inherently flaky (network, rate limits, anycast
+    # routing), so a failure is surfaced as a warning and never gates the build.
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/letterbox-proxy/target/
+          key: cargo-warp-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-warp-${{ runner.os }}-
+            cargo-${{ runner.os }}-
+
+      - name: Run real Cloudflare WARP end-to-end test
+        id: warp
+        # Non-blocking: the step may fail without failing the job. The outcome is
+        # inspected below and turned into a warning annotation when it does not pass.
+        continue-on-error: true
+        working-directory: rust/letterbox-proxy
+        run: cargo test --test warp_real -- --ignored --nocapture
+
+      - name: Report WARP test outcome
+        if: always()
+        run: |
+          if [[ "${{ steps.warp.outcome }}" == "success" ]]; then
+            echo "Real Cloudflare WARP end-to-end test passed."
+          else
+            echo "::warning title=Real WARP test failed::The live Cloudflare WARP end-to-end test did not pass (outcome: ${{ steps.warp.outcome }}). This is non-blocking and is most often transient network/anycast/rate-limit flakiness, but should be investigated if it persists."
+          fi
+
   build:
     name: Build APKs
     runs-on: ubuntu-latest
