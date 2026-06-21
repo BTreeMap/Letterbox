@@ -59,10 +59,10 @@ class ProvisioningTlsSelfTest {
             is TlsSelfTestOutcome.PlatformVerifierUninitialized -> {
                 fail(
                     "WARP provisioning fell back to rustls-platform-verifier, " +
-                        "which is uninitialized on Android and panics on the " +
-                        "first handshake. The provisioning client must use the " +
-                        "preconfigured webpki-roots TLS config. Reason: " +
-                        outcome.reason
+                            "which is uninitialized on Android and panics on the " +
+                            "first handshake. The provisioning client must use the " +
+                            "preconfigured webpki-roots TLS config. Reason: " +
+                            outcome.reason
                 )
             }
         }
