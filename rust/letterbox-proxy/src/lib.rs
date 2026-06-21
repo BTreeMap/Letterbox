@@ -55,11 +55,19 @@ fn proxy_state() -> &'static Mutex<Option<ProxyState>> {
     PROXY_STATE.get_or_init(|| Mutex::new(None))
 }
 
-/// Lock the global state, mapping poisoning to a proxy error.
-fn lock_state() -> Result<std::sync::MutexGuard<'static, Option<ProxyState>>, ProxyError> {
-    proxy_state().lock().map_err(|_| ProxyError::TunnelError {
-        details: "Proxy state lock poisoned".to_string(),
-    })
+/// Lock the global state, recovering from poisoning.
+///
+/// A panic while a guard is held — e.g. during WARP provisioning or tunnel
+/// start-up, both of which run under this lock — poisons the `Mutex`. The
+/// protected [`ProxyState`] nonetheless stays structurally valid: at worst the
+/// tunnel manager is absent and gets rebuilt on the next fetch. Reclaiming the
+/// guard via [`PoisonError::into_inner`] lets the proxy retry and surface the
+/// real error, instead of permanently reporting a misleading "lock poisoned"
+/// failure that masks the original cause and bricks the proxy until restart.
+fn lock_state() -> std::sync::MutexGuard<'static, Option<ProxyState>> {
+    proxy_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Internal proxy state.
@@ -157,7 +165,7 @@ fn header_pairs(headers: Option<&HashMap<String, String>>) -> Vec<(String, Strin
 /// Acquire the shared manager (initialising it if needed) under the lock,
 /// returning a clone plus the current fetch limits.
 fn acquire_manager() -> Result<(Arc<TunnelManager>, FetchLimits), ProxyError> {
-    let mut guard = lock_state()?;
+    let mut guard = lock_state();
     let state = guard.as_mut().ok_or(ProxyError::NotInitialized)?;
     let manager = ensure_manager(state)?;
     let limits = state.fetch_limits();
@@ -166,10 +174,9 @@ fn acquire_manager() -> Result<(Arc<TunnelManager>, FetchLimits), ProxyError> {
 
 /// Record the most recent error for surfacing through [`proxy_status`].
 fn record_error(message: &str) {
-    if let Ok(mut guard) = lock_state() {
-        if let Some(state) = guard.as_mut() {
-            state.last_error = Some(message.to_string());
-        }
+    let mut guard = lock_state();
+    if let Some(state) = guard.as_mut() {
+        state.last_error = Some(message.to_string());
     }
 }
 
@@ -185,7 +192,7 @@ pub fn proxy_init(storage_path: String, max_cache_size: u32) -> Result<(), Proxy
     let cache_size = std::num::NonZeroUsize::new(max_cache_size as usize)
         .unwrap_or(std::num::NonZeroUsize::new(100).unwrap());
 
-    let mut guard = lock_state()?;
+    let mut guard = lock_state();
     if guard.is_some() {
         return Ok(());
     }
@@ -201,7 +208,7 @@ pub fn proxy_init(storage_path: String, max_cache_size: u32) -> Result<(), Proxy
 /// Get the current proxy status.
 #[uniffi::export]
 pub fn proxy_status() -> Result<ProxyStatus, ProxyError> {
-    let guard = lock_state()?;
+    let guard = lock_state();
     match guard.as_ref() {
         Some(state) => Ok(ProxyStatus {
             ready: true,
@@ -242,7 +249,7 @@ fn fetch_image(
 
     // Fast path: serve from cache without touching the network or the tunnel.
     {
-        let mut guard = lock_state()?;
+        let mut guard = lock_state();
         let state = guard.as_mut().ok_or(ProxyError::NotInitialized)?;
         if let Some(cached) = state.cache.get(url) {
             return Ok(ImageResponse {
@@ -273,7 +280,8 @@ fn fetch_image(
         final_url: outcome.final_url,
     };
 
-    if let Ok(mut guard) = lock_state() {
+    {
+        let mut guard = lock_state();
         if let Some(state) = guard.as_mut() {
             state.cache.put(url.to_string(), response.clone());
         }
@@ -340,7 +348,7 @@ pub fn proxy_fetch_url(
 #[uniffi::export]
 pub fn proxy_diagnostics() -> Result<WarpDiagnostics, ProxyError> {
     let manager = {
-        let mut guard = lock_state()?;
+        let mut guard = lock_state();
         let state = guard.as_mut().ok_or(ProxyError::NotInitialized)?;
         ensure_manager(state)?
     };
@@ -404,7 +412,7 @@ pub fn proxy_check_for_update(
 /// Shut down the proxy, dropping the tunnel and cache.
 #[uniffi::export]
 pub fn proxy_shutdown() -> Result<(), ProxyError> {
-    let mut guard = lock_state()?;
+    let mut guard = lock_state();
     // Dropping the state drops the manager, which joins the worker thread.
     *guard = None;
     Ok(())
@@ -413,7 +421,7 @@ pub fn proxy_shutdown() -> Result<(), ProxyError> {
 /// Clear the in-memory image cache.
 #[uniffi::export]
 pub fn proxy_clear_cache() -> Result<(), ProxyError> {
-    let mut guard = lock_state()?;
+    let mut guard = lock_state();
     if let Some(state) = guard.as_mut() {
         state.cache.clear();
     }
