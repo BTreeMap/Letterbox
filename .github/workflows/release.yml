@@ -30,6 +30,7 @@ jobs:
         with:
           fetch-depth: 0  # Full git history for version calculation
           fetch-tags: true
+          submodules: recursive
 
       - name: Set up JDK
         uses: actions/setup-java@v5
