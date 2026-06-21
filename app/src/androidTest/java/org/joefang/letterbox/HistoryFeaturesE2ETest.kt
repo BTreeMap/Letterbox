@@ -255,29 +255,31 @@ class HistoryFeaturesE2ETest {
             }
         }
 
-        // Click Clear in the Storage section.
+        // Click Clear in the Storage section. This closes the settings sheet
+        // (onClearCache dismisses it) and opens the confirmation dialog.
         composeTestRule.onNodeWithText("Clear").performClick()
 
-        // Confirm dialog. Both the settings button and the dialog button read
-        // "Clear", so target the clickable node that is currently on top.
+        // Confirm the clear. The settings sheet is already gone, so the dialog's
+        // "Clear" button is the only clickable node with that label.
         composeTestRule.onNodeWithText("Clear cache?").assertIsDisplayed()
         composeTestRule.onNode(hasText("Clear") and androidx.compose.ui.test.hasClickAction()).performClick()
 
-        // Verify the cache is empty. The Storage section reflects the database
-        // count, so "No cached emails" confirms every history item was removed.
-        // We assert from within the still-open settings sheet rather than
-        // dismissing it: the ModalBottomSheet is hosted in its own window, and
-        // pressing back (via either the activity dispatcher or Espresso) finishes
-        // the activity instead of closing the sheet, destroying the Compose tree.
+        // After clearing, the sheet is dismissed and we return to the main
+        // history screen, which is now empty. The Storage section's "No cached
+        // emails" label is no longer on screen, so verify the outcome that is:
+        // every seeded item is gone and the empty-state message is shown.
         composeTestRule.waitUntil(timeoutMillis = 5000) {
             try {
-                composeTestRule.onNodeWithText("No cached emails").assertExists()
+                composeTestRule.onNodeWithText("Invoice from Amazon").assertDoesNotExist()
+                composeTestRule.onNodeWithText("Meeting with Team").assertDoesNotExist()
+                composeTestRule.onNodeWithText("Weekly Newsletter").assertDoesNotExist()
                 true
             } catch (e: AssertionError) {
                 false
             }
         }
 
-        composeTestRule.onNodeWithText("No cached emails").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Open an .eml or .msg file to get started.")
+            .assertIsDisplayed()
     }
 }
