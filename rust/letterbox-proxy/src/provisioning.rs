@@ -16,7 +16,9 @@ use crate::error::ProxyError;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::Utc;
 use rand::Rng;
+use rustls::{ClientConfig, RootCertStore};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 /// Cloudflare WARP API version.
@@ -38,6 +40,34 @@ fn default_headers() -> reqwest::header::HeaderMap {
         "okhttp/3.12.1".parse().unwrap(),
     );
     headers
+}
+
+/// Build the rustls client configuration used by the provisioning HTTP client.
+///
+/// reqwest's `rustls` feature defaults to `rustls-platform-verifier`, which on
+/// Android panics ("Expect rustls-platform-verifier to be initialized") unless
+/// the app first hands the crate a JNI handle to the Android trust manager. We
+/// avoid that platform coupling entirely by handing reqwest a preconfigured
+/// config that trusts the bundled `webpki-roots` anchors and pins the `ring`
+/// crypto provider — the same trust model already used for in-tunnel TLS in
+/// [`crate::tunnel::tls`]. Cloudflare's WARP API uses a public CA, so the static
+/// Mozilla root set is sufficient and needs no OS integration.
+fn provisioning_tls_config() -> ClientConfig {
+    let mut roots = RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    let mut config =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .expect("ring provider supports the default protocol versions")
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+
+    // reqwest is built without the `http2` feature, so the connection can only
+    // be driven as HTTP/1.1. Advertise exactly that via ALPN so the server
+    // never negotiates a protocol the client cannot speak.
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    config
 }
 
 /// Registration request sent to Cloudflare.
@@ -129,6 +159,7 @@ impl WarpProvisioner {
     /// Create a new WARP provisioner.
     pub fn new() -> Result<Self, ProxyError> {
         let client = reqwest::Client::builder()
+            .use_preconfigured_tls(provisioning_tls_config())
             .default_headers(default_headers())
             .timeout(std::time::Duration::from_secs(30))
             .build()
