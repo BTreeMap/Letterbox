@@ -653,6 +653,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_status(
     ): Int
+    external fun uniffi_letterbox_proxy_checksum_func_proxy_reset_identity(
+    ): Int
+    external fun uniffi_letterbox_proxy_checksum_func_proxy_stored_config(
+    ): Int
     external fun ffi_letterbox_proxy_uniffi_contract_version(
     ): Int
 
@@ -683,6 +687,10 @@ internal object UniffiLib {
     external fun uniffi_letterbox_proxy_fn_func_proxy_shutdown(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_letterbox_proxy_fn_func_proxy_status(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_letterbox_proxy_fn_func_proxy_reset_identity(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_letterbox_proxy_fn_func_proxy_stored_config(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_letterbox_proxy_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -828,6 +836,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 33270) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_reset_identity() != 22232) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_stored_config() != 59842) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -993,6 +1007,29 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
 
     override fun write(value: ULong, buf: ByteBuffer) {
         buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterLong: FfiConverter<Long, Long> {
+    override fun lift(value: Long): Long {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Long {
+        return buf.getLong()
+    }
+
+    override fun lower(value: Long): Long {
+        return value
+    }
+
+    override fun allocationSize(value: Long) = 8UL
+
+    override fun write(value: Long, buf: ByteBuffer) {
+        buf.putLong(value)
     }
 }
 
@@ -1624,6 +1661,162 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
             FfiConverterULong.write(value.`rxBytes`, buf)
             FfiConverterFloat.write(value.`estimatedLoss`, buf)
             FfiConverterOptionalUInt.write(value.`rttMs`, buf)
+    }
+}
+
+
+
+/**
+ * Persisted WARP identity and tunnel configuration, read straight from disk.
+ *
+ * Unlike [`WarpDiagnostics`], building this never provisions or handshakes, so
+ * it remains inspectable even when the tunnel is down — exactly the situation a
+ * user needs visibility into. The private key is included for full
+ * transparency; the Android UI keeps it behind an explicit reveal toggle.
+ */
+data class WarpStoredConfig (
+    /**
+     * Whether a provisioned WARP configuration exists on disk.
+     */
+    var `hasConfig`: kotlin.Boolean
+    , 
+    /**
+     * Whether a live tunnel manager is currently running.
+     */
+    var `tunnelActive`: kotlin.Boolean
+    , 
+    /**
+     * Cloudflare account/device identifier.
+     */
+    var `accountId`: kotlin.String
+    , 
+    /**
+     * Account license key (may be empty for free accounts).
+     */
+    var `licenseKey`: kotlin.String
+    , 
+    /**
+     * WireGuard private key (base64). Sensitive — surfaced for debugging only.
+     */
+    var `privateKey`: kotlin.String
+    , 
+    /**
+     * Derived WireGuard public key (base64).
+     */
+    var `publicKey`: kotlin.String
+    , 
+    /**
+     * WARP peer public key (base64).
+     */
+    var `peerPublicKey`: kotlin.String
+    , 
+    /**
+     * Endpoint hostname.
+     */
+    var `endpointHost`: kotlin.String
+    , 
+    /**
+     * Endpoint IPv4 address.
+     */
+    var `endpointIpv4`: kotlin.String
+    , 
+    /**
+     * Endpoint UDP port.
+     */
+    var `endpointPort`: kotlin.UShort
+    , 
+    /**
+     * Local tunnel IPv4 address.
+     */
+    var `localAddressIpv4`: kotlin.String
+    , 
+    /**
+     * Whether WARP is enabled on the account.
+     */
+    var `warpEnabled`: kotlin.Boolean
+    , 
+    /**
+     * Account type (e.g. `free`).
+     */
+    var `accountType`: kotlin.String
+    , 
+    /**
+     * Unix timestamp (seconds) when the configuration was last provisioned.
+     */
+    var `lastUpdatedSecs`: kotlin.Long
+    , 
+    /**
+     * Absolute path to the persisted `warp_config.json`.
+     */
+    var `configFilePath`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWarpStoredConfig: FfiConverterRustBuffer<WarpStoredConfig> {
+    override fun read(buf: ByteBuffer): WarpStoredConfig {
+        return WarpStoredConfig(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WarpStoredConfig) = (
+            FfiConverterBoolean.allocationSize(value.`hasConfig`) +
+            FfiConverterBoolean.allocationSize(value.`tunnelActive`) +
+            FfiConverterString.allocationSize(value.`accountId`) +
+            FfiConverterString.allocationSize(value.`licenseKey`) +
+            FfiConverterString.allocationSize(value.`privateKey`) +
+            FfiConverterString.allocationSize(value.`publicKey`) +
+            FfiConverterString.allocationSize(value.`peerPublicKey`) +
+            FfiConverterString.allocationSize(value.`endpointHost`) +
+            FfiConverterString.allocationSize(value.`endpointIpv4`) +
+            FfiConverterUShort.allocationSize(value.`endpointPort`) +
+            FfiConverterString.allocationSize(value.`localAddressIpv4`) +
+            FfiConverterBoolean.allocationSize(value.`warpEnabled`) +
+            FfiConverterString.allocationSize(value.`accountType`) +
+            FfiConverterLong.allocationSize(value.`lastUpdatedSecs`) +
+            FfiConverterString.allocationSize(value.`configFilePath`)
+    )
+
+    override fun write(value: WarpStoredConfig, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`hasConfig`, buf)
+            FfiConverterBoolean.write(value.`tunnelActive`, buf)
+            FfiConverterString.write(value.`accountId`, buf)
+            FfiConverterString.write(value.`licenseKey`, buf)
+            FfiConverterString.write(value.`privateKey`, buf)
+            FfiConverterString.write(value.`publicKey`, buf)
+            FfiConverterString.write(value.`peerPublicKey`, buf)
+            FfiConverterString.write(value.`endpointHost`, buf)
+            FfiConverterString.write(value.`endpointIpv4`, buf)
+            FfiConverterUShort.write(value.`endpointPort`, buf)
+            FfiConverterString.write(value.`localAddressIpv4`, buf)
+            FfiConverterBoolean.write(value.`warpEnabled`, buf)
+            FfiConverterString.write(value.`accountType`, buf)
+            FfiConverterLong.write(value.`lastUpdatedSecs`, buf)
+            FfiConverterString.write(value.`configFilePath`, buf)
     }
 }
 
@@ -2487,6 +2680,48 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
             return FfiConverterTypeProxyStatus.lift(
     uniffiRustCallWithError(ProxyException) { _status ->
     UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_status(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Refresh the WARP identity from scratch and persist it.
+         *
+         * Steps, in order:
+         * 1. Tear down the live tunnel and clear the last error (under the lock).
+         * 2. Best-effort delete the old Cloudflare device (outside the lock).
+         * 3. Generate a new keypair, register, fetch config, enable WARP, and write
+         * the new `warp_config.json` (outside the lock).
+         * 4. Swap in the new configuration and force the tunnel to rebuild on next use.
+         *
+         * The new tunnel is *not* eagerly reconnected: the caller can immediately
+         * follow up with [`crate::proxy_diagnostics`] to rebuild and verify it.
+         */
+    @Throws(ProxyException::class) fun `proxyResetIdentity`(): WarpStoredConfig {
+            return FfiConverterTypeWarpStoredConfig.lift(
+    uniffiRustCallWithError(ProxyException) { _status ->
+    UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_reset_identity(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Read the persisted WARP identity and tunnel configuration.
+         *
+         * Never touches the network: this works whether or not the tunnel has
+         * connected, making it the primary tool for diagnosing a tunnel that refuses
+         * to come up.
+         */
+    @Throws(ProxyException::class) fun `proxyStoredConfig`(): WarpStoredConfig {
+            return FfiConverterTypeWarpStoredConfig.lift(
+    uniffiRustCallWithError(ProxyException) { _status ->
+    UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_stored_config(
     
         _status)
 }

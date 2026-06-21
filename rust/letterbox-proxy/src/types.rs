@@ -86,6 +86,46 @@ pub struct WarpDiagnostics {
     pub rtt_ms: Option<u32>,
 }
 
+/// Persisted WARP identity and tunnel configuration, read straight from disk.
+///
+/// Unlike [`WarpDiagnostics`], building this never provisions or handshakes, so
+/// it remains inspectable even when the tunnel is down — exactly the situation a
+/// user needs visibility into. The private key is included for full
+/// transparency; the Android UI keeps it behind an explicit reveal toggle.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct WarpStoredConfig {
+    /// Whether a provisioned WARP configuration exists on disk.
+    pub has_config: bool,
+    /// Whether a live tunnel manager is currently running.
+    pub tunnel_active: bool,
+    /// Cloudflare account/device identifier.
+    pub account_id: String,
+    /// Account license key (may be empty for free accounts).
+    pub license_key: String,
+    /// WireGuard private key (base64). Sensitive — surfaced for debugging only.
+    pub private_key: String,
+    /// Derived WireGuard public key (base64).
+    pub public_key: String,
+    /// WARP peer public key (base64).
+    pub peer_public_key: String,
+    /// Endpoint hostname.
+    pub endpoint_host: String,
+    /// Endpoint IPv4 address.
+    pub endpoint_ipv4: String,
+    /// Endpoint UDP port.
+    pub endpoint_port: u16,
+    /// Local tunnel IPv4 address.
+    pub local_address_ipv4: String,
+    /// Whether WARP is enabled on the account.
+    pub warp_enabled: bool,
+    /// Account type (e.g. `free`).
+    pub account_type: String,
+    /// Unix timestamp (seconds) when the configuration was last provisioned.
+    pub last_updated_secs: i64,
+    /// Absolute path to the persisted `warp_config.json`.
+    pub config_file_path: String,
+}
+
 /// Result of an in-app update check.
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct UpdateResult {

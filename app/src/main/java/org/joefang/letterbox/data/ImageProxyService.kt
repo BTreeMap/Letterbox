@@ -11,6 +11,7 @@ import org.joefang.letterbox.ffi.proxy.ProxyException
 import org.joefang.letterbox.ffi.proxy.ProxyStatus
 import org.joefang.letterbox.ffi.proxy.UpdateResult
 import org.joefang.letterbox.ffi.proxy.WarpDiagnostics
+import org.joefang.letterbox.ffi.proxy.WarpStoredConfig
 import org.joefang.letterbox.ffi.proxy.proxyCheckForUpdate
 import org.joefang.letterbox.ffi.proxy.proxyClearCache
 import org.joefang.letterbox.ffi.proxy.proxyDiagnostics
@@ -18,8 +19,10 @@ import org.joefang.letterbox.ffi.proxy.proxyFetchImage
 import org.joefang.letterbox.ffi.proxy.proxyFetchImagesBatch
 import org.joefang.letterbox.ffi.proxy.proxyFetchUrl
 import org.joefang.letterbox.ffi.proxy.proxyInit
+import org.joefang.letterbox.ffi.proxy.proxyResetIdentity
 import org.joefang.letterbox.ffi.proxy.proxyShutdown
 import org.joefang.letterbox.ffi.proxy.proxyStatus
+import org.joefang.letterbox.ffi.proxy.proxyStoredConfig
 import java.io.File
 
 /**
@@ -171,6 +174,34 @@ class ImageProxyService private constructor(private val context: Context) {
             initialize()
         }
         proxyDiagnostics()
+    }
+
+    /**
+     * Read the persisted WARP identity and tunnel configuration.
+     *
+     * Unlike [getDiagnostics], this never provisions or performs a handshake, so
+     * it succeeds even when the tunnel is down — the primary tool for inspecting
+     * a connection that refuses to come up.
+     */
+    suspend fun getStoredConfig(): WarpStoredConfig = withContext(Dispatchers.IO) {
+        if (!initialized) {
+            initialize()
+        }
+        proxyStoredConfig()
+    }
+
+    /**
+     * Refresh the WARP identity: regenerate the keypair and re-register with
+     * Cloudflare, replacing the persisted configuration.
+     *
+     * The old device is best-effort deleted and the live tunnel is torn down;
+     * the next [getDiagnostics] call rebuilds and verifies the new tunnel.
+     */
+    suspend fun resetIdentity(): WarpStoredConfig = withContext(Dispatchers.IO) {
+        if (!initialized) {
+            check(initialize()) { "Proxy not initialized" }
+        }
+        proxyResetIdentity()
     }
 
     /**

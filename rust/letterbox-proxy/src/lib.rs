@@ -25,6 +25,7 @@
 //! - [`proxy_check_for_update`] — GitHub release check over the tunnel.
 //! - [`proxy_clear_cache`] — drop the in-memory image cache.
 
+pub mod admin;
 pub mod config;
 pub mod error;
 pub mod http;
@@ -40,6 +41,7 @@ pub use config::ProxyConfig;
 pub use error::ProxyError;
 pub use types::{
     BatchImageResult, HttpFetchResponse, ImageResponse, ProxyStatus, UpdateResult, WarpDiagnostics,
+    WarpStoredConfig,
 };
 
 use config::{FetchLimits, WarpConfig};
@@ -64,20 +66,20 @@ fn proxy_state() -> &'static Mutex<Option<ProxyState>> {
 /// guard via [`PoisonError::into_inner`] lets the proxy retry and surface the
 /// real error, instead of permanently reporting a misleading "lock poisoned"
 /// failure that masks the original cause and bricks the proxy until restart.
-fn lock_state() -> std::sync::MutexGuard<'static, Option<ProxyState>> {
+pub(crate) fn lock_state() -> std::sync::MutexGuard<'static, Option<ProxyState>> {
     proxy_state()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Internal proxy state.
-struct ProxyState {
-    config: ProxyConfig,
+pub(crate) struct ProxyState {
+    pub(crate) config: ProxyConfig,
     /// Shared so a fetch can run without holding the global lock. The `Arc` is
     /// genuine cross-section sharing (lock -> network -> lock), not a borrow hack.
-    manager: Option<Arc<TunnelManager>>,
+    pub(crate) manager: Option<Arc<TunnelManager>>,
     cache: lru::LruCache<String, ImageResponse>,
-    last_error: Option<String>,
+    pub(crate) last_error: Option<String>,
 }
 
 impl ProxyState {
@@ -96,7 +98,7 @@ impl ProxyState {
 ///
 /// Used only for the (direct-to-Cloudflare) WARP registration and config
 /// persistence, which are inherently async via `reqwest`/`tokio::fs`.
-fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, ProxyError> {
+pub(crate) fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, ProxyError> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
