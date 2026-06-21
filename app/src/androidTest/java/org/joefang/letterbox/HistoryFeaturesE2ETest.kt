@@ -11,7 +11,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
-import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
@@ -242,41 +241,43 @@ class HistoryFeaturesE2ETest {
 
     @Test
     fun clearCache_removesAllItems() {
-        // Open overflow menu
+        // Open overflow menu and the settings sheet.
         composeTestRule.onNodeWithContentDescription("More options").performClick()
         composeTestRule.onNodeWithText("Settings").performClick()
 
-        // Click Clear in Storage section
-        composeTestRule.onNodeWithText("Clear").performClick()
-
-        // Confirm dialog
-        composeTestRule.onNodeWithText("Clear cache?").assertIsDisplayed()
-        // There are two "Clear" texts now (button in settings and button in dialog)
-        // We need to click the one in the dialog that is clickable
-        // The one in settings is behind the dialog and shouldn't be clickable, but to be safe use strict matching
-        // or rely on dialog hierarchy traversal if possible.
-        // Simple way: match text "Clear" and ensure it's a button (has click action) and perform click.
-        // Since both have click action, we might hit the wrong one if not careful.
-        // However, the dialog is on top.
-        composeTestRule.onNode(hasText("Clear") and androidx.compose.ui.test.hasClickAction()).performClick()
-
-        // Dismiss the settings sheet. The ModalBottomSheet lives in its own
-        // window with its own back dispatcher, so pressing back on the activity's
-        // dispatcher would finish the activity instead of closing the sheet.
-        // Espresso.pressBack() targets the focused (sheet) window and dismisses it.
-        Espresso.pressBack()
-
-        // Verify empty state
+        // The Storage section starts out reporting the three seeded emails.
         composeTestRule.waitUntil(timeoutMillis = 5000) {
             try {
-                composeTestRule.onNodeWithText("Open an .eml or .msg file to get started.").assertExists()
+                composeTestRule.onNodeWithText("3 emails", substring = true).assertExists()
                 true
             } catch (e: AssertionError) {
                 false
             }
         }
 
-        composeTestRule.onNodeWithText("Invoice from Amazon").assertDoesNotExist()
-        composeTestRule.onNodeWithText("Meeting with Team").assertDoesNotExist()
+        // Click Clear in the Storage section.
+        composeTestRule.onNodeWithText("Clear").performClick()
+
+        // Confirm dialog. Both the settings button and the dialog button read
+        // "Clear", so target the clickable node that is currently on top.
+        composeTestRule.onNodeWithText("Clear cache?").assertIsDisplayed()
+        composeTestRule.onNode(hasText("Clear") and androidx.compose.ui.test.hasClickAction()).performClick()
+
+        // Verify the cache is empty. The Storage section reflects the database
+        // count, so "No cached emails" confirms every history item was removed.
+        // We assert from within the still-open settings sheet rather than
+        // dismissing it: the ModalBottomSheet is hosted in its own window, and
+        // pressing back (via either the activity dispatcher or Espresso) finishes
+        // the activity instead of closing the sheet, destroying the Compose tree.
+        composeTestRule.waitUntil(timeoutMillis = 5000) {
+            try {
+                composeTestRule.onNodeWithText("No cached emails").assertExists()
+                true
+            } catch (e: AssertionError) {
+                false
+            }
+        }
+
+        composeTestRule.onNodeWithText("No cached emails").assertIsDisplayed()
     }
 }
