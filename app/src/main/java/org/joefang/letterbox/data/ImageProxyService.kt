@@ -9,6 +9,7 @@ import org.joefang.letterbox.ffi.proxy.HttpFetchResponse
 import org.joefang.letterbox.ffi.proxy.ImageResponse
 import org.joefang.letterbox.ffi.proxy.ProxyException
 import org.joefang.letterbox.ffi.proxy.ProxyStatus
+import org.joefang.letterbox.ffi.proxy.TlsSelfTestOutcome
 import org.joefang.letterbox.ffi.proxy.UpdateResult
 import org.joefang.letterbox.ffi.proxy.WarpDiagnostics
 import org.joefang.letterbox.ffi.proxy.WarpStoredConfig
@@ -23,6 +24,7 @@ import org.joefang.letterbox.ffi.proxy.proxyResetIdentity
 import org.joefang.letterbox.ffi.proxy.proxyShutdown
 import org.joefang.letterbox.ffi.proxy.proxyStatus
 import org.joefang.letterbox.ffi.proxy.proxyStoredConfig
+import org.joefang.letterbox.ffi.proxy.proxyTlsSelfTest
 import java.io.File
 
 /**
@@ -202,6 +204,18 @@ class ImageProxyService private constructor(private val context: Context) {
             check(initialize()) { "Proxy not initialized" }
         }
         proxyResetIdentity()
+    }
+
+    /**
+     * Probe the provisioning TLS path without mutating any Cloudflare state.
+     *
+     * Drives the real provisioning HTTP client through a single, state-free
+     * request so the certificate verifier is actually exercised. Used by the
+     * instrumented regression test that guards against `reqwest` silently
+     * falling back to the (uninitialized on Android) platform verifier.
+     */
+    suspend fun tlsSelfTest(): TlsSelfTestOutcome = withContext(Dispatchers.IO) {
+        proxyTlsSelfTest()
     }
 
     /**

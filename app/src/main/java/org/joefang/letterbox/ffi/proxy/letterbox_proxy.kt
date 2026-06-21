@@ -657,6 +657,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_stored_config(
     ): Int
+    external fun uniffi_letterbox_proxy_checksum_func_proxy_tls_self_test(
+    ): Int
     external fun ffi_letterbox_proxy_uniffi_contract_version(
     ): Int
 
@@ -691,6 +693,8 @@ internal object UniffiLib {
     external fun uniffi_letterbox_proxy_fn_func_proxy_reset_identity(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_proxy_fn_func_proxy_stored_config(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_letterbox_proxy_fn_func_proxy_tls_self_test(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_letterbox_proxy_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -842,6 +846,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_stored_config() != 59842) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_tls_self_test() != 20758) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -2302,6 +2309,121 @@ public object FfiConverterTypeProxyError : FfiConverterRustBuffer<ProxyException
 
 
 
+/**
+ * Outcome of [`proxy_tls_self_test`].
+ */
+sealed class TlsSelfTestOutcome {
+    
+    /**
+     * The handshake to Cloudflare completed and the server certificate verified
+     * against the bundled `webpki-roots` trust anchors. The strongest pass.
+     */
+    object Verified : TlsSelfTestOutcome()
+    
+    
+    /**
+     * The probe could not complete for a transient reason (DNS failure,
+     * connection refused/reset, timeout, ...). The certificate verifier was not
+     * the cause, so callers should treat this as a (noted) pass rather than a
+     * regression.
+     */
+    data class Inconclusive(
+        val `reason`: kotlin.String) : TlsSelfTestOutcome()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
+     * The certificate verifier was reached and faulted because `reqwest` fell
+     * back to the platform verifier, which was never initialized on Android.
+     * This is the exact regression guarded against and is always a failure.
+     */
+    data class PlatformVerifierUninitialized(
+        val `reason`: kotlin.String) : TlsSelfTestOutcome()
+        
+    {
+        
+
+        companion object
+    }
+    
+
+    
+
+    
+    
+
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTlsSelfTestOutcome : FfiConverterRustBuffer<TlsSelfTestOutcome>{
+    override fun read(buf: ByteBuffer): TlsSelfTestOutcome {
+        return when(buf.getInt()) {
+            1 -> TlsSelfTestOutcome.Verified
+            2 -> TlsSelfTestOutcome.Inconclusive(
+                FfiConverterString.read(buf),
+                )
+            3 -> TlsSelfTestOutcome.PlatformVerifierUninitialized(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: TlsSelfTestOutcome) = when(value) {
+        is TlsSelfTestOutcome.Verified -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is TlsSelfTestOutcome.Inconclusive -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+        is TlsSelfTestOutcome.PlatformVerifierUninitialized -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: TlsSelfTestOutcome, buf: ByteBuffer) {
+        when(value) {
+            is TlsSelfTestOutcome.Verified -> {
+                buf.putInt(1)
+                Unit
+            }
+            is TlsSelfTestOutcome.Inconclusive -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is TlsSelfTestOutcome.PlatformVerifierUninitialized -> {
+                buf.putInt(3)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
 
 /**
  * @suppress
@@ -2722,6 +2844,30 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
             return FfiConverterTypeWarpStoredConfig.lift(
     uniffiRustCallWithError(ProxyException) { _status ->
     UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_stored_config(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Probe the provisioning TLS path and report whether the platform verifier was
+         * (incorrectly) reached.
+         *
+         * This builds the real [`WarpProvisioner`] client and performs a single,
+         * state-free `GET` against the WARP API host. It registers no device and
+         * mutates no Cloudflare state, so it is safe to run on every CI build.
+         *
+         * Detection is belt-and-suspenders: the probe is driven on a current-thread
+         * runtime (see [`block_on`]) so a verifier panic unwinds back here where
+         * [`std::panic::catch_unwind`] observes it, *and* any returned transport error
+         * is scanned for the marker in case the panic is instead converted into a
+         * connection error deeper in the stack.
+         */ fun `proxyTlsSelfTest`(): TlsSelfTestOutcome {
+            return FfiConverterTypeTlsSelfTestOutcome.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_tls_self_test(
     
         _status)
 }

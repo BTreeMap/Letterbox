@@ -30,6 +30,7 @@ pub mod config;
 pub mod error;
 pub mod http;
 pub mod provisioning;
+pub mod selftest;
 pub mod tunnel;
 pub mod types;
 pub mod update;

@@ -27,6 +27,22 @@ const API_VERSION: &str = "v0a884";
 /// Base URL for the WARP API.
 const API_BASE: &str = "https://api.cloudflareclient.com";
 
+/// Flatten an error and its `source()` chain into a single string.
+///
+/// `reqwest` nests the real cause (DNS, connect, TLS handshake, ...) behind a
+/// generic outer message, so the verifier-fault marker we look for in
+/// [`crate::selftest`] only appears once the whole chain is walked.
+fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut msg = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        msg.push_str(": ");
+        msg.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    msg
+}
+
 /// Default headers for API requests.
 fn default_headers() -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();
@@ -208,6 +224,27 @@ impl WarpProvisioner {
     /// Get the current timestamp in the format expected by Cloudflare.
     fn get_timestamp() -> String {
         Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string()
+    }
+
+    /// Probe the WARP API host over TLS without mutating any Cloudflare state.
+    ///
+    /// This drives the **exact same** `reqwest` client (and therefore the same
+    /// certificate-verifier configuration) used for real provisioning, but it
+    /// only issues a `GET` and never registers a device. A response with *any*
+    /// HTTP status means the TLS handshake and certificate verification both
+    /// succeeded, which is all this probe asserts. Transport failures are
+    /// returned with their full `source()` chain so a benign network error can
+    /// be told apart from a certificate-verifier fault (see [`crate::selftest`]).
+    pub async fn tls_self_test(&self) -> Result<(), ProxyError> {
+        let url = format!("{}/{}/", API_BASE, API_VERSION);
+        self.client
+            .get(&url)
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|e| ProxyError::ProvisioningFailed {
+                details: error_chain(&e),
+            })
     }
 
     /// Register a new WARP account.
