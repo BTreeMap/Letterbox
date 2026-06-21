@@ -26,6 +26,26 @@ a system-wide `gradle`, and never hand-edit generated artifacts.
 `./gradlew test` triggers `cargoHostBuild`, so you never need to build the Rust
 libraries by hand before running Android tests.
 
+## Skills (git submodule)
+
+Agent skills under `.github/skills/` are vendored from the centrally-managed
+[`BTreeMap/SKILLs`](https://github.com/BTreeMap/SKILLs) repository as a git
+submodule, so skill content is shared across repos and never edited in place
+here.
+
+| Task | Command |
+|------|---------|
+| Fresh clone with skills | `git clone --recurse-submodules <repo>` |
+| Populate after a plain clone | `git submodule update --init --recursive` |
+| Pull latest skills | `git submodule update --remote .github/skills` |
+
+* Do not edit files under `.github/skills/` in this repo. Change them upstream in
+  `BTreeMap/SKILLs`, then bump the submodule pointer here.
+* Bumping the pointer is a normal commit: run the update command, then commit the
+  changed gitlink (e.g. `git add .github/skills && git commit`).
+* CI checks out submodules recursively (`submodules: recursive` on every
+  `actions/checkout`); keep that flag when adding new workflows.
+
 ## Boundaries & Constraints
 
 * Never commit secrets, signing keystores, or WARP credentials. Keystore and
@@ -76,7 +96,8 @@ execution contract: `docs/agents/engineering-standards.md`.
 ## Commit Standards
 
 Hand-authored commits follow [Conventional Commits](https://www.conventionalcommits.org/).
-Authoritative schema, approved types, and scopes live in the repository skill:
+Authoritative schema, approved types, and scopes live in the repository skill
+(provided by the `.github/skills` submodule — see [Skills](#skills-git-submodule)):
 [`.github/skills/git-commits/SKILL.md`](.github/skills/git-commits/SKILL.md).
 
 ```text
