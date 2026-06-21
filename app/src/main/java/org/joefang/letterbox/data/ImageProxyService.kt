@@ -43,17 +43,17 @@ sealed class ImageFetchResult {
             val base64Data = Base64.encodeToString(data, Base64.NO_WRAP)
             return "data:$mimeType;base64,$base64Data"
         }
-        
+
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (javaClass != other?.javaClass) return false
             other as Success
-            return mimeType == other.mimeType && 
-                   data.contentEquals(other.data) && 
-                   fromCache == other.fromCache &&
-                   finalUrl == other.finalUrl
+            return mimeType == other.mimeType &&
+                    data.contentEquals(other.data) &&
+                    fromCache == other.fromCache &&
+                    finalUrl == other.finalUrl
         }
-        
+
         override fun hashCode(): Int {
             var result = mimeType.hashCode()
             result = 31 * result + data.contentHashCode()
@@ -62,7 +62,7 @@ sealed class ImageFetchResult {
             return result
         }
     }
-    
+
     /** Failed to fetch image */
     data class Error(val message: String) : ImageFetchResult()
 }
@@ -99,15 +99,15 @@ sealed class ImageFetchResult {
  * Suspend functions should be called from a coroutine context.
  */
 class ImageProxyService private constructor(private val context: Context) {
-    
+
     companion object {
         private const val TAG = "ImageProxyService"
         private const val DEFAULT_CACHE_SIZE = 100u
         private const val MAX_CONCURRENT_FETCHES = 8u
-        
+
         @Volatile
         private var instance: ImageProxyService? = null
-        
+
         /**
          * Get the singleton instance of the ImageProxyService.
          */
@@ -117,9 +117,9 @@ class ImageProxyService private constructor(private val context: Context) {
             }
         }
     }
-    
+
     private var initialized = false
-    
+
     /**
      * Initialize the proxy service.
      * 
@@ -132,13 +132,13 @@ class ImageProxyService private constructor(private val context: Context) {
      */
     suspend fun initialize(): Boolean = withContext(Dispatchers.IO) {
         if (initialized) return@withContext true
-        
+
         try {
             val storageDir = File(context.filesDir, "warp_proxy")
             if (!storageDir.exists()) {
                 storageDir.mkdirs()
             }
-            
+
             proxyInit(storageDir.absolutePath, DEFAULT_CACHE_SIZE)
             initialized = true
             true
@@ -150,7 +150,7 @@ class ImageProxyService private constructor(private val context: Context) {
             false
         }
     }
-    
+
     /**
      * Get the current proxy status.
      */
@@ -234,7 +234,7 @@ class ImageProxyService private constructor(private val context: Context) {
         }
         proxyCheckForUpdate(currentVersion, repo)
     }
-    
+
     /**
      * Fetch a single image through the privacy proxy.
      *
@@ -252,7 +252,7 @@ class ImageProxyService private constructor(private val context: Context) {
                 return@withContext ImageFetchResult.Error("Proxy not initialized")
             }
         }
-        
+
         try {
             val response = proxyFetchImage(url, headers)
             ImageFetchResult.Success(
@@ -267,7 +267,7 @@ class ImageProxyService private constructor(private val context: Context) {
             ImageFetchResult.Error(e.message ?: "Unexpected error")
         }
     }
-    
+
     /**
      * Fetch multiple images in parallel through the privacy proxy.
      *
@@ -282,12 +282,12 @@ class ImageProxyService private constructor(private val context: Context) {
         if (!initialized) {
             val initResult = initialize()
             if (!initResult) {
-                return@withContext urls.associateWith { 
-                    ImageFetchResult.Error("Proxy not initialized") 
+                return@withContext urls.associateWith {
+                    ImageFetchResult.Error("Proxy not initialized")
                 }
             }
         }
-        
+
         try {
             val results = proxyFetchImagesBatch(urls, maxConcurrent)
             results.associate { result ->
@@ -309,7 +309,7 @@ class ImageProxyService private constructor(private val context: Context) {
             urls.associateWith { ImageFetchResult.Error(e.message ?: "Unexpected error") }
         }
     }
-    
+
     /**
      * Clear the in-memory image cache.
      */
@@ -322,7 +322,7 @@ class ImageProxyService private constructor(private val context: Context) {
             false
         }
     }
-    
+
     /**
      * Shutdown the proxy service and release resources.
      * 

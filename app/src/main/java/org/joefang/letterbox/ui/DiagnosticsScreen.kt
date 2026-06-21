@@ -197,9 +197,9 @@ private fun ResetConfirmationDialog(onConfirm: () -> Unit, onDismiss: () -> Unit
         text = {
             Text(
                 "This generates a brand-new WireGuard keypair and re-registers " +
-                    "with Cloudflare, replacing the stored identity. The current " +
-                    "device registration is deleted and the tunnel reconnects. " +
-                    "Use this if the connection is stuck."
+                        "with Cloudflare, replacing the stored identity. The current " +
+                        "device registration is deleted and the tunnel reconnects. " +
+                        "Use this if the connection is stuck."
             )
         },
         confirmButton = {
@@ -225,6 +225,7 @@ private fun StoredConfigSection(
             state.message,
             valueColor = MaterialTheme.colorScheme.error
         )
+
         is StoredState.Loaded -> StoredConfigBody(
             config = state.config,
             revealPrivateKey = revealPrivateKey,
@@ -296,6 +297,7 @@ private fun LiveTunnelSection(state: LiveState) {
                 valueColor = MaterialTheme.colorScheme.error
             )
         }
+
         is LiveState.Loaded -> LiveTunnelBody(state.diagnostics)
     }
 }
