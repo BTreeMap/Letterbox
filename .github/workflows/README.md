@@ -26,6 +26,8 @@ This directory contains the CI/CD workflows for the Letterbox project. The workf
 
 **Purpose:** Runs instrumented UI tests using Gradle Managed Devices with hardware acceleration (KVM).
 
+**Native libraries:** This workflow does **not** rebuild the Rust code. It downloads the `letterbox-jnilibs` artifact produced by the triggering Build run (via `run-id`) into `app/src/main/jniLibs`, avoiding a second, expensive Android cross-compile.
+
 **Jobs:**
 - **ui-tests**: Runs comprehensive UI tests on an emulated Pixel 7 (API 34)
 
@@ -99,9 +101,16 @@ This directory contains the CI/CD workflows for the Letterbox project. The workf
 
 1. **Least Privilege for PRs**: Build workflow has no write permissions.
 2. **Separate Signing Keys**: Test builds use `ci:test` environment with separate key, releases use `ci:release`.
-3. **Consolidated Building**: APKs are built once and shared via artifacts.
-3. **Job-Level Permission Overrides**: Within workflows that need write permissions, individual jobs override to read-only where possible.
-4. **Clear Separation of Concerns**: Different workflows for different purposes makes it easier to audit and maintain security policies.
+3. **Consolidated Building**: APKs and native libraries are built once and shared via artifacts.
+4. **Scoped Rust cache writes**: The Rust compiler cache (`Swatinem/rust-cache`) is only *written* on trusted refs (`push` to `main` or release tags). Pull requests and feature branches restore the cache read-only, so an untrusted/unauthorized PR cannot poison the shared cache.
+5. **Job-Level Permission Overrides**: Within workflows that need write permissions, individual jobs override to read-only where possible.
+6. **Clear Separation of Concerns**: Different workflows for different purposes makes it easier to audit and maintain security policies.
+
+## Runners and native-library build constraint
+
+All jobs run on `ubuntu-24.04` (amd64). The Android cross-compile is **pinned to amd64 on purpose**: the pinned Android NDK (r26, `26.1.10909125`) ships only a `linux-x86_64` host toolchain — there is no `linux-aarch64` host — so an arm64 runner cannot execute the NDK clang to produce the Android `.so` files. arm64 runners would only help host/`linux-gnu` Rust work, which this project does not ship.
+
+The Android native libraries (`letterbox_core` + `letterbox_proxy`, all three ABIs) are built **once** in `build.yml` using a single workspace `cargo ndk` invocation (both crates share one compile of the dependency graph) and uploaded as the `letterbox-jnilibs` artifact. Downstream jobs consume that artifact instead of rebuilding.
 
 ## Build Process
 

@@ -13,7 +13,7 @@ permissions:
 jobs:
   ui-tests:
     name: Instrumented UI Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     # Only run if the build workflow succeeded
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
@@ -51,65 +51,34 @@ jobs:
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # Reuse the native libraries built once by the Build workflow instead of
+      # re-running the expensive Android cross-compile here. Only the x86_64 ABI
+      # is needed by the emulator, but downloading all ABIs is harmless and keeps
+      # the artifact a single shared unit.
+      - name: Download shared native libraries
+        uses: actions/download-artifact@v8
         with:
-          targets: x86_64-linux-android
+          name: letterbox-jnilibs
+          path: app/src/main/jniLibs
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            rust/letterbox-core/target/
-            rust/letterbox-proxy/target/
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
-      - name: Install cargo-ndk
+      - name: Verify native libraries are present
         run: |
-          if ! command -v cargo-ndk &> /dev/null; then
-            cargo install cargo-ndk --locked
-          else
-            echo "cargo-ndk already installed, skipping"
-          fi
-
-      - name: Install and pin NDK
-        run: |
-          sdkmanager --install "ndk;26.1.10909125"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
-
-      - name: Gradle permissions
-        run: chmod +x gradlew
-
-      - name: Build Android native libraries for x86_64 (letterbox-core)
-        run: |
-          cargo ndk -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --release
-        working-directory: rust/letterbox-core
-
-      - name: Build Android native libraries for x86_64 (letterbox-proxy)
-        run: |
-          cargo ndk -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --release
-        working-directory: rust/letterbox-proxy
-
-      - name: Verify native libraries were generated
-        run: |
-          echo "Checking for generated .so files in jniLibs:"
+          echo "Checking for downloaded .so files in jniLibs:"
           find ${{ github.workspace }}/app/src/main/jniLibs -maxdepth 2 -type f -name "*.so" -print
           if [ -z "$(find ${{ github.workspace }}/app/src/main/jniLibs -maxdepth 2 -type f -name "*.so")" ]; then
             echo "ERROR: No .so files found in jniLibs!"
             exit 1
           fi
-          echo "Verifying both letterbox_core and letterbox_proxy libraries:"
-          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_core*.so" | head -1 || (echo "ERROR: letterbox_core not found!" && exit 1)
-          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_proxy*.so" | head -1 || (echo "ERROR: letterbox_proxy not found!" && exit 1)
+          find ${{ github.workspace }}/app/src/main/jniLibs -path "*x86_64*letterbox_core*.so" | head -1 || (echo "ERROR: x86_64 letterbox_core not found!" && exit 1)
+          find ${{ github.workspace }}/app/src/main/jniLibs -path "*x86_64*letterbox_proxy*.so" | head -1 || (echo "ERROR: x86_64 letterbox_proxy not found!" && exit 1)
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5.0.2
+
+      - name: Gradle permissions
+        run: chmod +x gradlew
 
       - name: Run instrumented UI tests (Gradle Managed Devices)
         run: |

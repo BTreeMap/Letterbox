@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     name: Build Release APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read  # Override: build job only needs read
     steps:
@@ -48,33 +48,19 @@ jobs:
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses
 
+      # The Android NDK only ships a linux-x86_64 host toolchain, so this Android
+      # cross-compile must run on an amd64 runner (ubuntu-24.04).
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
-      - name: Cache Gradle dependencies
-        uses: actions/cache@v5
+      - name: Cache Rust build (android)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
-
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            rust/letterbox-core/target/
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
+          shared-key: android
+          # Release builds run from tags; allow them to refresh the shared cache.
+          save-if: ${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Install cargo-ndk
         run: |
@@ -89,13 +75,18 @@ jobs:
           sdkmanager --install "ndk;26.1.10909125"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5.0.2
+
       - name: Gradle permissions
         run: chmod +x gradlew
 
-      - name: Build Android native libraries
+      # Single workspace invocation builds both letterbox-core and letterbox-proxy
+      # for all three ABIs in one pass.
+      - name: Build Android native libraries (release, all ABIs)
         run: |
-          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --release
-        working-directory: rust/letterbox-core
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --manifest-path ${{ github.workspace }}/Cargo.toml --release
+        working-directory: rust
 
       - name: Verify native libraries were generated
         run: |
@@ -105,6 +96,8 @@ jobs:
             echo "ERROR: No .so files found in jniLibs!"
             exit 1
           fi
+          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_core*.so" | head -1 || (echo "ERROR: letterbox_core not found!" && exit 1)
+          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_proxy*.so" | head -1 || (echo "ERROR: letterbox_proxy not found!" && exit 1)
 
       - name: Build prod release APK
         run: ./gradlew assembleProdRelease --no-daemon
@@ -124,7 +117,7 @@ jobs:
   publish:
     name: Sign and Upload to Release
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: ci:release
     permissions:
       contents: write  # Required for uploading to release

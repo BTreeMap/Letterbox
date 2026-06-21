@@ -20,14 +20,23 @@ on:
       prod-release-artifact-name:
         description: "Name of the prod release APK artifact (unsigned)"
         value: ${{ jobs.build.outputs.prod-release-artifact-name }}
+      jnilibs-artifact-name:
+        description: "Name of the shared Android native-libraries artifact"
+        value: ${{ jobs.build.outputs.jnilibs-artifact-name }}
 
 permissions:
   contents: read
 
+# Restrict Rust compiler-cache *writes* to trusted refs (main + release tags).
+# Pull requests and feature branches still restore the cache read-only, so an
+# untrusted/unauthorized PR can never poison the shared cache.
+env:
+  RUST_CACHE_SAVE: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+
 jobs:
   lint-and-test:
     name: Lint and Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -72,47 +81,20 @@ jobs:
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses
 
+      # Host-only toolchain: lint + unit tests build the Rust libs for the host
+      # (via Gradle's cargoHostBuild), never the Android targets, so no NDK or
+      # cargo-ndk is needed in this job.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build (host)
+        uses: Swatinem/rust-cache@v2
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+          shared-key: host
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
 
-      - name: Cache Gradle dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
-
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            rust/letterbox-core/target/
-            rust/letterbox-proxy/target/
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
-      - name: Install cargo-ndk
-        run: |
-          if ! command -v cargo-ndk &> /dev/null; then
-            cargo install cargo-ndk --locked
-          else
-            echo "cargo-ndk already installed, skipping"
-          fi
-
-      - name: Install and pin NDK
-        run: |
-          sdkmanager --install "ndk;26.1.10909125"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5.0.2
 
       - name: Rust format check
         run: |
@@ -145,7 +127,7 @@ jobs:
 
   warp-smoke-test:
     name: Real WARP smoke test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The full privacy path (provision a real WARP device -> WireGuard handshake
     # -> DoH -> TLS -> HTTP image fetch -> delete device) is exercised against
     # live Cloudflare here. It is inherently flaky (network, rate limits, anycast
@@ -160,18 +142,12 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v5
+      - name: Cache Rust build (proxy host)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            rust/letterbox-proxy/target/
-          key: cargo-warp-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-warp-${{ runner.os }}-
-            cargo-${{ runner.os }}-
+          workspaces: rust/letterbox-proxy
+          shared-key: warp
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
 
       - name: Run real Cloudflare WARP end-to-end test
         id: warp
@@ -192,11 +168,12 @@ jobs:
 
   build:
     name: Build APKs
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: lint-and-test
     outputs:
       test-artifact-name: ${{ steps.artifact-names.outputs.test }}
       prod-release-artifact-name: ${{ steps.artifact-names.outputs.prod-release }}
+      jnilibs-artifact-name: ${{ steps.artifact-names.outputs.jnilibs }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -238,10 +215,20 @@ jobs:
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses
 
+      # The Android NDK only ships a linux-x86_64 host toolchain, so this Android
+      # cross-compile must run on an amd64 runner (ubuntu-24.04); an arm64 runner
+      # cannot execute the NDK clang. The optimized release libraries are built
+      # once here and shared with downstream jobs via the jniLibs artifact.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache Rust build (android)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android
+          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked || true
@@ -257,15 +244,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5.0.2
 
-      - name: Build Android native libraries (letterbox-core)
+      # Single workspace invocation builds both letterbox-core and letterbox-proxy
+      # for all three ABIs in one pass, reusing the compiled dependency graph
+      # across the two crates (the previous two per-crate invocations recompiled
+      # the shared dependencies twice).
+      - name: Build Android native libraries (release, all ABIs)
         run: |
-          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --release
-        working-directory: rust/letterbox-core
-
-      - name: Build Android native libraries (letterbox-proxy)
-        run: |
-          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --release
-        working-directory: rust/letterbox-proxy
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --manifest-path ${{ github.workspace }}/Cargo.toml --release
+        working-directory: rust
 
       - name: Verify native libraries were generated
         run: |
@@ -278,6 +264,16 @@ jobs:
           echo "Verifying both letterbox_core and letterbox_proxy libraries:"
           find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_core*.so" | head -1 || (echo "ERROR: letterbox_core not found!" && exit 1)
           find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_proxy*.so" | head -1 || (echo "ERROR: letterbox_proxy not found!" && exit 1)
+
+      # Share the freshly built native libraries so the instrumented UI test
+      # workflow downloads them instead of paying for a second Android cross-compile.
+      - name: Upload shared native libraries artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: letterbox-jnilibs
+          path: app/src/main/jniLibs
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Build test debug APK
         run: ./gradlew assembleStagingDebug --no-daemon
@@ -297,6 +293,7 @@ jobs:
         run: |
           echo "test=letterbox-staging-apk" >> $GITHUB_OUTPUT
           echo "prod-release=letterbox-prod-release-unsigned-apk" >> $GITHUB_OUTPUT
+          echo "jnilibs=letterbox-jnilibs" >> $GITHUB_OUTPUT
 
       - name: Upload test APK artifact
         uses: actions/upload-artifact@v7
