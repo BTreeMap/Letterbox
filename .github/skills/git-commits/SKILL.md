@@ -1,5 +1,5 @@
 ---
-name: git-commit-standards
+name: git-commits
 description: Enforces Conventional Commits format and best practices. Use this skill whenever drafting, reviewing, or validating git commit messages for the repository.
 ---
 
