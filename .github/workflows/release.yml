@@ -26,7 +26,7 @@ jobs:
           echo "Release tag '$TAG_NAME' is valid"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Full git history for version calculation
           fetch-tags: true
@@ -39,7 +39,7 @@ jobs:
           java-version: "21"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android components
         run: |
@@ -76,7 +76,7 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5.0.2
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       - name: Gradle permissions
         run: chmod +x gradlew
@@ -123,7 +123,7 @@ jobs:
       contents: write  # Required for uploading to release
     steps:
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android build tools
         run: |
@@ -164,7 +164,7 @@ jobs:
           rm -f "$UNSIGNED_APK"
 
       - name: Upload release APK to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ./artifacts/*.apk
         env:

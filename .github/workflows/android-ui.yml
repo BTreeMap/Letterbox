@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0  # Full git history for version calculation
@@ -40,7 +40,7 @@ jobs:
           java-version: "21"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android components
         run: |
@@ -75,7 +75,7 @@ jobs:
           find ${{ github.workspace }}/app/src/main/jniLibs -path "*x86_64*letterbox_proxy*.so" | head -1 || (echo "ERROR: x86_64 letterbox_proxy not found!" && exit 1)
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5.0.2
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       - name: Gradle permissions
         run: chmod +x gradlew
