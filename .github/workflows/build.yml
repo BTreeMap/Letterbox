@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Full git history for version calculation
           fetch-tags: true
@@ -72,7 +72,7 @@ jobs:
           java-version: "21"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android components
         run: |
@@ -94,7 +94,7 @@ jobs:
           save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5.0.2
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       - name: Rust format check
         run: |
@@ -135,7 +135,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -176,7 +176,7 @@ jobs:
       jnilibs-artifact-name: ${{ steps.artifact-names.outputs.jnilibs }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Full git history for version calculation
           fetch-tags: true
@@ -206,7 +206,7 @@ jobs:
           java-version: "21"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android components
         run: |
@@ -242,7 +242,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5.0.2
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       # Single workspace invocation builds both letterbox-core and letterbox-proxy
       # for all three ABIs in one pass, reusing the compiled dependency graph

@@ -19,7 +19,7 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0  # Full git history for version calculation
@@ -27,7 +27,7 @@ jobs:
           submodules: recursive
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android build tools
         run: |
@@ -117,7 +117,7 @@ jobs:
           echo "Version: $VERSION_NAME"
 
       - name: Create pre-release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: pre-release-${{ steps.version.outputs.short_sha }}
           name: Pre-release ${{ steps.version.outputs.version_name }}
