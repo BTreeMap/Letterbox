@@ -63,7 +63,7 @@ log = "0.4.29"
 env_logger = "0.11.8"
 
 # UniFFI for Kotlin bindings
-uniffi = { version = "0.31.0", features = ["cli"] }
+uniffi = { version = "0.32.0", features = ["cli"] }
 
 # Caching
 lru = "0.18.0"
@@ -72,7 +72,7 @@ lru = "0.18.0"
 chrono = { version = "0.4.43", default-features = false, features = ["std", "clock"] }
 
 [build-dependencies]
-uniffi = { version = "0.31.0", features = ["build"] }
+uniffi = { version = "0.32.0", features = ["build"] }
 
 [dev-dependencies]
 tokio-test = "0.4.5"
