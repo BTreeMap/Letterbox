@@ -14,12 +14,12 @@ path = "uniffi-bindgen.rs"
 [dependencies]
 thiserror = "2.0.18"
 mail-parser = "0.11.1"
-uniffi = { version = "0.31.0", features = ["cli"] }
+uniffi = { version = "0.32.0", features = ["cli"] }
 scraper = "0.27.0"
 url = "2.5.8"
 
 [build-dependencies]
-uniffi = { version = "0.31.0", features = ["build"] }
+uniffi = { version = "0.32.0", features = ["build"] }
 
 [dev-dependencies]
 once_cell = "1.21.3"
