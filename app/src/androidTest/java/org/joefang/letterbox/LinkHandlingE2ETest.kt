@@ -84,7 +84,7 @@ Content-Type: text/html; charset=UTF-8
         
         // Reset preferences
         runBlocking {
-            preferencesRepository.completeOnboarding()
+            TestPreferences.seedOnboarded(context)
             preferencesRepository.setAlwaysLoadRemoteImages(false)
             preferencesRepository.setEnablePrivacyProxy(true)
         }

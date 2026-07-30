@@ -57,7 +57,7 @@ class ImageProxyIntegrationTest {
         
         // Reset preferences to defaults before each test
         runBlocking {
-            preferencesRepository.completeOnboarding()
+            TestPreferences.seedOnboarded(context)
             preferencesRepository.setAlwaysLoadRemoteImages(false)
             preferencesRepository.setEnablePrivacyProxy(true)
         }

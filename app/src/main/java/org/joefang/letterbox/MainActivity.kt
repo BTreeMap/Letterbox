@@ -1080,28 +1080,6 @@ private fun SettingsContent(
             )
         }
 
-        // Standing disclosure, in place of a blocking consent dialog: loading an
-        // image is the opt-in, so the terms belong next to the switch that
-        // describes what loading one does.
-        Text(
-            text = "By loading remote images you accept that the request is " +
-                "processed through the Cloudflare WARP tunnel, subject to " +
-                "Cloudflare's Terms of Service.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.testTag("warpDisclosure")
-        )
-        TextButton(
-            onClick = {
-                context.startActivity(
-                    Intent(Intent.ACTION_VIEW, Uri.parse(CLOUDFLARE_TERMS_URL))
-                )
-            },
-            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
-        ) {
-            Text("View Cloudflare Terms of Service")
-        }
-
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
         // Storage section (Telegram-style clear cache)
@@ -1234,6 +1212,33 @@ private fun SettingsContent(
             ) {
                 Text("Open")
             }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        // Standing disclosure, in place of a blocking consent dialog: loading an
+        // image is the opt-in, so the terms are stated rather than gated on.
+        //
+        // Placed at the foot deliberately. Sitting it beside the proxy switch
+        // pushed the Storage section below the fold of the bottom sheet, which
+        // is not a test artefact — it made a real control unreachable without
+        // scrolling. Disclosure text costs nothing down here.
+        Text(
+            text = "Loading remote images routes the request through Cloudflare " +
+                "WARP, subject to Cloudflare's Terms of Service.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("warpDisclosure")
+        )
+        TextButton(
+            onClick = {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(CLOUDFLARE_TERMS_URL))
+                )
+            },
+            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
+        ) {
+            Text("View Cloudflare Terms of Service")
         }
 
         Spacer(modifier = Modifier.height(24.dp))

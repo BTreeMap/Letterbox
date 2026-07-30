@@ -19,9 +19,23 @@ import org.junit.runners.model.Statement
  */
 object TestPreferences {
 
-    /** Mark onboarding complete so [MainActivity] shows the main UI immediately. */
+    /**
+     * Put preferences into the state a test needs before [MainActivity] launches:
+     * onboarding done, and no update check due.
+     *
+     * The update stamp is not incidental. `MainActivity` runs a throttled update
+     * check on launch, and a fresh install has `lastUpdateCheck = 0`, so the
+     * throttle never fires — meaning every test launch would provision a WARP
+     * device, bring up the tunnel and round-trip to GitHub before the UI settles.
+     * Stamping "checked just now" makes the existing throttle suppress it.
+     *
+     * This used to be masked: the check was gated on a consent flag that tests
+     * left false, so it never ran and nothing recorded why that mattered.
+     */
     suspend fun seedOnboarded(context: Context) {
-        UserPreferencesRepository(context).completeOnboarding()
+        val repository = UserPreferencesRepository(context)
+        repository.completeOnboarding()
+        repository.setLastUpdateCheck(System.currentTimeMillis())
     }
 }
 
