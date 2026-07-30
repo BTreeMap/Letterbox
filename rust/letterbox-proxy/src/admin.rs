@@ -59,7 +59,7 @@ fn snapshot(state: &ProxyState) -> WarpStoredConfig {
             .unwrap_or_default(),
         peer_public_key: c.peer.public_key.clone(),
         endpoint_host: c.peer.endpoint_host.clone(),
-        endpoint_ipv4: c.peer.endpoint_ipv4.clone(),
+        endpoint_ipv4: c.peer.endpoint_address().to_string(),
         endpoint_port: c.peer.endpoint_port,
         local_address_ipv4: c.interface.address_ipv4.clone(),
         warp_enabled: c.warp_enabled,

@@ -83,8 +83,8 @@ pub struct TunnelDiagnostics {
     pub tx_bytes: u64,
     /// Plaintext bytes received from the tunnel.
     pub rx_bytes: u64,
-    /// Estimated packet loss in `[0.0, 1.0]`.
-    pub estimated_loss: f32,
+    /// Estimated packet loss in `[0.0, 1.0]`, if the transport measures it.
+    pub estimated_loss: Option<f32>,
     /// Estimated round-trip time in milliseconds, if measured.
     pub rtt_ms: Option<u32>,
 }

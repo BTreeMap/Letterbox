@@ -196,7 +196,7 @@ impl MasqueTransport {
                 .then(|| self.connected_at.get_or_init(Instant::now).elapsed()),
             tx_bytes: snapshot.tx_bytes,
             rx_bytes: snapshot.rx_bytes,
-            estimated_loss: 0.0,
+            estimated_loss: None,
             rtt_ms: None,
         }
     }

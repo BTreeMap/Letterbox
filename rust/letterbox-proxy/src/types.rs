@@ -89,8 +89,9 @@ pub struct WarpDiagnostics {
     pub tx_bytes: u64,
     /// Plaintext bytes received from the tunnel.
     pub rx_bytes: u64,
-    /// Estimated packet loss in `[0.0, 1.0]`.
-    pub estimated_loss: f32,
+    /// Estimated packet loss in `[0.0, 1.0]`, or absent when the transport
+    /// does not measure it. MASQUE does not.
+    pub estimated_loss: Option<f32>,
     /// Estimated round-trip time in milliseconds, if measured.
     pub rtt_ms: Option<u32>,
 }

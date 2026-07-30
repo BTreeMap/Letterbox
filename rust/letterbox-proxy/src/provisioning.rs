@@ -356,6 +356,11 @@ impl WarpProvisioner {
         // Extract peer configuration (use first peer)
         let peer = first_peer(config_response.config.peers, "configuration")?;
         let (endpoint_host, endpoint_port) = split_endpoint(&peer.endpoint.host);
+        // The API returns the literal with a port attached too — `162.159.192.6:0`
+        // in practice — so it needs the same treatment as the host. Stored raw it
+        // reappears wherever the address is rendered with a port, as
+        // `162.159.192.6:0:2408`.
+        let (endpoint_ipv4, _) = split_endpoint(&peer.endpoint.v4);
 
         let account_type = config_response
             .account
@@ -366,7 +371,7 @@ impl WarpProvisioner {
             peer: WarpPeerConfig {
                 public_key: peer.public_key,
                 endpoint_host: endpoint_host.to_string(),
-                endpoint_ipv4: peer.endpoint.v4,
+                endpoint_ipv4: endpoint_ipv4.to_string(),
                 endpoint_port,
             },
             interface: WarpInterfaceConfig {

@@ -20,8 +20,13 @@ pub struct TunnelStats {
     pub tx_bytes: u64,
     /// Total plaintext bytes received from the tunnel.
     pub rx_bytes: u64,
-    /// Estimated packet loss in `[0.0, 1.0]`.
-    pub estimated_loss: f32,
+    /// Estimated packet loss in `[0.0, 1.0]`, if the transport measures it.
+    ///
+    /// `None` rather than `0.0` when unmeasured, for the same reason
+    /// [`Self::since_handshake`] is an `Option`: a loss rate of zero is a
+    /// finding, and reporting one the transport never computed is a plausible
+    /// wrong number where "not measured" is the truth.
+    pub estimated_loss: Option<f32>,
     /// Estimated round-trip time in milliseconds, if measured.
     pub rtt_ms: Option<u32>,
 }

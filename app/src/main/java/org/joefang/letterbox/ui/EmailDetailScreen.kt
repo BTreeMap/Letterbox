@@ -54,6 +54,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -587,6 +588,19 @@ private fun EmailHeader(
  * - Disables file access for security
  * - Intercepts cid: URLs to load inline images from email attachments
  * - Optionally loads remote images through the WARP privacy proxy
+ *
+ * ## Why the policy is read through [rememberUpdatedState]
+ *
+ * `AndroidView`'s `factory` runs **once**, for the life of the view. A
+ * `WebViewClient` built there captures whatever `allowNetworkLoads` held at
+ * first composition and keeps it for ever, so tapping "Show images" flipped the
+ * policy, dismissed the banner, and changed nothing: the interceptor went on
+ * answering 403 and `settings.blockNetworkLoads` stayed shut, which is why no
+ * request ever reached the proxy.
+ *
+ * Reading the current value through a `State` instead means the client and the
+ * settings both follow recomposition, which is the only place the policy can
+ * change.
  */
 @Composable
 private fun EmailWebView(
@@ -598,29 +612,31 @@ private fun EmailWebView(
     onLinkLongPress: (String) -> Unit
 ) {
     val context = LocalContext.current
-    
+
+    // Read by the interceptor below, which outlives this composition.
+    val currentAllowNetworkLoads by rememberUpdatedState(allowNetworkLoads)
+    val currentUseProxy by rememberUpdatedState(useProxy)
+
+    // What the view was last told to render. A WebView that has already laid out
+    // a page with images blocked will not retry them on its own, so a change of
+    // policy has to reload just as a change of content does — and neither should
+    // happen on an unrelated recomposition, which would throw away scroll
+    // position mid-read.
+    //
+    // Deliberately *not* snapshot state: `update` both reads and writes this, and
+    // an observable value would invalidate the block that wrote it.
+    val lastLoaded = remember { arrayOfNulls<Any>(1) }
+
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
-                // Security settings for network access:
-                // - When allowNetworkLoads=false: Block all network requests (default secure state)
-                // - When allowNetworkLoads=true: Allow network requests to be attempted
-                //   The shouldInterceptRequest callback will then either:
-                //   - Route through the privacy proxy (when useProxy=true)
-                //   - Let WebView handle directly (when useProxy=false)
-                //
-                // IMPORTANT: We must NOT block network loads when useProxy=true, because
-                // shouldInterceptRequest is only called when the WebView attempts to make
-                // a request. If blockNetworkLoads=true, no requests are attempted, and
-                // the proxy interception never happens.
-                val shouldBlockNetworkAccess = !allowNetworkLoads
-                
+                // Constant for the life of the view. The network-blocking
+                // settings are *not* constant and are applied in `update`
+                // below, because this factory never runs again.
                 settings.apply {
                     allowFileAccess = false
                     allowContentAccess = false
                     javaScriptEnabled = false // Disable JS for security
-                    blockNetworkLoads = shouldBlockNetworkAccess
-                    blockNetworkImage = shouldBlockNetworkAccess
                 }
 
                 // Custom WebViewClient to intercept URLs
@@ -658,7 +674,7 @@ private fun EmailWebView(
                         // Handle HTTP/HTTPS requests
                         if (url.startsWith("http://") || url.startsWith("https://")) {
                             // Only fetch images if allowed
-                            if (!allowNetworkLoads) {
+                            if (!currentAllowNetworkLoads) {
                                 return WebResourceResponse(
                                     "text/plain",
                                     "utf-8",
@@ -670,7 +686,7 @@ private fun EmailWebView(
                             }
 
                             // If not using proxy, let WebView handle directly
-                            if (!useProxy) {
+                            if (!currentUseProxy) {
                                 return null
                             }
 
@@ -765,7 +781,19 @@ private fun EmailWebView(
             }
         },
         update = { webView ->
-            webView.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+            // Applied on every recomposition, so the gate tracks the policy.
+            // `blockNetworkLoads` must be false for the proxy path: the
+            // interceptor only runs when the WebView actually attempts a
+            // request, so blocking here would suppress the interception itself
+            // rather than the network access it performs.
+            webView.settings.blockNetworkLoads = !allowNetworkLoads
+            webView.settings.blockNetworkImage = !allowNetworkLoads
+
+            val key = html to allowNetworkLoads
+            if (lastLoaded[0] != key) {
+                lastLoaded[0] = key
+                webView.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+            }
         },
         modifier = modifier
     )

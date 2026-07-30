@@ -1608,9 +1608,10 @@ data class WarpDiagnostics (
     var `rxBytes`: kotlin.ULong
     , 
     /**
-     * Estimated packet loss in `[0.0, 1.0]`.
+     * Estimated packet loss in `[0.0, 1.0]`, or absent when the transport
+     * does not measure it. MASQUE does not.
      */
-    var `estimatedLoss`: kotlin.Float
+    var `estimatedLoss`: kotlin.Float?
     , 
     /**
      * Estimated round-trip time in milliseconds, if measured.
@@ -1647,7 +1648,7 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
             FfiConverterOptionalULong.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
-            FfiConverterFloat.read(buf),
+            FfiConverterOptionalFloat.read(buf),
             FfiConverterOptionalUInt.read(buf),
         )
     }
@@ -1668,7 +1669,7 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
             FfiConverterOptionalULong.allocationSize(value.`lastHandshakeSecs`) +
             FfiConverterULong.allocationSize(value.`txBytes`) +
             FfiConverterULong.allocationSize(value.`rxBytes`) +
-            FfiConverterFloat.allocationSize(value.`estimatedLoss`) +
+            FfiConverterOptionalFloat.allocationSize(value.`estimatedLoss`) +
             FfiConverterOptionalUInt.allocationSize(value.`rttMs`)
     )
 
@@ -1688,7 +1689,7 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
             FfiConverterOptionalULong.write(value.`lastHandshakeSecs`, buf)
             FfiConverterULong.write(value.`txBytes`, buf)
             FfiConverterULong.write(value.`rxBytes`, buf)
-            FfiConverterFloat.write(value.`estimatedLoss`, buf)
+            FfiConverterOptionalFloat.write(value.`estimatedLoss`, buf)
             FfiConverterOptionalUInt.write(value.`rttMs`, buf)
     }
 }
@@ -2508,6 +2509,38 @@ public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
         } else {
             buf.put(1)
             FfiConverterULong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalFloat: FfiConverterRustBuffer<kotlin.Float?> {
+    override fun read(buf: ByteBuffer): kotlin.Float? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterFloat.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Float?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterFloat.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Float?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterFloat.write(value, buf)
         }
     }
 }

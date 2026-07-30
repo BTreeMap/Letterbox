@@ -140,13 +140,14 @@ verified empirically rather than assumed.
 │  └─────────────────────────────────────────────────────────────────┘   │
 └───────────────────────────────────────────────────────────────────────┘
                                   │
-                                  │ UDP (WireGuard encrypted)
+                                  │ UDP/443 (QUIC, CONNECT-IP datagrams)
                                   ▼
 ┌───────────────────────────────────────────────────────────────────────┐
 │                     Cloudflare WARP Infrastructure                     │
 │                                                                         │
-│  engage.cloudflareclient.com:2408                                      │
-│  162.159.192.1 / 2606:4700:d0::a29f:c001                               │
+│  consumer MASQUE data plane: 162.159.198.1:443                         │
+│  (162.159.192.0/24 serves WireGuard and is not dialled;                │
+│   engage.cloudflareclient.com:2408 is returned by registration only)   │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -159,8 +160,8 @@ Handles the creation and management of Cloudflare WARP identities.
 #### Registration Flow
 
 ```
-1. Generate X25519 keypair locally
-2. POST /reg with public key and timestamp
+1. Mint 32 random bytes (no curve arithmetic — see above)
+2. POST /reg with those bytes as `key`, plus a timestamp
 3. Receive account_id and access_token
 4. GET /reg/{account_id} for tunnel configuration
 5. PATCH /reg/{account_id} to enable WARP
@@ -181,7 +182,7 @@ Handles the creation and management of Cloudflare WARP identities.
 struct WarpAccountData {
     account_id: String,      // Device identifier
     access_token: String,    // Bearer token for API
-    private_key: String,     // WireGuard private key (base64)
+    private_key: String,     // registration key: 32 opaque bytes, unused by the tunnel
     license_key: String,     // For WARP+ subscribers
 }
 ```
@@ -220,12 +221,12 @@ Uses smoltcp for userspace TCP/IP networking without kernel involvement.
 
 #### Virtual Device
 
-A custom smoltcp `Device` bridges the TCP/IP stack with WireGuard:
+A custom smoltcp `Device` bridges the TCP/IP stack with the transport:
 
 ```rust
 struct VirtualDevice {
-    rx_queue: VecDeque<Vec<u8>>,  // From WireGuard -> smoltcp
-    tx_queue: VecDeque<Vec<u8>>,  // From smoltcp -> WireGuard
+    rx_queue: VecDeque<Vec<u8>>,  // From the tunnel -> smoltcp
+    tx_queue: VecDeque<Vec<u8>>,  // From smoltcp -> the tunnel
 }
 ```
 
@@ -328,7 +329,7 @@ for url in urls {
 |-------|-------|----------|
 | `NotInitialized` | Called before `proxy_init()` | Call `proxy_init()` first |
 | `ProvisioningFailed` | WARP API error | Retry with backoff |
-| `TunnelError` | WireGuard handshake failed | Retry connection |
+| `TunnelError` | QUIC/CONNECT-IP setup failed | Retry connection |
 | `InvalidUrl` | Malformed URL | Return error to caller |
 | `HttpError` | HTTP status != 2xx | Return error with status |
 | `InvalidContentType` | Not an image | Return error |
@@ -350,7 +351,7 @@ If the tunnel cannot be established, the HTTP client falls back to direct reques
 
 ### Network Security
 
-- All image traffic encrypted with WireGuard
+- All image traffic encrypted inside QUIC (the MASQUE tunnel)
 - TLS 1.3 for HTTPS connections
 - Certificate validation via rustls
 
@@ -386,11 +387,11 @@ truth (Renovate keeps it current).
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| boringtun | 0.7 | WireGuard implementation |
+| quiche | 0.22 | QUIC + HTTP/3, via `usque-core` |
 | smoltcp | 0.13 | TCP/IP stack |
 | rustls | 0.23 | TLS library |
 | reqwest | 0.13 | HTTP client (for provisioning) |
-| x25519-dalek | 2.0 | Key generation |
+| p256 | 0.13 | MASQUE enrolment keypair |
 | uniffi | 0.31 | FFI bindings |
 | tokio | 1.49 | Async runtime |
 | lru | 0.18 | Cache implementation |
@@ -410,7 +411,7 @@ truth (Renovate keeps it current).
 ### Integration Tests
 
 - WARP provisioning flow (with mock server)
-- WireGuard handshake (local loopback)
+- MASQUE handshake against the live endpoint (network-gated)
 - HTTP fetching through tunnel
 - Cache behavior
 

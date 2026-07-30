@@ -84,13 +84,13 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
     var reloadKey by remember { mutableIntStateOf(0) }
     var storedState by remember { mutableStateOf<StoredState>(StoredState.Loading) }
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Loading) }
-    var revealPrivateKey by remember { mutableStateOf(false) }
+    var revealSecrets by remember { mutableStateOf(false) }
     var resetting by remember { mutableStateOf(false) }
     var resetError by remember { mutableStateOf<String?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
 
     LaunchedEffect(reloadKey) {
-        revealPrivateKey = false
+        revealSecrets = false
         storedState = StoredState.Loading
         liveState = LiveState.Loading
         val service = ImageProxyService.getInstance(context)
@@ -153,8 +153,8 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
 
                 StoredConfigSection(
                     state = storedState,
-                    revealPrivateKey = revealPrivateKey,
-                    onToggleReveal = { revealPrivateKey = !revealPrivateKey }
+                    revealSecrets = revealSecrets,
+                    onToggleReveal = { revealSecrets = !revealSecrets }
                 )
 
                 LiveTunnelSection(state = liveState)
@@ -172,7 +172,11 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
                         copyToClipboard(
                             context,
                             "WARP diagnostics",
-                            formatForClipboard(stored.config, live?.diagnostics)
+                            formatForClipboard(
+                                stored.config,
+                                live?.diagnostics,
+                                includeSecrets = revealSecrets
+                            )
                         )
                     }) { Text("Copy") }
                 }
@@ -214,7 +218,7 @@ private fun ResetConfirmationDialog(onConfirm: () -> Unit, onDismiss: () -> Unit
 @Composable
 private fun StoredConfigSection(
     state: StoredState,
-    revealPrivateKey: Boolean,
+    revealSecrets: Boolean,
     onToggleReveal: () -> Unit
 ) {
     SectionLabel("Stored configuration")
@@ -228,7 +232,7 @@ private fun StoredConfigSection(
 
         is StoredState.Loaded -> StoredConfigBody(
             config = state.config,
-            revealPrivateKey = revealPrivateKey,
+            revealSecrets = revealSecrets,
             onToggleReveal = onToggleReveal
         )
     }
@@ -237,7 +241,7 @@ private fun StoredConfigSection(
 @Composable
 private fun StoredConfigBody(
     config: WarpStoredConfig,
-    revealPrivateKey: Boolean,
+    revealSecrets: Boolean,
     onToggleReveal: () -> Unit
 ) {
     if (!config.hasConfig) {
@@ -254,31 +258,66 @@ private fun StoredConfigBody(
     DiagnosticRow("WARP enabled", if (config.warpEnabled) "Yes" else "No")
     DiagnosticRow("Account type", config.accountType.ifBlank { "unknown" })
     DiagnosticRow("Account ID", config.accountId.ifBlank { "—" }, monospace = true)
-    DiagnosticRow("License key", config.licenseKey.ifBlank { "—" }, monospace = true)
     DiagnosticRow("Last provisioned", formatTimestamp(config.lastUpdatedSecs))
 
-    SectionLabel("Endpoint")
+    SectionLabel("Registration endpoint")
+    // Labelled for what it is. This is the WireGuard endpoint Cloudflare hands
+    // back at registration; the tunnel does not use it, and showing it as "the"
+    // endpoint next to a Transport row reading MASQUE invited exactly the wrong
+    // conclusion. The address the session actually dials is under Live tunnel.
     DiagnosticRow("Host", config.endpointHost.ifBlank { "—" })
-    DiagnosticRow("IPv4", "${config.endpointIpv4}:${config.endpointPort}")
+    DiagnosticRow(
+        "IPv4",
+        config.endpointIpv4.ifBlank { "—" }.let { ip ->
+            if (ip == "—") ip else "$ip:${config.endpointPort}"
+        }
+    )
 
     SectionLabel("Local address")
     DiagnosticRow("IPv4", config.localAddressIpv4.ifBlank { "—" })
 
     SectionLabel("Keys")
-    DiagnosticRow("Public key", config.publicKey.ifBlank { "—" }, monospace = true)
-    DiagnosticRow("Peer public key", config.peerPublicKey.ifBlank { "—" }, monospace = true)
+    // `publicKey` carries the endpoint's SPKI, which is what the MASQUE session
+    // pins against — not a key of ours. There is no derivable "our public key"
+    // any more: registration takes 32 opaque bytes and does no curve arithmetic
+    // with them.
+    DiagnosticRow("Pinned endpoint key", config.publicKey.ifBlank { "—" }, monospace = true)
     DiagnosticRow(
-        "Private key",
-        if (revealPrivateKey) config.privateKey else "•••••••• (tap reveal)",
+        "WireGuard peer key",
+        config.peerPublicKey.ifBlank { "—" },
+        monospace = true
+    )
+    Text(
+        text = "Registration artefacts. The MASQUE session authenticates with " +
+            "the enrolled P-256 key and pins the endpoint key above.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+
+    SectionLabel("Secrets")
+    // The licence key is a credential, so it is revealed on the same deliberate
+    // action as the private key rather than sitting in the clear above it —
+    // where a screenshot of the diagnostics screen would carry it away.
+    DiagnosticRow(
+        "License key",
+        if (revealSecrets) config.licenseKey.ifBlank { "—" } else HIDDEN_SECRET,
+        monospace = true
+    )
+    DiagnosticRow(
+        "Registration key",
+        if (revealSecrets) config.privateKey.ifBlank { "—" } else HIDDEN_SECRET,
         monospace = true
     )
     TextButton(onClick = onToggleReveal) {
-        Text(if (revealPrivateKey) "Hide private key" else "Reveal private key")
+        Text(if (revealSecrets) "Hide secrets" else "Reveal secrets")
     }
 
     SectionLabel("Storage")
     DiagnosticRow("Config file", config.configFilePath, monospace = true)
 }
+
+/** Placeholder shown in place of a credential until it is deliberately revealed. */
+private const val HIDDEN_SECRET = "•••••••• (tap reveal)"
 
 @Composable
 private fun LiveTunnelSection(state: LiveState) {
@@ -326,8 +365,11 @@ private fun LiveTunnelBody(d: WarpDiagnostics) {
     )
     DiagnosticRow("Sent", formatBytes(d.txBytes))
     DiagnosticRow("Received", formatBytes(d.rxBytes))
-    DiagnosticRow("Est. loss", "%.1f%%".format(d.estimatedLoss * 100f))
-    DiagnosticRow("Est. RTT", d.rttMs?.let { "$it ms" } ?: "—")
+    // Both are absent rather than zero when the transport does not measure them.
+    // MASQUE measures neither: quiche tracks loss and RTT per path, and showing
+    // a plausible "0.0%" for a number nobody computed is worse than showing none.
+    DiagnosticRow("Est. loss", d.estimatedLoss?.let { "%.1f%%".format(it * 100f) } ?: "not measured")
+    DiagnosticRow("Est. RTT", d.rttMs?.let { "$it ms" } ?: "not measured")
 }
 
 @Composable
@@ -394,22 +436,42 @@ private fun formatTimestamp(epochSeconds: Long): String {
     return formatter.format(Date(epochSeconds * 1000L))
 }
 
-private fun formatForClipboard(config: WarpStoredConfig, live: WarpDiagnostics?): String = buildString {
+/**
+ * Render the diagnostics as pasteable text.
+ *
+ * Credentials are redacted unless the user has already revealed them on screen.
+ * This text is copied to share in bug reports, and a Copy button that silently
+ * carries an account's licence key into a public issue is not a debugging
+ * convenience. Revealing first is the deliberate act that opts into including
+ * them; the placeholder says so rather than omitting the line, so a reader can
+ * tell a redacted value from a missing one.
+ */
+private fun formatForClipboard(
+    config: WarpStoredConfig,
+    live: WarpDiagnostics?,
+    includeSecrets: Boolean
+): String = buildString {
+    fun secret(value: String) = when {
+        !includeSecrets -> "<redacted — reveal secrets to include>"
+        value.isBlank() -> "<empty>"
+        else -> value
+    }
+
     appendLine("# Stored configuration")
     appendLine("has_config=${config.hasConfig}")
     appendLine("tunnel_active=${config.tunnelActive}")
     appendLine("warp_enabled=${config.warpEnabled}")
     appendLine("account_type=${config.accountType}")
     appendLine("account_id=${config.accountId}")
-    appendLine("license_key=${config.licenseKey}")
+    appendLine("license_key=${secret(config.licenseKey)}")
     appendLine("last_provisioned=${formatTimestamp(config.lastUpdatedSecs)}")
-    appendLine("endpoint_host=${config.endpointHost}")
-    appendLine("endpoint_ipv4=${config.endpointIpv4}")
-    appendLine("endpoint_port=${config.endpointPort}")
+    appendLine("registration_endpoint_host=${config.endpointHost}")
+    appendLine("registration_endpoint_ipv4=${config.endpointIpv4}")
+    appendLine("registration_endpoint_port=${config.endpointPort}")
     appendLine("local_address_ipv4=${config.localAddressIpv4}")
-    appendLine("public_key=${config.publicKey}")
-    appendLine("peer_public_key=${config.peerPublicKey}")
-    appendLine("private_key=${config.privateKey}")
+    appendLine("pinned_endpoint_key=${config.publicKey}")
+    appendLine("wireguard_peer_key=${config.peerPublicKey}")
+    appendLine("registration_key=${secret(config.privateKey)}")
     appendLine("config_file=${config.configFilePath}")
     appendLine()
     appendLine("# Live tunnel")
@@ -421,7 +483,7 @@ private fun formatForClipboard(config: WarpStoredConfig, live: WarpDiagnostics?)
     appendLine("last_handshake_secs=${live.lastHandshakeSecs ?: "never"}")
     appendLine("tx_bytes=${live.txBytes}")
     appendLine("rx_bytes=${live.rxBytes}")
-    appendLine("estimated_loss=${live.estimatedLoss}")
+    appendLine("estimated_loss=${live.estimatedLoss?.toString() ?: "not measured"}")
     appendLine("rtt_ms=${live.rttMs ?: "n/a"}")
 }
 

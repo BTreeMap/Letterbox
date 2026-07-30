@@ -2,7 +2,7 @@
 
 ## Overview
 
-Letterbox provides privacy protection when loading remote images in emails. The app uses a WireGuard-based proxy through Cloudflare WARP to hide your IP address from image servers.
+Letterbox provides privacy protection when loading remote images in emails. The app uses a MASQUE proxy through Cloudflare WARP to hide your IP address from image servers.
 
 ## Features
 
@@ -56,7 +56,7 @@ an offer the app will not honour is unrepresentable.
 
 ### Architecture
 
-The proxy implementation uses a WireGuard tunnel through Cloudflare WARP:
+The proxy implementation uses a MASQUE tunnel (CONNECT-IP over HTTP/3) through Cloudflare WARP:
 
 ```
 ┌───────────────┐      ┌──────────────┐      ┌──────────────┐      ┌─────────────┐
@@ -65,8 +65,8 @@ The proxy implementation uses a WireGuard tunnel through Cloudflare WARP:
 └───────────────┘      └──────────────┘      └──────────────┘      └─────────────┘
                               │
                     ┌─────────┴─────────┐
-                    │    WireGuard      │
-                    │    (encrypted)    │
+                    │  MASQUE / QUIC    │
+                    │  (UDP 443, TLS)   │
                     └───────────────────┘
 ```
 
@@ -74,7 +74,7 @@ The proxy implementation uses a WireGuard tunnel through Cloudflare WARP:
 
 | Component | Purpose |
 |-----------|---------|
-| boringtun | WireGuard implementation for encrypted transport |
+| usque-core (quiche) | MASQUE CONNECT-IP over HTTP/3 |
 | smoltcp | Userspace TCP/IP stack |
 | rustls | TLS 1.3 for HTTPS connections |
 | LRU cache | In-memory caching of fetched images |
@@ -137,9 +137,9 @@ The app requires the following permissions:
 
 | Permission | Purpose |
 |------------|---------|
-| `INTERNET` | Required for the WireGuard tunnel to communicate with Cloudflare WARP endpoints |
+| `INTERNET` | Required for the MASQUE tunnel to communicate with Cloudflare WARP endpoints |
 
-**Why INTERNET permission is needed:** The privacy proxy creates a WireGuard tunnel using UDP sockets to encrypt traffic and route it through Cloudflare. Without INTERNET permission, the proxy cannot establish network connections.
+**Why INTERNET permission is needed:** The privacy proxy creates a MASQUE tunnel over QUIC (UDP/443) to encrypt traffic and route it through Cloudflare. Without INTERNET permission, the proxy cannot establish network connections.
 
 **Privacy remains protected because:**
 1. Your IP address is hidden behind Cloudflare's infrastructure
@@ -175,7 +175,7 @@ Run the Android instrumented tests:
 Test coverage includes:
 - URL validation and content type checking
 - WARP configuration and persistence
-- WireGuard tunnel creation
+- MASQUE tunnel creation
 - Cache behavior
 - Error handling scenarios
 - Remote image banner display and interaction
