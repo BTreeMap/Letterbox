@@ -1,0 +1,178 @@
+name: Export Generated Sources
+
+# Two artefacts are generated from sources in this repository and committed
+# alongside them, because the build cannot regenerate either at the point it
+# needs them:
+#
+# * `app/schemas/**` — Room writes a JSON description of the database schema at
+#   build time, and `MigrationTestHelper` can only create a database at a
+#   version whose JSON is committed.
+# * `app/src/main/java/org/joefang/letterbox/ffi/**.kt` — UniFFI derives the
+#   Kotlin bindings from the *compiled* Rust libraries. They embed a checksum
+#   per exported item, and `uniffiCheckApiChecksums` throws on the first FFI
+#   call if a committed binding disagrees with the library it loads. Since
+#   UniFFI hashes docstrings into those checksums, editing a doc comment on an
+#   exported function is enough to break the app at runtime — a failure mode
+#   with no compile-time warning and no obvious cause. Regenerating here means
+#   the bindings cannot drift from the Rust that produced them.
+#
+# Both are generated in one job and pushed as one commit, so the two artefacts
+# never race each other for the branch.
+#
+# Isolated on purpose. This is the only workflow in the repository with
+# `contents: write`, so the ability to push to the default branch is scoped to
+# this file and this job rather than granted to the main build.
+#
+# ## Loop prevention
+#
+# Three independent guards, because a workflow that pushes to the branch it
+# watches is a self-triggering loop by default:
+#
+# 1. The push uses the automatic `GITHUB_TOKEN`. GitHub does not start workflow
+#    runs for events raised by that token, so the commit this job makes cannot
+#    trigger any workflow — including this one. This is the load-bearing guard.
+# 2. `paths-ignore` excludes every generated path, so even a push that somehow
+#    carried a different token would not re-enter here if generated files were
+#    all it changed.
+# 3. The commit step is skipped entirely when the generated output matches what
+#    is already committed, which is the steady state.
+
+on:
+  push:
+    branches: ["main"]
+    paths-ignore:
+      - "app/schemas/**"
+      - "app/src/main/java/org/joefang/letterbox/ffi/**"
+      - "docs/**"
+      - "**/*.md"
+  # Manual runs are useful for backfilling the current version's output, which
+  # is exactly what is needed the first time this lands.
+  workflow_dispatch:
+
+# Queue rather than cancel: a cancelled run could drop an export that no later
+# run regenerates, because the commit that changed the source is already past.
+concurrency:
+  group: export-generated-sources
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  # Where UniFFI writes; it appends the package path from each crate's
+  # namespace, yielding `org/joefang/letterbox/ffi/...`.
+  BINDINGS_OUT_DIR: app/src/main/java
+  GENERATED_PATHS: app/schemas app/src/main/java/org/joefang/letterbox/ffi
+
+jobs:
+  export:
+    name: Generate and commit sources
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history and tags: the Gradle build resolves its version from git
+          # during configuration, and the rebase below needs real history rather
+          # than a shallow clone.
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+          # A writable remote for the push below; the default checkout token is
+          # scoped to this repository only.
+          persist-credentials: true
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android components
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6.2.0
+
+      - name: Gradle permissions
+        run: chmod +x gradlew
+
+      # Host toolchain only. UniFFI reads the exported metadata out of a
+      # compiled library, and that metadata is target-independent, so the
+      # bindings do not require the Android NDK or cargo-ndk.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      # KSP only needs to process annotations, so this builds no Rust and
+      # assembles nothing. One variant is enough: the schema does not vary by
+      # build type or flavour.
+      - name: Generate Room schemas
+        run: ./gradlew :app:kspProdDebugKotlin --no-daemon
+
+      - name: Build host libraries
+        run: cargo build --package letterbox-core --package letterbox-proxy
+
+      # `--no-format` on purpose: with ktlint installed UniFFI reformats its
+      # output, so whether the runner happens to have it decides the bytes on
+      # disk. Pinning the raw generator output keeps the committed files a
+      # function of the Rust alone.
+      - name: Generate UniFFI bindings
+        run: |
+          set -euo pipefail
+          cargo run --package letterbox-core --bin uniffi-bindgen -- \
+            generate --library target/debug/libletterbox_core.so \
+            --language kotlin --no-format --out-dir "$BINDINGS_OUT_DIR"
+          cargo run --package letterbox-proxy --bin uniffi-bindgen-proxy -- \
+            generate --library target/debug/libletterbox_proxy.so \
+            --language kotlin --no-format --out-dir "$BINDINGS_OUT_DIR"
+
+      - name: Detect changes
+        id: diff
+        run: |
+          set -euo pipefail
+          if [[ -n "$(git status --porcelain -- $GENERATED_PATHS)" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Generated sources differ from what is committed:"
+            git status --short -- $GENERATED_PATHS
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Committed sources already match the generated output."
+          fi
+
+      - name: Commit and push
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          VERSION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -- $GENERATED_PATHS
+          git commit -m "chore(generated): Export generated sources for ${VERSION:0:8}" \
+            -m "Generated by the Export Generated Sources workflow. Room schema JSON must be committed before the schema changes again, because MigrationTestHelper creates a database from the JSON of the version it starts at. UniFFI bindings must match the library they load, because their embedded checksums are asserted on the first FFI call." \
+            --no-verify
+
+          # main may have advanced while the SDK was installing. Rebasing a
+          # generated-only commit is safe: it touches no file another commit
+          # can, since sources under these paths are never hand-edited.
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin main
+            if git push origin HEAD:main; then
+              echo "Pushed on attempt $attempt"
+              exit 0
+            fi
+            echo "Push rejected, retrying"
+            sleep 5
+          done
+          echo "Could not push after 3 attempts" >&2
+          exit 1

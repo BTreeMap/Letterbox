@@ -637,55 +637,55 @@ internal object IntegrityCheckingUniffiLib {
         uniffiCheckApiChecksums(this)
     }
     external fun uniffi_letterbox_core_checksum_func_extract_remote_images(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_func_parse_eml(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_func_parse_eml_from_path(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_attachment_count(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_body_html(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_body_preview(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_body_text(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_cc(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_date(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_date_timestamp(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_from(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_get_attachment_content(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_get_attachments(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_get_resource(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_get_resource_content_type(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_get_resource_ids(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_get_resource_metadata(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_message_id(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_recipient_info(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_reply_to(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_sender_info(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_subject(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_to(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_write_attachment_to_path(
-    ): Short
+    ): Int
     external fun uniffi_letterbox_core_checksum_method_emailhandle_write_resource_to_path(
-    ): Short
+    ): Int
     external fun ffi_letterbox_core_uniffi_contract_version(
     ): Int
 
@@ -773,7 +773,7 @@ internal object UniffiLib {
     external fun ffi_letterbox_core_rust_future_free_u8(`handle`: Long,
     ): Unit
     external fun ffi_letterbox_core_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
-    ): Byte
+    ): Int
     external fun ffi_letterbox_core_rust_future_poll_i8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
     external fun ffi_letterbox_core_rust_future_cancel_i8(`handle`: Long,
@@ -789,7 +789,7 @@ internal object UniffiLib {
     external fun ffi_letterbox_core_rust_future_free_u16(`handle`: Long,
     ): Unit
     external fun ffi_letterbox_core_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
-    ): Short
+    ): Int
     external fun ffi_letterbox_core_rust_future_poll_i16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
     external fun ffi_letterbox_core_rust_future_cancel_i16(`handle`: Long,
@@ -877,79 +877,79 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_letterbox_core_checksum_func_extract_remote_images() != 27542.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_func_extract_remote_images() != 27542) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_func_parse_eml() != 48112.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_func_parse_eml() != 48112) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_func_parse_eml_from_path() != 36307.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_func_parse_eml_from_path() != 36307) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_attachment_count() != 2946.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_attachment_count() != 2946) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_html() != 37584.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_html() != 37584) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_preview() != 56708.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_preview() != 56708) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_text() != 49627.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_text() != 49627) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_cc() != 21092.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_cc() != 21092) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_date() != 5435.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_date() != 5435) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_date_timestamp() != 22451.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_date_timestamp() != 22451) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_from() != 17732.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_from() != 17732) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_attachment_content() != 16894.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_attachment_content() != 16894) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_attachments() != 4360.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_attachments() != 4360) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource() != 30043.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource() != 30043) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_content_type() != 29102.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_content_type() != 29102) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_ids() != 36234.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_ids() != 36234) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_metadata() != 14885.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_metadata() != 14885) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_message_id() != 52741.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_message_id() != 52741) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_recipient_info() != 35618.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_recipient_info() != 35618) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_reply_to() != 59962.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_reply_to() != 59962) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_sender_info() != 20160.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_sender_info() != 20160) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_subject() != 19561.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_subject() != 19561) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_to() != 837.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_to() != 837) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_attachment_to_path() != 37276.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_attachment_to_path() != 37276) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_resource_to_path() != 7585.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_resource_to_path() != 7585) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
