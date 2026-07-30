@@ -128,7 +128,7 @@ fn ensure_manager(state: &mut ProxyState) -> Result<Arc<TunnelManager>, ProxyErr
     }
 
     let warp_config = match state.config.warp_config.clone() {
-        Some(config) => config,
+        Some(config) => upgrade_to_masque(state, config),
         None => {
             let config = provision_and_save(&state.config)?;
             state.config.warp_enabled = config.warp_enabled;
@@ -141,6 +141,57 @@ fn ensure_manager(state: &mut ProxyState) -> Result<Arc<TunnelManager>, ProxyErr
     let manager = Arc::new(TunnelManager::start(warp_config)?);
     state.manager = Some(manager.clone());
     Ok(manager)
+}
+
+/// Enrol a MASQUE key on an account that predates MASQUE support.
+///
+/// Without this an existing install keeps its stored WireGuard-only
+/// configuration for ever: `provision_new_account` enrols during provisioning,
+/// but a device provisioned before that existed never provisions again. Since
+/// WireGuard is the transport we are moving off, "works but never upgrades" is
+/// the failure mode that would go unnoticed longest.
+///
+/// Returns the configuration to use. Enrolment is best-effort and its failure is
+/// not this function's to report: the caller has a working WireGuard
+/// configuration either way, and refusing to connect because an *optimisation*
+/// failed would be worse than the blocked-transport problem it solves.
+fn upgrade_to_masque(state: &mut ProxyState, config: WarpConfig) -> WarpConfig {
+    if config.masque.is_some() {
+        return config;
+    }
+
+    let provisioner = match WarpProvisioner::new() {
+        Ok(provisioner) => provisioner,
+        Err(e) => {
+            log::warn!("cannot build provisioner for MASQUE upgrade: {e}");
+            return config;
+        }
+    };
+
+    let credentials = match block_on(provisioner.enroll_masque_key(&config.account)) {
+        Ok(Ok(credentials)) => credentials,
+        Ok(Err(e)) => {
+            log::warn!("MASQUE upgrade failed, staying on WireGuard: {e}");
+            return config;
+        }
+        Err(e) => {
+            log::warn!("MASQUE upgrade could not run: {e}");
+            return config;
+        }
+    };
+
+    let upgraded = WarpConfig {
+        masque: Some(credentials),
+        ..config
+    };
+    state.config.warp_config = Some(upgraded.clone());
+    if let Err(e) = block_on(state.config.save()).and_then(|r| r) {
+        // The tunnel still comes up; only the upgrade fails to stick, and the
+        // next launch retries it.
+        log::warn!("failed to persist MASQUE credentials: {e}");
+    }
+    log::info!("upgraded existing account to MASQUE");
+    upgraded
 }
 
 /// Validate that a URL is a fetchable http(s) URL.
