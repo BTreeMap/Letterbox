@@ -25,7 +25,13 @@ pub struct WarpAccountData {
     pub license_key: String,
 }
 
-/// WireGuard peer configuration from Cloudflare.
+/// The WireGuard peer Cloudflare returns at registration.
+///
+/// Retained so `warp_config.json` round-trips, and read by nothing. The
+/// registration API is WireGuard-shaped and hands back a
+/// `engage.cloudflareclient.com:2408` peer; the MASQUE data plane is a
+/// different anycast range that the API never returns, so
+/// [`crate::tunnel::masque`] hardcodes it. Nothing here reaches the wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WarpPeerConfig {
     /// Peer's public key (base64 encoded)
@@ -36,22 +42,6 @@ pub struct WarpPeerConfig {
     pub endpoint_ipv4: String,
     /// Endpoint port
     pub endpoint_port: u16,
-}
-
-impl WarpPeerConfig {
-    /// The endpoint literal, without the port the API attaches to it.
-    ///
-    /// Cloudflare returns `endpoint.v4` as `162.159.192.6:0`. Provisioning now
-    /// strips that, but configurations written before it did still hold the
-    /// suffix on disk, and rendering them beside a port produced
-    /// `162.159.192.6:0:2408`. Stripping on read as well means an existing
-    /// install is correct without having to re-provision.
-    pub fn endpoint_address(&self) -> &str {
-        self.endpoint_ipv4
-            .split(':')
-            .next()
-            .unwrap_or(&self.endpoint_ipv4)
-    }
 }
 
 /// Interface addresses assigned by Cloudflare.
@@ -361,23 +351,6 @@ mod tests {
         assert!(loaded.warp_enabled());
         assert!(loaded.warp_config.is_some());
         assert_eq!(loaded.endpoint_host(), Some("engage.cloudflareclient.com"));
-    }
-
-    /// The API attaches a port to the endpoint literal. Rendering that beside a
-    /// port produced `162.159.192.6:0:2408` on screen, so it is stripped on read
-    /// as well as at provisioning — configs already on disk carry the suffix.
-    #[test]
-    fn endpoint_address_strips_the_port_the_api_attaches() {
-        let peer = |v4: &str| WarpPeerConfig {
-            public_key: String::new(),
-            endpoint_host: String::new(),
-            endpoint_ipv4: v4.to_string(),
-            endpoint_port: 2408,
-        };
-
-        assert_eq!(peer("162.159.192.6:0").endpoint_address(), "162.159.192.6");
-        assert_eq!(peer("162.159.192.6").endpoint_address(), "162.159.192.6");
-        assert_eq!(peer("").endpoint_address(), "");
     }
 
     #[test]

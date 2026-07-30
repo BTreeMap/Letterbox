@@ -50,43 +50,31 @@ impl From<bool> for ConnectionState {
     }
 }
 
-/// A full diagnostics snapshot of the tunnel and its WARP identity.
+/// A snapshot of the **live session**, and nothing else.
+///
+/// Account identity lives in [`crate::types::WarpStoredConfig`] and is not
+/// repeated here. The two used to overlap on ten fields, which meant the same
+/// fact could be read from two places that were populated separately — and the
+/// endpoint was exactly where they disagreed, one reporting the address the
+/// session dialled and the other the WireGuard host registration returned.
 #[derive(Debug, Clone)]
 pub struct TunnelDiagnostics {
     /// Live connection state.
     pub connection_state: ConnectionState,
-    /// Which transport is carrying the tunnel: `"masque"` or `"wireguard"`.
+    /// Which transport is carrying the tunnel.
     pub protocol: &'static str,
-    /// WireGuard private key (base64). Sensitive — surfaced for debugging only.
-    pub private_key: String,
-    /// Our derived WireGuard public key (base64).
-    pub public_key: String,
-    /// The WARP peer's public key (base64).
-    pub peer_public_key: String,
-    /// Endpoint hostname.
-    pub endpoint_host: String,
-    /// Endpoint IPv4 address.
-    pub endpoint_ipv4: String,
-    /// Endpoint UDP port.
+    /// Address the session actually dials.
+    pub endpoint_address: String,
+    /// UDP port the session actually dials.
     pub endpoint_port: u16,
-    /// Local tunnel IPv4 address.
-    pub local_address_ipv4: String,
-    /// Whether WARP is enabled on the account.
-    pub warp_enabled: bool,
-    /// Account type (e.g. `free`).
-    pub account_type: String,
-    /// Cloudflare account/device identifier.
-    pub account_id: String,
+    /// Name sent in the TLS ClientHello.
+    pub endpoint_sni: &'static str,
     /// Seconds since the last completed handshake, if any.
     pub last_handshake_secs: Option<u64>,
     /// Plaintext bytes transmitted into the tunnel.
     pub tx_bytes: u64,
     /// Plaintext bytes received from the tunnel.
     pub rx_bytes: u64,
-    /// Estimated packet loss in `[0.0, 1.0]`, if the transport measures it.
-    pub estimated_loss: Option<f32>,
-    /// Estimated round-trip time in milliseconds, if measured.
-    pub rtt_ms: Option<u32>,
 }
 
 /// A unit of work for the tunnel worker thread.
@@ -112,23 +100,15 @@ pub struct TunnelManager {
 impl TunnelManager {
     /// Start the worker thread and block until the first handshake completes.
     ///
-    /// `config` is the provisioned WARP configuration, retained for diagnostics.
+    /// `config` is the provisioned WARP configuration; the worker needs it to
+    /// build the tunnel, not to answer diagnostics, which read the live tunnel.
     pub fn start(config: WarpConfig) -> Result<Self, ProxyError> {
-        // The endpoint's MASQUE key, shown in diagnostics. Previously this
-        // derived a WireGuard public key from the private one; with WireGuard
-        // gone there is no such relationship, and the key worth showing is the
-        // one the session actually pins against.
-        let public_key = config
-            .masque
-            .as_ref()
-            .map(|m| m.endpoint_pub_key_spki.clone())
-            .unwrap_or_default();
         let (tx, rx) = channel::<Command>();
         let (ready_tx, ready_rx) = channel::<Result<(), ProxyError>>();
 
         let worker = std::thread::Builder::new()
             .name("warp-tunnel".to_string())
-            .spawn(move || worker_loop(config, public_key, rx, ready_tx))
+            .spawn(move || worker_loop(config, rx, ready_tx))
             .map_err(|e| ProxyError::TunnelError {
                 details: format!("Failed to spawn tunnel thread: {e}"),
             })?;
@@ -203,7 +183,6 @@ impl Drop for TunnelManager {
 /// command channel closes.
 fn worker_loop(
     config: WarpConfig,
-    public_key: String,
     rx: Receiver<Command>,
     ready_tx: Sender<Result<(), ProxyError>>,
 ) {
@@ -239,7 +218,7 @@ fn worker_loop(
                 let _ = reply.send(result);
             }
             Command::Diagnostics { reply } => {
-                let _ = reply.send(build_diagnostics(&tunnel, &config, &public_key));
+                let _ = reply.send(build_diagnostics(&tunnel));
             }
         }
     }
@@ -253,31 +232,21 @@ fn ensure_connected(tunnel: &mut WarpTunnel) -> Result<(), ProxyError> {
     tunnel.connect(HANDSHAKE_TIMEOUT)
 }
 
-/// Assemble a [`TunnelDiagnostics`] snapshot from live and configured state.
-fn build_diagnostics(
-    tunnel: &WarpTunnel,
-    config: &WarpConfig,
-    public_key: &str,
-) -> TunnelDiagnostics {
+/// Assemble a [`TunnelDiagnostics`] snapshot.
+///
+/// Every field is read from the live tunnel. Nothing is taken from the stored
+/// configuration, which is what keeps the two records from disagreeing.
+fn build_diagnostics(tunnel: &WarpTunnel) -> TunnelDiagnostics {
     let stats: TunnelStats = tunnel.stats();
     let endpoint = tunnel.endpoint();
     TunnelDiagnostics {
         connection_state: tunnel.is_connected().into(),
         protocol: tunnel.protocol(),
-        private_key: config.account.private_key.clone(),
-        public_key: public_key.to_string(),
-        peer_public_key: config.peer.public_key.clone(),
-        endpoint_host: config.peer.endpoint_host.clone(),
-        endpoint_ipv4: endpoint.ip().to_string(),
+        endpoint_address: endpoint.ip().to_string(),
         endpoint_port: endpoint.port(),
-        local_address_ipv4: config.interface.address_ipv4.clone(),
-        warp_enabled: config.warp_enabled,
-        account_type: config.account_type.clone(),
-        account_id: config.account.account_id.clone(),
+        endpoint_sni: tunnel.sni(),
         last_handshake_secs: stats.since_handshake.map(|d| d.as_secs()),
         tx_bytes: stats.tx_bytes,
         rx_bytes: stats.rx_bytes,
-        estimated_loss: stats.estimated_loss,
-        rtt_ms: stats.rtt_ms,
     }
 }

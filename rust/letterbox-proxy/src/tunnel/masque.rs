@@ -110,6 +110,14 @@ impl MasqueTransport {
     /// Name reported by diagnostics and asserted by the on-device test.
     pub const PROTOCOL: &'static str = "masque";
 
+    /// The name this transport puts in the TLS ClientHello.
+    ///
+    /// Surfaced for diagnostics because it, the address and the port together
+    /// are what a bug report needs about *where the session went* — and none of
+    /// the three come from the account: the registration API only ever returns
+    /// WireGuard endpoints, so the MASQUE data plane is a constant here.
+    pub const SNI: &'static str = MASQUE_SNI;
+
     /// Build a transport for the provisioned account, **without connecting**.
     ///
     /// Construction is pure: it validates and decodes credentials and nothing
@@ -180,9 +188,7 @@ impl MasqueTransport {
     /// Live counters, mapped onto the shared [`TunnelStats`] shape.
     ///
     /// `since_handshake` is `None` until the flow opens — "not connected" and
-    /// "connected just now" are different facts. RTT and loss are not surfaced:
-    /// quiche measures them per-path, and reporting a plausible-looking wrong
-    /// number is worse than reporting none.
+    /// "connected just now" are different facts.
     #[must_use]
     pub fn stats(&self) -> TunnelStats {
         let snapshot = self.stats.snapshot();
@@ -196,8 +202,6 @@ impl MasqueTransport {
                 .then(|| self.connected_at.get_or_init(Instant::now).elapsed()),
             tx_bytes: snapshot.tx_bytes,
             rx_bytes: snapshot.rx_bytes,
-            estimated_loss: None,
-            rtt_ms: None,
         }
     }
 

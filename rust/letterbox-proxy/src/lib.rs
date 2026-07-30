@@ -34,6 +34,7 @@ pub mod selftest;
 pub mod tunnel;
 pub mod types;
 pub mod update;
+pub mod verify;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -386,21 +387,12 @@ fn to_ffi_diagnostics(d: TunnelDiagnostics) -> WarpDiagnostics {
     WarpDiagnostics {
         connection_state: d.connection_state.as_str().to_string(),
         protocol: d.protocol.to_string(),
-        private_key: d.private_key,
-        public_key: d.public_key,
-        peer_public_key: d.peer_public_key,
-        endpoint_host: d.endpoint_host,
-        endpoint_ipv4: d.endpoint_ipv4,
+        endpoint_address: d.endpoint_address,
         endpoint_port: d.endpoint_port,
-        local_address_ipv4: d.local_address_ipv4,
-        warp_enabled: d.warp_enabled,
-        account_type: d.account_type,
-        account_id: d.account_id,
+        endpoint_sni: d.endpoint_sni.to_string(),
         last_handshake_secs: d.last_handshake_secs,
         tx_bytes: d.tx_bytes,
         rx_bytes: d.rx_bytes,
-        estimated_loss: d.estimated_loss,
-        rtt_ms: d.rtt_ms,
     }
 }
 
@@ -429,6 +421,21 @@ pub fn proxy_check_for_update(
         latest_tag: info.latest_tag,
         changelog: info.changelog,
         release_url: info.release_url,
+    })
+}
+
+/// Prove end to end that traffic really leaves through the tunnel.
+///
+/// Fetches Cloudflare's `/cdn-cgi/trace` *through the tunnel* and reports what
+/// the exit saw: whether it counted the request as WARP, and which address it
+/// would hand to an image server. Connection state and byte counters say a
+/// session exists; only the far end can say the path works and the user's own
+/// address is not what arrives.
+#[uniffi::export]
+pub fn proxy_verify_tunnel() -> Result<verify::TunnelVerification, ProxyError> {
+    let (manager, _) = acquire_manager()?;
+    verify::verify_tunnel(&manager).inspect_err(|e| {
+        record_error(&e.to_string());
     })
 }
 

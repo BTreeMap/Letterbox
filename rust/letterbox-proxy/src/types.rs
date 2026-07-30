@@ -49,63 +49,57 @@ pub struct ProxyStatus {
     pub cache_size: u32,
 }
 
-/// Full WireGuard/WARP diagnostics for the in-app debug screen.
+/// What the live tunnel session is doing, for the in-app debug screen.
 ///
-/// This intentionally includes the private key so power users can fully inspect
-/// and reproduce the tunnel; the Android UI hides it behind an explicit reveal.
+/// Strictly the session. Account identity is [`WarpStoredConfig`]'s and is not
+/// duplicated here: the two records overlapped on ten fields, populated from
+/// different sources, and the endpoint was where that showed — this one derived
+/// its address from the live transport while its host came from the stored
+/// WireGuard registration, so the screen displayed half of each.
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct WarpDiagnostics {
     /// `"connected"` or `"disconnected"`.
     pub connection_state: String,
-    /// Which transport is carrying the tunnel: `"masque"` or `"wireguard"`.
+    /// Which transport is carrying the tunnel, currently always `"masque"`.
     ///
     /// Without this, "the tunnel is up" says nothing about *which* tunnel, so
     /// neither a test nor a bug report can distinguish MASQUE working from
     /// MASQUE having quietly fallen back.
     pub protocol: String,
-    /// WireGuard private key (base64).
-    pub private_key: String,
-    /// Derived WireGuard public key (base64).
-    pub public_key: String,
-    /// WARP peer public key (base64).
-    pub peer_public_key: String,
-    /// Endpoint hostname.
-    pub endpoint_host: String,
-    /// Endpoint IPv4 address.
-    pub endpoint_ipv4: String,
-    /// Endpoint UDP port.
+    /// Address the session dials.
+    ///
+    /// A constant of the transport, not of the account: the registration API
+    /// only ever returns WireGuard endpoints, so the MASQUE data plane
+    /// (`162.159.198.0/24`) is hardcoded and cannot be read from the config.
+    pub endpoint_address: String,
+    /// UDP port the session dials.
     pub endpoint_port: u16,
-    /// Local tunnel IPv4 address.
-    pub local_address_ipv4: String,
-    /// Whether WARP is enabled on the account.
-    pub warp_enabled: bool,
-    /// Account type (e.g. `free`).
-    pub account_type: String,
-    /// Cloudflare account/device identifier.
-    pub account_id: String,
+    /// Name sent in the TLS ClientHello — the one identifier a passive observer
+    /// can read, and deliberately not a `*.cloudflareclient.com` name.
+    pub endpoint_sni: String,
     /// Seconds since the last completed handshake, if any.
     pub last_handshake_secs: Option<u64>,
     /// Plaintext bytes transmitted into the tunnel.
     pub tx_bytes: u64,
     /// Plaintext bytes received from the tunnel.
     pub rx_bytes: u64,
-    /// Estimated packet loss in `[0.0, 1.0]`, or absent when the transport
-    /// does not measure it. MASQUE does not.
-    pub estimated_loss: Option<f32>,
-    /// Estimated round-trip time in milliseconds, if measured.
-    pub rtt_ms: Option<u32>,
 }
 
-/// Persisted WARP identity and tunnel configuration, read straight from disk.
+/// The persisted WARP *identity*, read straight from disk.
 ///
 /// Unlike [`WarpDiagnostics`], building this never provisions or handshakes, so
 /// it remains inspectable even when the tunnel is down — exactly the situation a
-/// user needs visibility into. The private key is included for full
-/// transparency; the Android UI keeps it behind an explicit reveal toggle.
+/// user needs visibility into.
+///
+/// It carries no endpoint. The registration API answers in WireGuard terms and
+/// returns a `engage.cloudflareclient.com:2408` peer that this app never dials;
+/// presenting it as "the endpoint" beside a transport row reading MASQUE was an
+/// invitation to misread the screen. The address the session actually uses is a
+/// property of the live session and lives in [`WarpDiagnostics`].
 ///
 /// The `Default` is the "nothing provisioned" snapshot, so the unprovisioned
-/// case does not have to spell out fifteen empty fields — a list in which a
-/// wrong entry looks exactly like a right one.
+/// case does not have to spell out every empty field — a list in which a wrong
+/// entry looks exactly like a right one.
 #[derive(Clone, Debug, Default, uniffi::Record)]
 pub struct WarpStoredConfig {
     /// Whether a provisioned WARP configuration exists on disk.
@@ -114,20 +108,20 @@ pub struct WarpStoredConfig {
     pub tunnel_active: bool,
     /// Cloudflare account/device identifier.
     pub account_id: String,
-    /// Account license key (may be empty for free accounts).
+    /// Account license key (may be empty for free accounts). Sensitive.
     pub license_key: String,
-    /// WireGuard private key (base64). Sensitive — surfaced for debugging only.
-    pub private_key: String,
-    /// Derived WireGuard public key (base64).
-    pub public_key: String,
-    /// WARP peer public key (base64).
-    pub peer_public_key: String,
-    /// Endpoint hostname.
-    pub endpoint_host: String,
-    /// Endpoint IPv4 address.
-    pub endpoint_ipv4: String,
-    /// Endpoint UDP port.
-    pub endpoint_port: u16,
+    /// The 32 opaque bytes registration required, base64. Sensitive.
+    ///
+    /// Named for what it is: `POST /reg` will not mint a device without a `key`
+    /// field, but nothing ever uses this one — the MASQUE session authenticates
+    /// with the P-256 key enrolled afterwards. Calling it a "private key"
+    /// implied the tunnel's security rested on it.
+    pub registration_key: String,
+    /// The endpoint's public key this device pins against: base64 SPKI DER.
+    ///
+    /// Empty on an account provisioned before MASQUE enrolment existed, which is
+    /// exactly the state a bug report needs to show.
+    pub pinned_endpoint_key: String,
     /// Local tunnel IPv4 address.
     pub local_address_ipv4: String,
     /// Whether WARP is enabled on the account.

@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import org.joefang.letterbox.data.ImageProxyService
+import org.joefang.letterbox.ffi.proxy.TunnelVerification
 import org.joefang.letterbox.ffi.proxy.WarpDiagnostics
 import org.joefang.letterbox.ffi.proxy.WarpStoredConfig
 import java.text.SimpleDateFormat
@@ -67,6 +68,19 @@ private sealed interface LiveState {
 }
 
 /**
+ * State of the end-to-end check.
+ *
+ * [Idle] rather than a nullable result, so "never run" is a state the UI names
+ * instead of a blank that could be mistaken for a check that found nothing.
+ */
+private sealed interface VerifyState {
+    data object Idle : VerifyState
+    data object Running : VerifyState
+    data class Done(val result: TunnelVerification) : VerifyState
+    data class Failed(val message: String) : VerifyState
+}
+
+/**
  * Developer dialog for inspecting and repairing the WARP tunnel.
  *
  * It surfaces two layers independently:
@@ -85,12 +99,16 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
     var storedState by remember { mutableStateOf<StoredState>(StoredState.Loading) }
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Loading) }
     var revealSecrets by remember { mutableStateOf(false) }
+    var verifyState by remember { mutableStateOf<VerifyState>(VerifyState.Idle) }
     var resetting by remember { mutableStateOf(false) }
     var resetError by remember { mutableStateOf<String?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
 
     LaunchedEffect(reloadKey) {
         revealSecrets = false
+        // A previous run describes a tunnel that may no longer exist; keeping it
+        // on screen after a refresh or reset would be reporting a stale pass.
+        verifyState = VerifyState.Idle
         storedState = StoredState.Loading
         liveState = LiveState.Loading
         val service = ImageProxyService.getInstance(context)
@@ -158,6 +176,33 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
                 )
 
                 LiveTunnelSection(state = liveState)
+
+                EndToEndSection(
+                    state = verifyState,
+                    enabled = liveState is LiveState.Loaded,
+                    onRun = {
+                        verifyState = VerifyState.Running
+                        scope.launch {
+                            verifyState = try {
+                                VerifyState.Done(
+                                    ImageProxyService.getInstance(context).verifyTunnel()
+                                )
+                            } catch (e: Exception) {
+                                VerifyState.Failed(e.message ?: "Verification failed")
+                            }
+                            // The check moves real bytes, so the counters above
+                            // are now stale; refresh them rather than leave two
+                            // numbers on screen that disagree.
+                            liveState = try {
+                                LiveState.Loaded(
+                                    ImageProxyService.getInstance(context).getDiagnostics()
+                                )
+                            } catch (e: Exception) {
+                                LiveState.Failed(e.message ?: "Failed to re-read the tunnel")
+                            }
+                        }
+                    }
+                )
             }
         },
         confirmButton = {
@@ -260,38 +305,18 @@ private fun StoredConfigBody(
     DiagnosticRow("Account ID", config.accountId.ifBlank { "—" }, monospace = true)
     DiagnosticRow("Last provisioned", formatTimestamp(config.lastUpdatedSecs))
 
-    SectionLabel("Registration endpoint")
-    // Labelled for what it is. This is the WireGuard endpoint Cloudflare hands
-    // back at registration; the tunnel does not use it, and showing it as "the"
-    // endpoint next to a Transport row reading MASQUE invited exactly the wrong
-    // conclusion. The address the session actually dials is under Live tunnel.
-    DiagnosticRow("Host", config.endpointHost.ifBlank { "—" })
-    DiagnosticRow(
-        "IPv4",
-        config.endpointIpv4.ifBlank { "—" }.let { ip ->
-            if (ip == "—") ip else "$ip:${config.endpointPort}"
-        }
-    )
+    // No endpoint here on purpose. The registration API answers in WireGuard
+    // terms and returns a peer this app never dials; the address the session
+    // actually uses belongs to the session and is shown under Live tunnel.
 
     SectionLabel("Local address")
     DiagnosticRow("IPv4", config.localAddressIpv4.ifBlank { "—" })
 
     SectionLabel("Keys")
-    // `publicKey` carries the endpoint's SPKI, which is what the MASQUE session
-    // pins against — not a key of ours. There is no derivable "our public key"
-    // any more: registration takes 32 opaque bytes and does no curve arithmetic
-    // with them.
-    DiagnosticRow("Pinned endpoint key", config.publicKey.ifBlank { "—" }, monospace = true)
     DiagnosticRow(
-        "WireGuard peer key",
-        config.peerPublicKey.ifBlank { "—" },
+        "Pinned endpoint key",
+        config.pinnedEndpointKey.ifBlank { "not enrolled" },
         monospace = true
-    )
-    Text(
-        text = "Registration artefacts. The MASQUE session authenticates with " +
-            "the enrolled P-256 key and pins the endpoint key above.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
     )
 
     SectionLabel("Secrets")
@@ -305,7 +330,7 @@ private fun StoredConfigBody(
     )
     DiagnosticRow(
         "Registration key",
-        if (revealSecrets) config.privateKey.ifBlank { "—" } else HIDDEN_SECRET,
+        if (revealSecrets) config.registrationKey.ifBlank { "—" } else HIDDEN_SECRET,
         monospace = true
     )
     TextButton(onClick = onToggleReveal) {
@@ -359,17 +384,84 @@ private fun LiveTunnelBody(d: WarpDiagnostics) {
             else -> d.protocol.ifBlank { "unknown" }
         }
     )
+    // The address the session actually dials. Not from the account: the
+    // registration API only returns WireGuard endpoints, so the MASQUE data
+    // plane is a constant of the transport.
+    DiagnosticRow("Endpoint", "${d.endpointAddress}:${d.endpointPort}")
+    DiagnosticRow("SNI", d.endpointSni)
     DiagnosticRow(
         "Last handshake",
         d.lastHandshakeSecs?.let { "${it}s ago" } ?: "never"
     )
     DiagnosticRow("Sent", formatBytes(d.txBytes))
     DiagnosticRow("Received", formatBytes(d.rxBytes))
-    // Both are absent rather than zero when the transport does not measure them.
-    // MASQUE measures neither: quiche tracks loss and RTT per path, and showing
-    // a plausible "0.0%" for a number nobody computed is worse than showing none.
-    DiagnosticRow("Est. loss", d.estimatedLoss?.let { "%.1f%%".format(it * 100f) } ?: "not measured")
-    DiagnosticRow("Est. RTT", d.rttMs?.let { "$it ms" } ?: "not measured")
+    // Loss and RTT are gone rather than shown as "not measured": quiche tracks
+    // both per-path and neither is surfaced, so they were rows that could only
+    // ever say nothing.
+}
+
+/**
+ * The end-to-end check: does traffic actually leave through the tunnel?
+ *
+ * Connection state and byte counters describe a session that exists. They
+ * cannot say a request completed, that Cloudflare counted it as WARP, or that
+ * the address an image server would be handed is not the user's own. Only the
+ * exit can answer that, so this asks it.
+ */
+@Composable
+private fun EndToEndSection(state: VerifyState, enabled: Boolean, onRun: () -> Unit) {
+    SectionLabel("End-to-end check")
+
+    when (state) {
+        is VerifyState.Idle -> Text(
+            text = "Fetches Cloudflare's trace endpoint through the tunnel and " +
+                "reports the address the far end sees.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        is VerifyState.Running -> CenteredProgress("Checking through the tunnel…")
+
+        is VerifyState.Failed -> DiagnosticRow(
+            "Result",
+            state.message,
+            valueColor = MaterialTheme.colorScheme.error
+        )
+
+        is VerifyState.Done -> {
+            val r = state.result
+            DiagnosticRow(
+                "Result",
+                if (r.warpActive) "Traffic is leaving via WARP" else "NOT going through WARP",
+                valueColor = if (r.warpActive) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                }
+            )
+            DiagnosticRow("Reported by edge", "warp=${r.warp.ifBlank { "absent" }}")
+            // The address an image server would be given. If this is the user's
+            // own, the proxy is not doing its job however healthy it looks.
+            DiagnosticRow("Egress IP", r.egressIp.ifBlank { "—" }, monospace = true)
+            DiagnosticRow("Colo", r.colo.ifBlank { "—" })
+            DiagnosticRow(
+                "Carried by tunnel",
+                "${formatBytes(r.txBytes)} sent, ${formatBytes(r.rxBytes)} received"
+            )
+            if (r.txBytes == 0uL && r.rxBytes == 0uL) {
+                // A reply that cost the tunnel nothing did not come through it.
+                DiagnosticRow(
+                    "Warning",
+                    "The tunnel carried no bytes for this check",
+                    valueColor = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+
+    TextButton(enabled = enabled && state !is VerifyState.Running, onClick = onRun) {
+        Text(if (state is VerifyState.Idle) "Run check" else "Run again")
+    }
 }
 
 @Composable
@@ -465,13 +557,9 @@ private fun formatForClipboard(
     appendLine("account_id=${config.accountId}")
     appendLine("license_key=${secret(config.licenseKey)}")
     appendLine("last_provisioned=${formatTimestamp(config.lastUpdatedSecs)}")
-    appendLine("registration_endpoint_host=${config.endpointHost}")
-    appendLine("registration_endpoint_ipv4=${config.endpointIpv4}")
-    appendLine("registration_endpoint_port=${config.endpointPort}")
     appendLine("local_address_ipv4=${config.localAddressIpv4}")
-    appendLine("pinned_endpoint_key=${config.publicKey}")
-    appendLine("wireguard_peer_key=${config.peerPublicKey}")
-    appendLine("registration_key=${secret(config.privateKey)}")
+    appendLine("pinned_endpoint_key=${config.pinnedEndpointKey}")
+    appendLine("registration_key=${secret(config.registrationKey)}")
     appendLine("config_file=${config.configFilePath}")
     appendLine()
     appendLine("# Live tunnel")
@@ -483,8 +571,8 @@ private fun formatForClipboard(
     appendLine("last_handshake_secs=${live.lastHandshakeSecs ?: "never"}")
     appendLine("tx_bytes=${live.txBytes}")
     appendLine("rx_bytes=${live.rxBytes}")
-    appendLine("estimated_loss=${live.estimatedLoss?.toString() ?: "not measured"}")
-    appendLine("rtt_ms=${live.rttMs ?: "n/a"}")
+    appendLine("endpoint=${live.endpointAddress}:${live.endpointPort}")
+    appendLine("endpoint_sni=${live.endpointSni}")
 }
 
 private fun copyToClipboard(context: Context, label: String, text: String) {

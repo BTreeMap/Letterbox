@@ -10,6 +10,7 @@ import org.joefang.letterbox.ffi.proxy.ImageResponse
 import org.joefang.letterbox.ffi.proxy.ProxyException
 import org.joefang.letterbox.ffi.proxy.ProxyStatus
 import org.joefang.letterbox.ffi.proxy.TlsSelfTestOutcome
+import org.joefang.letterbox.ffi.proxy.TunnelVerification
 import org.joefang.letterbox.ffi.proxy.UpdateResult
 import org.joefang.letterbox.ffi.proxy.WarpDiagnostics
 import org.joefang.letterbox.ffi.proxy.WarpStoredConfig
@@ -25,6 +26,7 @@ import org.joefang.letterbox.ffi.proxy.proxyShutdown
 import org.joefang.letterbox.ffi.proxy.proxyStatus
 import org.joefang.letterbox.ffi.proxy.proxyStoredConfig
 import org.joefang.letterbox.ffi.proxy.proxyTlsSelfTest
+import org.joefang.letterbox.ffi.proxy.proxyVerifyTunnel
 import java.io.File
 
 /**
@@ -204,6 +206,21 @@ class ImageProxyService private constructor(private val context: Context) {
             check(initialize()) { "Proxy not initialized" }
         }
         proxyResetIdentity()
+    }
+
+    /**
+     * Prove end to end that traffic really leaves through the tunnel.
+     *
+     * Fetches Cloudflare's trace endpoint *through* the tunnel and reports what
+     * the far end saw — whether it counted the request as WARP, and which
+     * address it would hand to an image server. Unlike [getDiagnostics], which
+     * describes a session that exists, this establishes that the path works.
+     */
+    suspend fun verifyTunnel(): TunnelVerification = withContext(Dispatchers.IO) {
+        if (!initialized) {
+            check(initialize()) { "Proxy not initialized" }
+        }
+        proxyVerifyTunnel()
     }
 
     /**

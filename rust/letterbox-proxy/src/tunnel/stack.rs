@@ -112,6 +112,11 @@ impl WarpTunnel {
         MasqueTransport::PROTOCOL
     }
 
+    /// The name sent in the TLS ClientHello for this tunnel.
+    pub fn sni(&self) -> &'static str {
+        MasqueTransport::SNI
+    }
+
     /// Whether the tunnel is ready to carry packets.
     pub fn is_connected(&self) -> bool {
         self.transport.is_connected()

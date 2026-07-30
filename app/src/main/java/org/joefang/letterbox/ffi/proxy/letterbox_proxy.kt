@@ -653,6 +653,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_status(
     ): Int
+    external fun uniffi_letterbox_proxy_checksum_func_proxy_verify_tunnel(
+    ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_reset_identity(
     ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_stored_config(
@@ -689,6 +691,8 @@ internal object UniffiLib {
     external fun uniffi_letterbox_proxy_fn_func_proxy_shutdown(uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_letterbox_proxy_fn_func_proxy_status(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_letterbox_proxy_fn_func_proxy_verify_tunnel(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_proxy_fn_func_proxy_reset_identity(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -840,6 +844,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 8452) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_verify_tunnel() != 54509) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_reset_identity() != 22232) {
@@ -1037,29 +1044,6 @@ public object FfiConverterLong: FfiConverter<Long, Long> {
 
     override fun write(value: Long, buf: ByteBuffer) {
         buf.putLong(value)
-    }
-}
-
-/**
- * @suppress
- */
-public object FfiConverterFloat: FfiConverter<Float, Float> {
-    override fun lift(value: Float): Float {
-        return value
-    }
-
-    override fun read(buf: ByteBuffer): Float {
-        return buf.getFloat()
-    }
-
-    override fun lower(value: Float): Float {
-        return value
-    }
-
-    override fun allocationSize(value: Float) = 4UL
-
-    override fun write(value: Float, buf: ByteBuffer) {
-        buf.putFloat(value)
     }
 }
 
@@ -1443,6 +1427,96 @@ public object FfiConverterTypeProxyStatus: FfiConverterRustBuffer<ProxyStatus> {
 
 
 /**
+ * What the Cloudflare edge reported about the request the tunnel made.
+ */
+data class TunnelVerification (
+    /**
+     * Whether the exit treated this as WARP traffic.
+     *
+     * Derived once, here, rather than leaving every caller to remember that
+     * `plus` also counts and that anything else — including a missing field —
+     * does not.
+     */
+    var `warpActive`: kotlin.Boolean
+    , 
+    /**
+     * The raw `warp=` value: `on`, `plus`, `off`, or empty if absent.
+     */
+    var `warp`: kotlin.String
+    , 
+    /**
+     * The client address Cloudflare saw.
+     *
+     * This is the address an image server would be given. It must not be the
+     * user's own, which is the entire point of the proxy.
+     */
+    var `egressIp`: kotlin.String
+    , 
+    /**
+     * Cloudflare colo that served the request (e.g. `YYZ`).
+     */
+    var `colo`: kotlin.String
+    , 
+    /**
+     * Bytes the tunnel carried for this check alone.
+     *
+     * A delta rather than a total: a total that was already non-zero proves
+     * nothing about *this* request, and zero here would mean the response came
+     * from somewhere other than the tunnel.
+     */
+    var `txBytes`: kotlin.ULong
+    , 
+    /**
+     * Bytes received through the tunnel for this check alone.
+     */
+    var `rxBytes`: kotlin.ULong
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTunnelVerification: FfiConverterRustBuffer<TunnelVerification> {
+    override fun read(buf: ByteBuffer): TunnelVerification {
+        return TunnelVerification(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: TunnelVerification) = (
+            FfiConverterBoolean.allocationSize(value.`warpActive`) +
+            FfiConverterString.allocationSize(value.`warp`) +
+            FfiConverterString.allocationSize(value.`egressIp`) +
+            FfiConverterString.allocationSize(value.`colo`) +
+            FfiConverterULong.allocationSize(value.`txBytes`) +
+            FfiConverterULong.allocationSize(value.`rxBytes`)
+    )
+
+    override fun write(value: TunnelVerification, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`warpActive`, buf)
+            FfiConverterString.write(value.`warp`, buf)
+            FfiConverterString.write(value.`egressIp`, buf)
+            FfiConverterString.write(value.`colo`, buf)
+            FfiConverterULong.write(value.`txBytes`, buf)
+            FfiConverterULong.write(value.`rxBytes`, buf)
+    }
+}
+
+
+
+/**
  * Result of an in-app update check.
  */
 data class UpdateResult (
@@ -1522,10 +1596,13 @@ public object FfiConverterTypeUpdateResult: FfiConverterRustBuffer<UpdateResult>
 
 
 /**
- * Full WireGuard/WARP diagnostics for the in-app debug screen.
+ * What the live tunnel session is doing, for the in-app debug screen.
  *
- * This intentionally includes the private key so power users can fully inspect
- * and reproduce the tunnel; the Android UI hides it behind an explicit reveal.
+ * Strictly the session. Account identity is [`WarpStoredConfig`]'s and is not
+ * duplicated here: the two records overlapped on ten fields, populated from
+ * different sources, and the endpoint was where that showed — this one derived
+ * its address from the live transport while its host came from the stored
+ * WireGuard registration, so the screen displayed half of each.
  */
 data class WarpDiagnostics (
     /**
@@ -1534,7 +1611,7 @@ data class WarpDiagnostics (
     var `connectionState`: kotlin.String
     , 
     /**
-     * Which transport is carrying the tunnel: `"masque"` or `"wireguard"`.
+     * Which transport is carrying the tunnel, currently always `"masque"`.
      *
      * Without this, "the tunnel is up" says nothing about *which* tunnel, so
      * neither a test nor a bug report can distinguish MASQUE working from
@@ -1543,54 +1620,24 @@ data class WarpDiagnostics (
     var `protocol`: kotlin.String
     , 
     /**
-     * WireGuard private key (base64).
+     * Address the session dials.
+     *
+     * A constant of the transport, not of the account: the registration API
+     * only ever returns WireGuard endpoints, so the MASQUE data plane
+     * (`162.159.198.0/24`) is hardcoded and cannot be read from the config.
      */
-    var `privateKey`: kotlin.String
+    var `endpointAddress`: kotlin.String
     , 
     /**
-     * Derived WireGuard public key (base64).
-     */
-    var `publicKey`: kotlin.String
-    , 
-    /**
-     * WARP peer public key (base64).
-     */
-    var `peerPublicKey`: kotlin.String
-    , 
-    /**
-     * Endpoint hostname.
-     */
-    var `endpointHost`: kotlin.String
-    , 
-    /**
-     * Endpoint IPv4 address.
-     */
-    var `endpointIpv4`: kotlin.String
-    , 
-    /**
-     * Endpoint UDP port.
+     * UDP port the session dials.
      */
     var `endpointPort`: kotlin.UShort
     , 
     /**
-     * Local tunnel IPv4 address.
+     * Name sent in the TLS ClientHello — the one identifier a passive observer
+     * can read, and deliberately not a `*.cloudflareclient.com` name.
      */
-    var `localAddressIpv4`: kotlin.String
-    , 
-    /**
-     * Whether WARP is enabled on the account.
-     */
-    var `warpEnabled`: kotlin.Boolean
-    , 
-    /**
-     * Account type (e.g. `free`).
-     */
-    var `accountType`: kotlin.String
-    , 
-    /**
-     * Cloudflare account/device identifier.
-     */
-    var `accountId`: kotlin.String
+    var `endpointSni`: kotlin.String
     , 
     /**
      * Seconds since the last completed handshake, if any.
@@ -1606,17 +1653,6 @@ data class WarpDiagnostics (
      * Plaintext bytes received from the tunnel.
      */
     var `rxBytes`: kotlin.ULong
-    , 
-    /**
-     * Estimated packet loss in `[0.0, 1.0]`, or absent when the transport
-     * does not measure it. MASQUE does not.
-     */
-    var `estimatedLoss`: kotlin.Float?
-    , 
-    /**
-     * Estimated round-trip time in milliseconds, if measured.
-     */
-    var `rttMs`: kotlin.UInt?
     
 ){
     
@@ -1636,77 +1672,55 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
             FfiConverterUShort.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterOptionalULong.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
-            FfiConverterOptionalFloat.read(buf),
-            FfiConverterOptionalUInt.read(buf),
         )
     }
 
     override fun allocationSize(value: WarpDiagnostics) = (
             FfiConverterString.allocationSize(value.`connectionState`) +
             FfiConverterString.allocationSize(value.`protocol`) +
-            FfiConverterString.allocationSize(value.`privateKey`) +
-            FfiConverterString.allocationSize(value.`publicKey`) +
-            FfiConverterString.allocationSize(value.`peerPublicKey`) +
-            FfiConverterString.allocationSize(value.`endpointHost`) +
-            FfiConverterString.allocationSize(value.`endpointIpv4`) +
+            FfiConverterString.allocationSize(value.`endpointAddress`) +
             FfiConverterUShort.allocationSize(value.`endpointPort`) +
-            FfiConverterString.allocationSize(value.`localAddressIpv4`) +
-            FfiConverterBoolean.allocationSize(value.`warpEnabled`) +
-            FfiConverterString.allocationSize(value.`accountType`) +
-            FfiConverterString.allocationSize(value.`accountId`) +
+            FfiConverterString.allocationSize(value.`endpointSni`) +
             FfiConverterOptionalULong.allocationSize(value.`lastHandshakeSecs`) +
             FfiConverterULong.allocationSize(value.`txBytes`) +
-            FfiConverterULong.allocationSize(value.`rxBytes`) +
-            FfiConverterOptionalFloat.allocationSize(value.`estimatedLoss`) +
-            FfiConverterOptionalUInt.allocationSize(value.`rttMs`)
+            FfiConverterULong.allocationSize(value.`rxBytes`)
     )
 
     override fun write(value: WarpDiagnostics, buf: ByteBuffer) {
             FfiConverterString.write(value.`connectionState`, buf)
             FfiConverterString.write(value.`protocol`, buf)
-            FfiConverterString.write(value.`privateKey`, buf)
-            FfiConverterString.write(value.`publicKey`, buf)
-            FfiConverterString.write(value.`peerPublicKey`, buf)
-            FfiConverterString.write(value.`endpointHost`, buf)
-            FfiConverterString.write(value.`endpointIpv4`, buf)
+            FfiConverterString.write(value.`endpointAddress`, buf)
             FfiConverterUShort.write(value.`endpointPort`, buf)
-            FfiConverterString.write(value.`localAddressIpv4`, buf)
-            FfiConverterBoolean.write(value.`warpEnabled`, buf)
-            FfiConverterString.write(value.`accountType`, buf)
-            FfiConverterString.write(value.`accountId`, buf)
+            FfiConverterString.write(value.`endpointSni`, buf)
             FfiConverterOptionalULong.write(value.`lastHandshakeSecs`, buf)
             FfiConverterULong.write(value.`txBytes`, buf)
             FfiConverterULong.write(value.`rxBytes`, buf)
-            FfiConverterOptionalFloat.write(value.`estimatedLoss`, buf)
-            FfiConverterOptionalUInt.write(value.`rttMs`, buf)
     }
 }
 
 
 
 /**
- * Persisted WARP identity and tunnel configuration, read straight from disk.
+ * The persisted WARP *identity*, read straight from disk.
  *
  * Unlike [`WarpDiagnostics`], building this never provisions or handshakes, so
  * it remains inspectable even when the tunnel is down — exactly the situation a
- * user needs visibility into. The private key is included for full
- * transparency; the Android UI keeps it behind an explicit reveal toggle.
+ * user needs visibility into.
+ *
+ * It carries no endpoint. The registration API answers in WireGuard terms and
+ * returns a `engage.cloudflareclient.com:2408` peer that this app never dials;
+ * presenting it as "the endpoint" beside a transport row reading MASQUE was an
+ * invitation to misread the screen. The address the session actually uses is a
+ * property of the live session and lives in [`WarpDiagnostics`].
  *
  * The `Default` is the "nothing provisioned" snapshot, so the unprovisioned
- * case does not have to spell out fifteen empty fields — a list in which a
- * wrong entry looks exactly like a right one.
+ * case does not have to spell out every empty field — a list in which a wrong
+ * entry looks exactly like a right one.
  */
 data class WarpStoredConfig (
     /**
@@ -1725,39 +1739,27 @@ data class WarpStoredConfig (
     var `accountId`: kotlin.String
     , 
     /**
-     * Account license key (may be empty for free accounts).
+     * Account license key (may be empty for free accounts). Sensitive.
      */
     var `licenseKey`: kotlin.String
     , 
     /**
-     * WireGuard private key (base64). Sensitive — surfaced for debugging only.
+     * The 32 opaque bytes registration required, base64. Sensitive.
+     *
+     * Named for what it is: `POST /reg` will not mint a device without a `key`
+     * field, but nothing ever uses this one — the MASQUE session authenticates
+     * with the P-256 key enrolled afterwards. Calling it a "private key"
+     * implied the tunnel's security rested on it.
      */
-    var `privateKey`: kotlin.String
+    var `registrationKey`: kotlin.String
     , 
     /**
-     * Derived WireGuard public key (base64).
+     * The endpoint's public key this device pins against: base64 SPKI DER.
+     *
+     * Empty on an account provisioned before MASQUE enrolment existed, which is
+     * exactly the state a bug report needs to show.
      */
-    var `publicKey`: kotlin.String
-    , 
-    /**
-     * WARP peer public key (base64).
-     */
-    var `peerPublicKey`: kotlin.String
-    , 
-    /**
-     * Endpoint hostname.
-     */
-    var `endpointHost`: kotlin.String
-    , 
-    /**
-     * Endpoint IPv4 address.
-     */
-    var `endpointIpv4`: kotlin.String
-    , 
-    /**
-     * Endpoint UDP port.
-     */
-    var `endpointPort`: kotlin.UShort
+    var `pinnedEndpointKey`: kotlin.String
     , 
     /**
      * Local tunnel IPv4 address.
@@ -1806,10 +1808,6 @@ public object FfiConverterTypeWarpStoredConfig: FfiConverterRustBuffer<WarpStore
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterUShort.read(buf),
-            FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterString.read(buf),
             FfiConverterLong.read(buf),
@@ -1822,12 +1820,8 @@ public object FfiConverterTypeWarpStoredConfig: FfiConverterRustBuffer<WarpStore
             FfiConverterBoolean.allocationSize(value.`tunnelActive`) +
             FfiConverterString.allocationSize(value.`accountId`) +
             FfiConverterString.allocationSize(value.`licenseKey`) +
-            FfiConverterString.allocationSize(value.`privateKey`) +
-            FfiConverterString.allocationSize(value.`publicKey`) +
-            FfiConverterString.allocationSize(value.`peerPublicKey`) +
-            FfiConverterString.allocationSize(value.`endpointHost`) +
-            FfiConverterString.allocationSize(value.`endpointIpv4`) +
-            FfiConverterUShort.allocationSize(value.`endpointPort`) +
+            FfiConverterString.allocationSize(value.`registrationKey`) +
+            FfiConverterString.allocationSize(value.`pinnedEndpointKey`) +
             FfiConverterString.allocationSize(value.`localAddressIpv4`) +
             FfiConverterBoolean.allocationSize(value.`warpEnabled`) +
             FfiConverterString.allocationSize(value.`accountType`) +
@@ -1840,12 +1834,8 @@ public object FfiConverterTypeWarpStoredConfig: FfiConverterRustBuffer<WarpStore
             FfiConverterBoolean.write(value.`tunnelActive`, buf)
             FfiConverterString.write(value.`accountId`, buf)
             FfiConverterString.write(value.`licenseKey`, buf)
-            FfiConverterString.write(value.`privateKey`, buf)
-            FfiConverterString.write(value.`publicKey`, buf)
-            FfiConverterString.write(value.`peerPublicKey`, buf)
-            FfiConverterString.write(value.`endpointHost`, buf)
-            FfiConverterString.write(value.`endpointIpv4`, buf)
-            FfiConverterUShort.write(value.`endpointPort`, buf)
+            FfiConverterString.write(value.`registrationKey`, buf)
+            FfiConverterString.write(value.`pinnedEndpointKey`, buf)
             FfiConverterString.write(value.`localAddressIpv4`, buf)
             FfiConverterBoolean.write(value.`warpEnabled`, buf)
             FfiConverterString.write(value.`accountType`, buf)
@@ -2455,38 +2445,6 @@ public object FfiConverterTypeTlsSelfTestOutcome : FfiConverterRustBuffer<TlsSel
 /**
  * @suppress
  */
-public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
-    override fun read(buf: ByteBuffer): kotlin.UInt? {
-        if (buf.get().toInt() == 0) {
-            return null
-        }
-        return FfiConverterUInt.read(buf)
-    }
-
-    override fun allocationSize(value: kotlin.UInt?): ULong {
-        if (value == null) {
-            return 1UL
-        } else {
-            return 1UL + FfiConverterUInt.allocationSize(value)
-        }
-    }
-
-    override fun write(value: kotlin.UInt?, buf: ByteBuffer) {
-        if (value == null) {
-            buf.put(0)
-        } else {
-            buf.put(1)
-            FfiConverterUInt.write(value, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
 public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
     override fun read(buf: ByteBuffer): kotlin.ULong? {
         if (buf.get().toInt() == 0) {
@@ -2509,38 +2467,6 @@ public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
         } else {
             buf.put(1)
             FfiConverterULong.write(value, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
-public object FfiConverterOptionalFloat: FfiConverterRustBuffer<kotlin.Float?> {
-    override fun read(buf: ByteBuffer): kotlin.Float? {
-        if (buf.get().toInt() == 0) {
-            return null
-        }
-        return FfiConverterFloat.read(buf)
-    }
-
-    override fun allocationSize(value: kotlin.Float?): ULong {
-        if (value == null) {
-            return 1UL
-        } else {
-            return 1UL + FfiConverterFloat.allocationSize(value)
-        }
-    }
-
-    override fun write(value: kotlin.Float?, buf: ByteBuffer) {
-        if (value == null) {
-            buf.put(0)
-        } else {
-            buf.put(1)
-            FfiConverterFloat.write(value, buf)
         }
     }
 }
@@ -2864,6 +2790,26 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
             return FfiConverterTypeProxyStatus.lift(
     uniffiRustCallWithError(ProxyException) { _status ->
     UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_status(
+    
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Prove end to end that traffic really leaves through the tunnel.
+         *
+         * Fetches Cloudflare's `/cdn-cgi/trace` *through the tunnel* and reports what
+         * the exit saw: whether it counted the request as WARP, and which address it
+         * would hand to an image server. Connection state and byte counters say a
+         * session exists; only the far end can say the path works and the user's own
+         * address is not what arrives.
+         */
+    @Throws(ProxyException::class) fun `proxyVerifyTunnel`(): TunnelVerification {
+            return FfiConverterTypeTunnelVerification.lift(
+    uniffiRustCallWithError(ProxyException) { _status ->
+    UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_verify_tunnel(
     
         _status)
 }

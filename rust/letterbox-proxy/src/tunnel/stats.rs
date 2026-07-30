@@ -8,6 +8,13 @@
 use std::time::Duration;
 
 /// Live statistics for whatever transport is carrying the tunnel.
+///
+/// Loss and round-trip time are deliberately absent. quiche measures both
+/// per-path and neither is exposed here; carried as `Option`s they were a pair
+/// of fields that could only ever read "not measured", which is a row that says
+/// nothing rather than a fact worth a place on screen. If a transport that does
+/// measure them is ever added, they come back as values — not as permanently
+/// empty ones.
 #[derive(Debug, Clone, Default)]
 pub struct TunnelStats {
     /// Time since the session became usable, if it has.
@@ -20,13 +27,4 @@ pub struct TunnelStats {
     pub tx_bytes: u64,
     /// Total plaintext bytes received from the tunnel.
     pub rx_bytes: u64,
-    /// Estimated packet loss in `[0.0, 1.0]`, if the transport measures it.
-    ///
-    /// `None` rather than `0.0` when unmeasured, for the same reason
-    /// [`Self::since_handshake`] is an `Option`: a loss rate of zero is a
-    /// finding, and reporting one the transport never computed is a plausible
-    /// wrong number where "not measured" is the truth.
-    pub estimated_loss: Option<f32>,
-    /// Estimated round-trip time in milliseconds, if measured.
-    pub rtt_ms: Option<u32>,
 }
