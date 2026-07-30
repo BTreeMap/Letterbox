@@ -1,11 +1,17 @@
 # AGENTS.md
 
 Letterbox is a privacy-focused Android app (Kotlin / Jetpack Compose) backed by
-two Rust crates exposed over UniFFI. Treat this repo as a monorepo: one Gradle
+Rust crates exposed over UniFFI. Treat this repo as a monorepo: one Gradle
 module plus a Cargo workspace. Vendor-neutral by design (the open
 [`AGENTS.md`](https://agents.md) convention). Nested `AGENTS.md` files in `app/`,
 `rust/letterbox-core/`, and `rust/letterbox-proxy/` add module-local rules — the
 file closest to your working directory wins.
+
+`rust/usque-core/` is **vendored third-party code** (usque-rs, MIT). It has no
+`AGENTS.md` of its own and is governed by `rust/usque-core/PROVENANCE.md`: every
+deviation from upstream is marked in-source and listed there. Keep
+`packet.rs` and `icmp.rs` byte-identical to upstream, and update `PROVENANCE.md`
+whenever anything else changes.
 
 ## Tooling & Commands
 
@@ -16,6 +22,7 @@ a system-wide `gradle`, and never hand-edit generated artifacts.
 |------|---------|
 | Core Rust tests | `cargo test` in `rust/letterbox-core` |
 | Proxy Rust tests | `cargo test` in `rust/letterbox-proxy` |
+| Vendored MASQUE tests | `cargo test` in `rust/usque-core` |
 | Rust lint | `cargo clippy --all-targets -- -D warnings` |
 | Rust format | `cargo fmt --all` (verify with `--all -- --check`) |
 | Android unit tests | `./gradlew test --no-daemon` (auto-builds host Rust libs) |
@@ -123,7 +130,8 @@ Read the matching file only when your task touches that domain:
 
 * Overall architecture & data flow → `docs/architecture.md`
 * Engineering standards (full) & execution contract → `docs/agents/engineering-standards.md`
-* Image proxy / WARP / WireGuard → `docs/image-proxy-design.md`, `docs/remote-images.md`
+* Image proxy / WARP / MASQUE / WireGuard → `docs/image-proxy-design.md`,
+  `docs/remote-images.md`; vendored MASQUE core → `rust/usque-core/PROVENANCE.md`
 * History dedup & content-addressable store → `docs/deduplication.md`
 * Search, filter & sort (`HistoryQuery`) → `docs/full-text-search.md`
 * Signing & versioning → `docs/signing.md`, `docs/versioning.md`

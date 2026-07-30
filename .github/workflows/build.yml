@@ -106,6 +106,13 @@ jobs:
           cargo fmt --all -- --check
         working-directory: rust/letterbox-proxy
 
+      # Vendored from usque-rs. Its own suite is the inherited evidence that the
+      # protocol code still behaves, so it gates CI like any other crate.
+      - name: Rust format check (usque-core)
+        run: |
+          cargo fmt --all -- --check
+        working-directory: rust/usque-core
+
       - name: Rust tests
         run: cargo test
         working-directory: rust/letterbox-core
@@ -113,6 +120,10 @@ jobs:
       - name: Rust tests (proxy)
         run: cargo test
         working-directory: rust/letterbox-proxy
+
+      - name: Rust tests (usque-core)
+        run: cargo test
+        working-directory: rust/usque-core
 
       - name: Gradle permissions
         run: chmod +x gradlew
@@ -244,10 +255,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6.2.0
 
-      # Single workspace invocation builds both letterbox-core and letterbox-proxy
-      # for all three ABIs in one pass, reusing the compiled dependency graph
-      # across the two crates (the previous two per-crate invocations recompiled
-      # the shared dependencies twice).
+      # Single workspace invocation builds letterbox-core, letterbox-proxy and
+      # usque-core for all three ABIs in one pass, reusing the compiled
+      # dependency graph across crates (per-crate invocations recompiled the
+      # shared dependencies once each).
+      #
+      # usque-core pulls in quiche with vendored BoringSSL, so this step also
+      # cross-compiles C via cmake. If it fails for one ABI only, suspect
+      # BoringSSL's toolchain detection rather than the Rust code.
       - name: Build Android native libraries (release, all ABIs)
         run: |
           cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --manifest-path ${{ github.workspace }}/Cargo.toml --release
