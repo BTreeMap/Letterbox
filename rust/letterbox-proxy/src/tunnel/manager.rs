@@ -33,6 +33,8 @@ pub enum ConnectionState {
 pub struct TunnelDiagnostics {
     /// Live connection state.
     pub connection_state: ConnectionState,
+    /// Which transport is carrying the tunnel: `"masque"` or `"wireguard"`.
+    pub protocol: &'static str,
     /// WireGuard private key (base64). Sensitive — surfaced for debugging only.
     pub private_key: String,
     /// Our derived WireGuard public key (base64).
@@ -236,6 +238,7 @@ fn build_diagnostics(
         } else {
             ConnectionState::Disconnected
         },
+        protocol: tunnel.protocol(),
         private_key: config.account.private_key.clone(),
         public_key: public_key.to_string(),
         peer_public_key: config.peer.public_key.clone(),

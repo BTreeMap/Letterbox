@@ -417,6 +417,7 @@ fn to_ffi_diagnostics(d: TunnelDiagnostics) -> WarpDiagnostics {
             ConnectionState::Connected => "connected".to_string(),
             ConnectionState::Disconnected => "disconnected".to_string(),
         },
+        protocol: d.protocol.to_string(),
         private_key: d.private_key,
         public_key: d.public_key,
         peer_public_key: d.peer_public_key,

@@ -310,6 +310,17 @@ private fun LiveTunnelBody(d: WarpDiagnostics) {
         if (connected) "Connected" else "Disconnected",
         valueColor = if (connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
     )
+    // "Connected" alone cannot distinguish MASQUE from a silent fallback to
+    // WireGuard, which is the first thing to establish in any report about
+    // images not loading behind a restrictive firewall.
+    DiagnosticRow(
+        "Transport",
+        when (d.protocol) {
+            "masque" -> "MASQUE (HTTP/3, UDP 443)"
+            "wireguard" -> "WireGuard (UDP 500)"
+            else -> d.protocol.ifBlank { "unknown" }
+        }
+    )
     DiagnosticRow(
         "Last handshake",
         d.lastHandshakeSecs?.let { "${it}s ago" } ?: "never"

@@ -63,6 +63,10 @@ fn real_masque_tunnel_fetches_image() {
 
         let diagnostics = manager.diagnostics().expect("diagnostics");
         assert_eq!(
+            diagnostics.protocol, "masque",
+            "this test is meaningless if the tunnel silently fell back to WireGuard"
+        );
+        assert_eq!(
             diagnostics.connection_state,
             letterbox_proxy::tunnel::ConnectionState::Connected,
             "MASQUE tunnel should be connected; if this fails with the substituted \

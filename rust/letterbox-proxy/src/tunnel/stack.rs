@@ -97,7 +97,12 @@ impl WarpTunnel {
         self.transport.endpoint()
     }
 
-    /// Whether the WireGuard handshake has completed.
+    /// Which transport is carrying this tunnel.
+    pub fn protocol(&self) -> &'static str {
+        self.transport.protocol()
+    }
+
+    /// Whether the tunnel is ready to carry packets.
     pub fn is_connected(&self) -> bool {
         self.transport.is_connected()
     }

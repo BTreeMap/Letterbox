@@ -63,6 +63,14 @@ class RemoteImageWarpE2ETest {
             "connected",
             diagnostics.connectionState.lowercase()
         )
+        // The point of the migration: a connected tunnel is not enough, it has to
+        // be the MASQUE one. Without this the suite would go green on a silent
+        // fallback to the transport we are trying to leave.
+        assertEquals(
+            "tunnel should be carried by MASQUE on Android",
+            "masque",
+            diagnostics.protocol
+        )
         assertTrue("WARP should be enabled", diagnostics.warpEnabled)
         assertNotNull(
             "A WireGuard handshake should have completed",

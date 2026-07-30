@@ -54,6 +54,12 @@ pub struct ProxyStatus {
 pub struct WarpDiagnostics {
     /// `"connected"` or `"disconnected"`.
     pub connection_state: String,
+    /// Which transport is carrying the tunnel: `"masque"` or `"wireguard"`.
+    ///
+    /// Without this, "the tunnel is up" says nothing about *which* tunnel, so
+    /// neither a test nor a bug report can distinguish MASQUE working from
+    /// MASQUE having quietly fallen back.
+    pub protocol: String,
     /// WireGuard private key (base64).
     pub private_key: String,
     /// Derived WireGuard public key (base64).

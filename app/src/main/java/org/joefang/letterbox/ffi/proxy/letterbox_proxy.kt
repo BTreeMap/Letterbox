@@ -1524,6 +1524,15 @@ data class WarpDiagnostics (
     var `connectionState`: kotlin.String
     , 
     /**
+     * Which transport is carrying the tunnel: `"masque"` or `"wireguard"`.
+     *
+     * Without this, "the tunnel is up" says nothing about *which* tunnel, so
+     * neither a test nor a bug report can distinguish MASQUE working from
+     * MASQUE having quietly fallen back.
+     */
+    var `protocol`: kotlin.String
+    , 
+    /**
      * WireGuard private key (base64).
      */
     var `privateKey`: kotlin.String
@@ -1619,6 +1628,7 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterUShort.read(buf),
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
@@ -1634,6 +1644,7 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
 
     override fun allocationSize(value: WarpDiagnostics) = (
             FfiConverterString.allocationSize(value.`connectionState`) +
+            FfiConverterString.allocationSize(value.`protocol`) +
             FfiConverterString.allocationSize(value.`privateKey`) +
             FfiConverterString.allocationSize(value.`publicKey`) +
             FfiConverterString.allocationSize(value.`peerPublicKey`) +
@@ -1653,6 +1664,7 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
 
     override fun write(value: WarpDiagnostics, buf: ByteBuffer) {
             FfiConverterString.write(value.`connectionState`, buf)
+            FfiConverterString.write(value.`protocol`, buf)
             FfiConverterString.write(value.`privateKey`, buf)
             FfiConverterString.write(value.`publicKey`, buf)
             FfiConverterString.write(value.`peerPublicKey`, buf)
