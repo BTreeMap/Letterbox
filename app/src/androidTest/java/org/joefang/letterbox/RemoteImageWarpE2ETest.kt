@@ -17,17 +17,15 @@ import org.junit.runner.RunWith
 
 /**
  * Network-gated end-to-end test of the full image path:
- * `ImageProxyService` → Rust FFI → WARP/WireGuard tunnel → internet.
+ * `ImageProxyService` → Rust FFI → MASQUE tunnel → internet.
  *
- * This exercises the real Cloudflare WARP provisioning + handshake + tunnelled
- * HTTPS fetch on a device. The deterministic banner/consent-gating behaviour is
- * covered separately by [ImageProxyIntegrationTest]; this test proves that, once
- * the user has accepted the Cloudflare terms, remote images actually load
- * through the privacy tunnel and the user's real IP is never used.
+ * This exercises real Cloudflare WARP provisioning, the CONNECT-IP handshake and
+ * a tunnelled HTTPS fetch on a device. The deterministic banner-gating behaviour
+ * is covered separately by [ImageProxyIntegrationTest].
  *
  * It requires working internet access to reach Cloudflare. When the device has
- * no connectivity (e.g. an offline CI shard) the WARP provisioning step throws
- * and the test is skipped via [assumeNoException] rather than failing.
+ * no connectivity (e.g. an offline CI shard) the provisioning step throws and
+ * the test is skipped via [assumeNoException] rather than failing.
  */
 @RunWith(AndroidJUnit4::class)
 @LargeTest
@@ -71,23 +69,31 @@ class RemoteImageWarpE2ETest {
         )
         assertEquals(
             "WARP tunnel should be connected after diagnostics self-test " +
-                "(transport=${diagnostics.protocol}, endpoint=${diagnostics.endpointHost})",
+                "(transport=${diagnostics.protocol}, " +
+                "endpoint=${diagnostics.endpointAddress}:${diagnostics.endpointPort})",
             "connected",
             diagnostics.connectionState.lowercase()
         )
-        assertTrue("WARP should be enabled", diagnostics.warpEnabled)
         assertNotNull(
-            "A WireGuard handshake should have completed",
+            "A QUIC handshake should have completed",
             diagnostics.lastHandshakeSecs
         )
         assertTrue(
-            "Endpoint host should be populated",
-            diagnostics.endpointHost.isNotBlank()
+            "The address the tunnel dialled should be populated",
+            diagnostics.endpointAddress.isNotBlank()
         )
+        // The SNI is the one thing about this path that Cloudflare can change
+        // without notice, so a live session that reports none is worth failing
+        // on rather than treating as detail.
         assertTrue(
-            "Public key should be derived from the private key",
-            diagnostics.publicKey.isNotBlank()
+            "The tunnel should report the SNI it presented",
+            diagnostics.endpointSni.isNotBlank()
         )
+
+        // `warpEnabled` describes the *account*, not the session, and lives on
+        // the stored configuration. Reading it from the live diagnostics is what
+        // this test used to do, back when one record carried both.
+        assertTrue("WARP should be enabled on the account", proxy.getStoredConfig().warpEnabled)
     }
 
     @Test
