@@ -297,10 +297,20 @@ class MainActivity : ComponentActivity() {
         }
 
         // First-launch introduction. Each branch is a distinct screen, and the
-        // unknown case is a screen too rather than a guess at one of the others.
+        // unknown case is one too rather than a guess at either of the others.
         when (onboardingCompleted) {
             null -> {
-                LoadingScreen()
+                // Deliberately blank, not a spinner. DataStore answers within a
+                // frame or two, so a progress indicator would only flash — and an
+                // indeterminate one is an *infinite* animation, which keeps the
+                // composition permanently non-idle. Compose's test clock treats a
+                // running animation as "not settled", so every instrumented test
+                // that launches this activity would block on the first
+                // auto-syncing assertion.
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {}
                 return
             }
             false -> {
