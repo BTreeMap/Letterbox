@@ -1,0 +1,254 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 3,
+    "identityHash": "03e0371b5f879240a3acf7f4dd25dfbb",
+    "entities": [
+      {
+        "tableName": "blobs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`hash` TEXT NOT NULL, `size_bytes` INTEGER NOT NULL, `ref_count` INTEGER NOT NULL, PRIMARY KEY(`hash`))",
+        "fields": [
+          {
+            "fieldPath": "hash",
+            "columnName": "hash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "refCount",
+            "columnName": "ref_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "hash"
+          ]
+        }
+      },
+      {
+        "tableName": "history_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `blob_hash` TEXT NOT NULL, `display_name` TEXT NOT NULL, `original_uri` TEXT, `last_accessed` INTEGER NOT NULL, `subject` TEXT NOT NULL DEFAULT '', `sender_email` TEXT NOT NULL DEFAULT '', `sender_name` TEXT NOT NULL DEFAULT '', `recipient_emails` TEXT NOT NULL DEFAULT '', `recipient_names` TEXT NOT NULL DEFAULT '', `email_date` INTEGER NOT NULL DEFAULT 0, `has_attachments` INTEGER NOT NULL DEFAULT 0, `body_preview` TEXT NOT NULL DEFAULT '', FOREIGN KEY(`blob_hash`) REFERENCES `blobs`(`hash`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blobHash",
+            "columnName": "blob_hash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "originalUri",
+            "columnName": "original_uri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastAccessed",
+            "columnName": "last_accessed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "subject",
+            "columnName": "subject",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "senderEmail",
+            "columnName": "sender_email",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "senderName",
+            "columnName": "sender_name",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "recipientEmails",
+            "columnName": "recipient_emails",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "recipientNames",
+            "columnName": "recipient_names",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "emailDate",
+            "columnName": "email_date",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "hasAttachments",
+            "columnName": "has_attachments",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "bodyPreview",
+            "columnName": "body_preview",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_history_items_blob_hash",
+            "unique": true,
+            "columnNames": [
+              "blob_hash"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_history_items_blob_hash` ON `${TABLE_NAME}` (`blob_hash`)"
+          },
+          {
+            "name": "index_history_items_email_date",
+            "unique": false,
+            "columnNames": [
+              "email_date"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_history_items_email_date` ON `${TABLE_NAME}` (`email_date`)"
+          },
+          {
+            "name": "index_history_items_sender_email",
+            "unique": false,
+            "columnNames": [
+              "sender_email"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_history_items_sender_email` ON `${TABLE_NAME}` (`sender_email`)"
+          },
+          {
+            "name": "index_history_items_has_attachments",
+            "unique": false,
+            "columnNames": [
+              "has_attachments"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_history_items_has_attachments` ON `${TABLE_NAME}` (`has_attachments`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "blobs",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "blob_hash"
+            ],
+            "referencedColumns": [
+              "hash"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "email_fts",
+        "createSql": "CREATE VIRTUAL TABLE IF NOT EXISTS `${TABLE_NAME}` USING FTS4(`subject` TEXT NOT NULL, `sender_email` TEXT NOT NULL, `sender_name` TEXT NOT NULL, `recipient_emails` TEXT NOT NULL, `recipient_names` TEXT NOT NULL, `body_preview` TEXT NOT NULL, content=`history_items`)",
+        "fields": [
+          {
+            "fieldPath": "subject",
+            "columnName": "subject",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "senderEmail",
+            "columnName": "sender_email",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "senderName",
+            "columnName": "sender_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recipientEmails",
+            "columnName": "recipient_emails",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recipientNames",
+            "columnName": "recipient_names",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bodyPreview",
+            "columnName": "body_preview",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": []
+        },
+        "ftsVersion": "FTS4",
+        "ftsOptions": {
+          "tokenizer": "simple",
+          "tokenizerArgs": [],
+          "contentTable": "history_items",
+          "languageIdColumnName": "",
+          "matchInfo": "FTS4",
+          "notIndexedColumns": [],
+          "prefixSizes": [],
+          "preferredOrder": "ASC"
+        },
+        "contentSyncTriggers": [
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_email_fts_BEFORE_UPDATE BEFORE UPDATE ON `history_items` BEGIN DELETE FROM `email_fts` WHERE `docid`=OLD.`rowid`; END",
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_email_fts_BEFORE_DELETE BEFORE DELETE ON `history_items` BEGIN DELETE FROM `email_fts` WHERE `docid`=OLD.`rowid`; END",
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_email_fts_AFTER_UPDATE AFTER UPDATE ON `history_items` BEGIN INSERT INTO `email_fts`(`docid`, `subject`, `sender_email`, `sender_name`, `recipient_emails`, `recipient_names`, `body_preview`) VALUES (NEW.`rowid`, NEW.`subject`, NEW.`sender_email`, NEW.`sender_name`, NEW.`recipient_emails`, NEW.`recipient_names`, NEW.`body_preview`); END",
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_email_fts_AFTER_INSERT AFTER INSERT ON `history_items` BEGIN INSERT INTO `email_fts`(`docid`, `subject`, `sender_email`, `sender_name`, `recipient_emails`, `recipient_names`, `body_preview`) VALUES (NEW.`rowid`, NEW.`subject`, NEW.`sender_email`, NEW.`sender_name`, NEW.`recipient_emails`, NEW.`recipient_names`, NEW.`body_preview`); END"
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '03e0371b5f879240a3acf7f4dd25dfbb')"
+    ]
+  }
+}
