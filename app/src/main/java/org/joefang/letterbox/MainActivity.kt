@@ -2,7 +2,10 @@ package org.joefang.letterbox
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -80,18 +83,24 @@ import org.joefang.letterbox.data.SortDirection
 import org.joefang.letterbox.data.SortField
 import org.joefang.letterbox.data.UserPreferencesRepository
 import org.joefang.letterbox.data.ImageProxyService
+import org.joefang.letterbox.ffi.proxy.UpdateResult
+import org.joefang.letterbox.ui.DEFAULT_EMAIL_FILENAME
 import org.joefang.letterbox.ui.EmailDetailScreen
 import org.joefang.letterbox.ui.DiagnosticsDialog
 import org.joefang.letterbox.ui.OnboardingScreen
 import org.joefang.letterbox.ui.UpdateAvailableDialog
 import org.joefang.letterbox.ui.UpToDateDialog
+import org.joefang.letterbox.ui.formatRelativeTimestamp
+import org.joefang.letterbox.ui.formatStorageSize
+import org.joefang.letterbox.ui.sharedEmailFilename
+import org.joefang.letterbox.ui.sourceLabel
 import org.joefang.letterbox.ui.theme.LetterboxTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+
+private const val TAG = "MainActivity"
 
 /**
  * MIME types accepted by the file picker for email files.
@@ -100,32 +109,70 @@ import java.util.Locale
 private val EMAIL_MIME_TYPES = arrayOf("message/rfc822", "application/octet-stream", "text/plain")
 
 /**
- * Time constants for relative timestamp formatting (in milliseconds).
+ * Intent actions that mean another app handed us an email to display. Typed as a
+ * set of nullable strings because "this intent has no action" is a member of the
+ * domain being tested against.
  */
-private object TimeConstants {
-    const val MINUTE_MS = 60_000L
-    const val HOUR_MS = 3_600_000L
-    const val DAY_MS = 86_400_000L
-    const val WEEK_MS = 604_800_000L
-}
-
-/**
- * File sharing constants.
- */
-private object FileConstants {
-    const val MAX_FILENAME_LENGTH = 50
-}
+private val EXTERNAL_EMAIL_ACTIONS: Set<String?> = setOf(Intent.ACTION_VIEW, Intent.ACTION_SEND)
 
 /** Minimum interval between automatic update checks (24 hours). */
 private const val UPDATE_CHECK_INTERVAL_MS = 86_400_000L
 
-/** UI state for the manual "Check for updates" flow. */
-private sealed interface UpdateUiState {
-    data object Idle : UpdateUiState
-    data object Checking : UpdateUiState
-    data class UpToDate(val currentVersion: String) : UpdateUiState
-    data class Available(val result: org.joefang.letterbox.ffi.proxy.UpdateResult) : UpdateUiState
-    data class Failed(val message: String) : UpdateUiState
+/**
+ * The URI of the email this intent asks us to open, or `null` if it asks for no
+ * such thing. `ACTION_VIEW` carries it in the data field and `ACTION_SEND` in
+ * `EXTRA_STREAM`; every other action yields `null`, so the function is total.
+ */
+private fun Intent.emailUri(): Uri? = when (action) {
+    Intent.ACTION_VIEW -> data
+    Intent.ACTION_SEND -> streamExtra()
+    else -> null
+}
+
+@Suppress("DEPRECATION")
+private fun Intent.streamExtra(): Uri? =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+    } else {
+        getParcelableExtra(Intent.EXTRA_STREAM)
+    }
+
+/**
+ * Whether this intent came from another app handing us an email, which decides
+ * whether "back" closes the app or returns to the local history list.
+ *
+ * Deliberately independent of [emailUri]: a malformed external intent that
+ * carries no URI still arrived from outside, and back should still exit.
+ */
+private fun Intent?.isExternalEmailLaunch(): Boolean = this?.action in EXTERNAL_EMAIL_ACTIONS
+
+/**
+ * The preference values the home screen renders, collected once so every
+ * consumer sees the same value — including the same value before DataStore has
+ * emitted. Collecting one flow in two places with two different `initial`
+ * values is what previously made the settings sheet show the privacy proxy as
+ * off while the rest of the app treated it as on.
+ */
+private data class AppPreferences(
+    val alwaysLoadRemoteImages: Boolean,
+    val enablePrivacyProxy: Boolean,
+    val cloudflareTermsAccepted: Boolean,
+)
+
+/**
+ * State of the "Check for updates" flow.
+ *
+ * [Idle] and [Checking] describe the UI only; [UpToDate], [Available] and
+ * [Failed] are exactly the outcomes a check can produce, so one closed type
+ * serves as both the result of [MainActivity.runUpdateCheck] and the state the
+ * dialogs eliminate.
+ */
+private sealed interface UpdateCheckState {
+    data object Idle : UpdateCheckState
+    data object Checking : UpdateCheckState
+    data class UpToDate(val currentVersion: String) : UpdateCheckState
+    data class Available(val result: UpdateResult) : UpdateCheckState
+    data class Failed(val message: String) : UpdateCheckState
 }
 
 class MainActivity : ComponentActivity() {
@@ -139,187 +186,189 @@ class MainActivity : ComponentActivity() {
             )
         )
     }
-    
+
     private lateinit var preferencesRepository: UserPreferencesRepository
-    private var launchedFromExternalIntent = false
+
+    /**
+     * Whether the current intent came from another app. Snapshot state rather
+     * than a plain field: `onNewIntent` can flip it while the UI is composed,
+     * and the detail screen's back and "remove from history" affordances are
+     * derived from it, so a plain field would leave them stale.
+     */
+    private var launchedFromExternalIntent by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // Initialize preferences repository
+
         preferencesRepository = UserPreferencesRepository(this)
-        
-        // Track if launched from external VIEW or SEND intent
-        launchedFromExternalIntent = intent?.action == Intent.ACTION_VIEW || 
-            intent?.action == Intent.ACTION_SEND
-        
-        // Handle incoming intent
+        launchedFromExternalIntent = intent.isExternalEmailLaunch()
         handleIntent(intent)
-        
+
         setContent {
             LetterboxTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    val uiState by viewModel.uiState.collectAsState()
-                    val snackbarHostState = remember { SnackbarHostState() }
-                    
-                    // Collect preferences
-                    val enablePrivacyProxy by preferencesRepository.enablePrivacyProxy.collectAsState(initial = true)
-                    val alwaysLoadRemoteImages by preferencesRepository.alwaysLoadRemoteImages.collectAsState(initial = false)
-                    val cloudflareTermsAccepted by preferencesRepository.cloudflareTermsAccepted.collectAsState(initial = false)
-                    val onboardingCompleted by preferencesRepository.onboardingCompleted.collectAsState(initial = true)
-                    val scope = rememberCoroutineScope()
-
-                    // First-launch onboarding establishes network consent.
-                    if (!onboardingCompleted) {
-                        OnboardingScreen(
-                            onAccept = {
-                                scope.launch { preferencesRepository.completeOnboarding(acceptedTerms = true) }
-                            },
-                            onDecline = {
-                                scope.launch { preferencesRepository.completeOnboarding(acceptedTerms = false) }
-                            }
-                        )
-                        return@Surface
-                    }
-
-                    // Throttled, silent update check on launch (once per day),
-                    // only when the user has consented to tunnelled networking.
-                    if (cloudflareTermsAccepted) {
-                        LaunchedEffect(Unit) {
-                            maybeAutoCheckForUpdate(snackbarHostState)
-                        }
-                    }
-
-                    // Show error message if any
-                    LaunchedEffect(uiState.errorMessage) {
-                        uiState.errorMessage?.let { message ->
-                            snackbarHostState.showSnackbar(message)
-                            viewModel.clearError()
-                        }
-                    }
-
-                    when {
-                        uiState.isLoading -> {
-                            LoadingScreen()
-                        }
-                        uiState.currentEmail != null -> {
-                            val context = LocalContext.current
-                            val scope = rememberCoroutineScope()
-                            
-                            // Determine whether images should be loaded
-                            val shouldLoadImages = alwaysLoadRemoteImages || uiState.sessionLoadImages
-                            
-                            EmailDetailScreen(
-                                email = uiState.currentEmail!!,
-                                onNavigateBack = { 
-                                    if (launchedFromExternalIntent) {
-                                        finish()
-                                    } else {
-                                        viewModel.closeEmail()
-                                    }
-                                },
-                                onRemoveFromHistory = if (!launchedFromExternalIntent) {
-                                    {
-                                        viewModel.removeCurrentFromHistory()
-                                        scope.launch {
-                                            snackbarHostState.showSnackbar("Removed from history")
-                                        }
-                                    }
-                                } else null,
-                                onShareEml = {
-                                    shareCurrentEmail(context, uiState.currentEmail!!.subject)
-                                },
-                                hasRemoteImages = uiState.hasRemoteImages,
-                                sessionLoadImages = shouldLoadImages,
-                                onShowImages = {
-                                    viewModel.enableSessionImageLoading()
-                                },
-                                useProxy = enablePrivacyProxy,
-                                cloudflareTermsAccepted = cloudflareTermsAccepted
-                            )
-                        }
-                        else -> {
-                            LetterboxScaffold(
-                                history = uiState.filteredHistory,
-                                cacheStats = uiState.cacheStats,
-                                searchQuery = uiState.searchQuery,
-                                onSearchQueryChange = { viewModel.setSearchQuery(it) },
-                                isSearchActive = uiState.isSearchActive,
-                                onSearchActiveChange = { viewModel.setSearchActive(it) },
-                                sortField = uiState.sortField,
-                                sortDirection = uiState.sortDirection,
-                                onSortChange = { field, direction -> viewModel.setSortOrder(field, direction) },
-                                filterHasAttachments = uiState.filterHasAttachments,
-                                onToggleAttachmentsFilter = { viewModel.toggleAttachmentsFilter() },
-                                onEntryClick = { entry ->
-                                    viewModel.openHistoryEntry(entry)
-                                },
-                                onEntryDelete = { entry ->
-                                    viewModel.deleteHistoryEntry(entry)
-                                },
-                                onOpenFile = { uri ->
-                                    loadEmailFromUri(uri, null)
-                                },
-                                onClearHistory = {
-                                    viewModel.clearHistory()
-                                },
-                                snackbarHostState = snackbarHostState,
-                                preferencesRepository = preferencesRepository
-                            )
-                        }
-                    }
+                    LetterboxApp()
                 }
             }
+        }
+    }
+
+    /**
+     * Root of the composable tree. Owns the screen-level state and routes every
+     * effect back to a method on this activity, so the composables below stay
+     * functions of plain values and callbacks.
+     */
+    @Composable
+    private fun LetterboxApp() {
+        val uiState by viewModel.uiState.collectAsState()
+        val snackbarHostState = remember { SnackbarHostState() }
+        val scope = rememberCoroutineScope()
+
+        // One collection site per preference. Each `initial` matches the default
+        // the repository itself falls back to, so the pre-emission frame agrees
+        // with the persisted value.
+        val onboardingCompleted by preferencesRepository.onboardingCompleted
+            .collectAsState(initial = true)
+        val alwaysLoadRemoteImages by preferencesRepository.alwaysLoadRemoteImages
+            .collectAsState(initial = false)
+        val enablePrivacyProxy by preferencesRepository.enablePrivacyProxy
+            .collectAsState(initial = true)
+        val cloudflareTermsAccepted by preferencesRepository.cloudflareTermsAccepted
+            .collectAsState(initial = false)
+
+        val preferences = AppPreferences(
+            alwaysLoadRemoteImages = alwaysLoadRemoteImages,
+            enablePrivacyProxy = enablePrivacyProxy,
+            cloudflareTermsAccepted = cloudflareTermsAccepted
+        )
+
+        var updateCheckState by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
+
+        // First-launch onboarding establishes network consent.
+        if (!onboardingCompleted) {
+            OnboardingScreen(
+                onAccept = {
+                    scope.launch { preferencesRepository.completeOnboarding(acceptedTerms = true) }
+                },
+                onDecline = {
+                    scope.launch { preferencesRepository.completeOnboarding(acceptedTerms = false) }
+                }
+            )
+            return
+        }
+
+        // Throttled, silent update check on launch (once per day), only when the
+        // user has consented to tunnelled networking.
+        if (cloudflareTermsAccepted) {
+            LaunchedEffect(Unit) {
+                maybeAutoCheckForUpdate(snackbarHostState)
+            }
+        }
+
+        LaunchedEffect(uiState.errorMessage) {
+            uiState.errorMessage?.let { message ->
+                snackbarHostState.showSnackbar(message)
+                viewModel.clearError()
+            }
+        }
+
+        // Bind the optional email once: the branch then smart-casts, and the
+        // detail screen and its share action are guaranteed to see the same
+        // value. Re-reading `uiState.currentEmail` inside a callback is a fresh
+        // nullable read that can observe a later, empty state.
+        val currentEmail = uiState.currentEmail
+
+        when {
+            uiState.isLoading -> LoadingScreen()
+
+            currentEmail != null -> EmailDetailScreen(
+                email = currentEmail,
+                onNavigateBack = {
+                    if (launchedFromExternalIntent) finish() else viewModel.closeEmail()
+                },
+                onRemoveFromHistory = if (launchedFromExternalIntent) {
+                    null
+                } else {
+                    {
+                        viewModel.removeCurrentFromHistory()
+                        scope.launch { snackbarHostState.showSnackbar("Removed from history") }
+                    }
+                },
+                onShareEml = { shareCurrentEmail(currentEmail.subject) },
+                hasRemoteImages = uiState.hasRemoteImages,
+                sessionLoadImages = preferences.alwaysLoadRemoteImages || uiState.sessionLoadImages,
+                onShowImages = { viewModel.enableSessionImageLoading() },
+                useProxy = preferences.enablePrivacyProxy,
+                cloudflareTermsAccepted = preferences.cloudflareTermsAccepted
+            )
+
+            else -> LetterboxScaffold(
+                history = uiState.filteredHistory,
+                cacheStats = uiState.cacheStats,
+                searchQuery = uiState.searchQuery,
+                onSearchQueryChange = { viewModel.setSearchQuery(it) },
+                isSearchActive = uiState.isSearchActive,
+                onSearchActiveChange = { viewModel.setSearchActive(it) },
+                sortField = uiState.sortField,
+                sortDirection = uiState.sortDirection,
+                onSortChange = { field, direction -> viewModel.setSortOrder(field, direction) },
+                filterHasAttachments = uiState.filterHasAttachments,
+                onToggleAttachmentsFilter = { viewModel.toggleAttachmentsFilter() },
+                onEntryClick = { entry -> viewModel.openHistoryEntry(entry) },
+                onEntryDelete = { entry -> viewModel.deleteHistoryEntry(entry) },
+                onOpenFile = { uri -> loadEmailFromUri(uri) },
+                onClearHistory = { viewModel.clearHistory() },
+                preferences = preferences,
+                onAlwaysLoadRemoteImagesChange = { enabled ->
+                    scope.launch { preferencesRepository.setAlwaysLoadRemoteImages(enabled) }
+                },
+                onEnablePrivacyProxyChange = { enabled ->
+                    scope.launch { preferencesRepository.setEnablePrivacyProxy(enabled) }
+                },
+                onAcceptCloudflareTerms = {
+                    scope.launch { preferencesRepository.acceptCloudflareTermsAndEnableProxy() }
+                },
+                updateCheckState = updateCheckState,
+                onCheckForUpdate = {
+                    if (updateCheckState != UpdateCheckState.Checking) {
+                        updateCheckState = UpdateCheckState.Checking
+                        scope.launch { updateCheckState = runUpdateCheck() }
+                    }
+                },
+                onDismissUpdateDialog = { updateCheckState = UpdateCheckState.Idle },
+                snackbarHostState = snackbarHostState
+            )
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        launchedFromExternalIntent = intent.action == Intent.ACTION_VIEW ||
-            intent.action == Intent.ACTION_SEND
+        launchedFromExternalIntent = intent.isExternalEmailLaunch()
         handleIntent(intent)
     }
 
     private fun handleIntent(intent: Intent?) {
-        when (intent?.action) {
-            Intent.ACTION_VIEW -> {
-                intent.data?.let { uri ->
-                    loadEmailFromUri(uri, intent.type)
-                }
-            }
-            Intent.ACTION_SEND -> {
-                // Handle "Share" / "Send" intents - get URI from EXTRA_STREAM
-                @Suppress("DEPRECATION")
-                val uri = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-                } else {
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
-                }
-                uri?.let { loadEmailFromUri(it, intent.type) }
-            }
-        }
+        val uri = intent?.emailUri() ?: return
+        loadEmailFromUri(uri)
     }
 
-    private fun loadEmailFromUri(uri: Uri, mimeType: String?) {
+    /**
+     * Read an email out of [uri] and hand the bytes to the view model.
+     *
+     * An effect boundary: every failure becomes a domain error on the UI state
+     * rather than an exception escaping into the framework.
+     */
+    private fun loadEmailFromUri(uri: Uri) {
         try {
-            // Take persistable URI permission for content:// URIs
             if (uri.scheme == "content") {
-                try {
-                    contentResolver.takePersistableUriPermission(
-                        uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
-                } catch (e: SecurityException) {
-                    // Permission not available - this is OK, file may still be readable
-                }
+                takePersistableReadPermission(uri)
             }
-            
-            contentResolver.openInputStream(uri)?.use { inputStream ->
-                val bytes = inputStream.readBytes()
-                val filename = getFilenameFromUri(uri) ?: "email.eml"
+            contentResolver.openInputStream(uri)?.use { input ->
+                val bytes = input.readBytes()
+                val filename = displayNameOf(uri) ?: DEFAULT_EMAIL_FILENAME
                 viewModel.ingestFromUri(bytes, filename, uri.toString())
             }
         } catch (e: Exception) {
@@ -327,72 +376,105 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun getFilenameFromUri(uri: Uri): String? {
-        return contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                if (nameIndex >= 0) cursor.getString(nameIndex) else null
-            } else null
+    /**
+     * Try to persist read access to a content URI. Failure is expected and
+     * harmless: many providers grant one-shot access that is still readable for
+     * the rest of this call. The URI is deliberately not logged.
+     */
+    private fun takePersistableReadPermission(uri: Uri) {
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (e: SecurityException) {
+            Log.d(TAG, "No persistable read permission; using transient access")
         }
     }
 
-    private fun shareCurrentEmail(context: android.content.Context, subject: String) {
+    /** The display name the content provider reports for [uri], if it reports one. */
+    private fun displayNameOf(uri: Uri): String? =
+        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (nameIndex >= 0) cursor.getString(nameIndex) else null
+        }
+
+    /**
+     * Write the current email into the shareable cache directory and hand it to
+     * the system chooser. Effect boundary: failures surface as a domain error.
+     */
+    private fun shareCurrentEmail(subject: String) {
         val bytes = viewModel.getCurrentEmailBytes() ?: return
-        
+
         try {
-            // Save to cache directory
-            val cacheDir = File(context.cacheDir, "shared")
-            cacheDir.mkdirs()
-            val filename = "${subject.take(FileConstants.MAX_FILENAME_LENGTH).replace(Regex("[^a-zA-Z0-9]"), "_")}.eml"
-            val file = File(cacheDir, filename)
+            val shareDir = File(cacheDir, "shared").apply { mkdirs() }
+            val file = File(shareDir, sharedEmailFilename(subject))
             file.writeBytes(bytes)
-            
-            // Create content URI via FileProvider
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                file
-            )
-            
-            // Create share intent
+
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "message/rfc822"
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(shareIntent, "Share email"))
+            startActivity(Intent.createChooser(shareIntent, "Share email"))
         } catch (e: Exception) {
             viewModel.setError("Failed to share email: ${e.message}")
         }
     }
 
     /**
-     * Silently check GitHub for a newer release at most once per day, tunnelled
-     * through WARP. If an update is found, surface a snackbar linking to the
-     * release page. Failures are ignored so a flaky network never disrupts launch.
+     * The single place an update check happens: query GitHub through WARP and,
+     * on success only, record the check time that throttles the launch check.
+     * Both the silent launch check and the manual Settings check funnel through
+     * here, so "a check ran" and "the throttle timestamp advanced" cannot drift
+     * apart.
+     *
+     * Cancellation is rethrown rather than reported as a failed check: a
+     * cancelled coroutine is not an outcome of the check.
+     */
+    private suspend fun runUpdateCheck(): UpdateCheckState =
+        try {
+            val result = ImageProxyService.getInstance(this)
+                .checkForUpdate(BuildConfig.VERSION_NAME)
+            preferencesRepository.setLastUpdateCheck(System.currentTimeMillis())
+            if (result.updateAvailable) {
+                UpdateCheckState.Available(result)
+            } else {
+                UpdateCheckState.UpToDate(BuildConfig.VERSION_NAME)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Update check failed: ${e.message}")
+            UpdateCheckState.Failed(e.message ?: "Update check failed")
+        }
+
+    /**
+     * Silently check for a newer release at most once per day and, if one
+     * exists, surface a snackbar linking to it. Failures are ignored here so a
+     * flaky network never disrupts launch.
      */
     private suspend fun maybeAutoCheckForUpdate(snackbarHostState: SnackbarHostState) {
-        val now = System.currentTimeMillis()
-        val last = preferencesRepository.lastUpdateCheckEpochMillis.first()
-        if (now - last < UPDATE_CHECK_INTERVAL_MS) return
+        val lastCheck = preferencesRepository.lastUpdateCheckEpochMillis.first()
+        if (System.currentTimeMillis() - lastCheck < UPDATE_CHECK_INTERVAL_MS) return
 
-        val result = try {
-            ImageProxyService.getInstance(this).checkForUpdate(BuildConfig.VERSION_NAME)
-        } catch (e: Exception) {
-            android.util.Log.w("MainActivity", "Auto update check failed: ${e.message}")
-            return
+        when (val outcome = runUpdateCheck()) {
+            is UpdateCheckState.Available -> offerUpdate(outcome.result, snackbarHostState)
+            else -> Unit
         }
-        preferencesRepository.setLastUpdateCheck(now)
+    }
 
-        if (result.updateAvailable) {
-            val action = snackbarHostState.showSnackbar(
-                message = "Update available: ${result.latestVersion}",
-                actionLabel = "View",
-                duration = SnackbarDuration.Long
-            )
-            if (action == SnackbarResult.ActionPerformed && result.releaseUrl.isNotBlank()) {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.releaseUrl)))
-            }
+    /** Offer an available release; the "View" action opens the release page. */
+    private suspend fun offerUpdate(result: UpdateResult, snackbarHostState: SnackbarHostState) {
+        val action = snackbarHostState.showSnackbar(
+            message = "Update available: ${result.latestVersion}",
+            actionLabel = "View",
+            duration = SnackbarDuration.Long
+        )
+        if (action == SnackbarResult.ActionPerformed && result.releaseUrl.isNotBlank()) {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(result.releaseUrl)))
         }
     }
 }
@@ -425,42 +507,41 @@ private fun LetterboxScaffold(
     onEntryDelete: (HistoryEntry) -> Unit,
     onOpenFile: (Uri) -> Unit,
     onClearHistory: () -> Unit,
-    snackbarHostState: SnackbarHostState,
-    preferencesRepository: UserPreferencesRepository
+    preferences: AppPreferences,
+    onAlwaysLoadRemoteImagesChange: (Boolean) -> Unit,
+    onEnablePrivacyProxyChange: (Boolean) -> Unit,
+    onAcceptCloudflareTerms: () -> Unit,
+    updateCheckState: UpdateCheckState,
+    onCheckForUpdate: () -> Unit,
+    onDismissUpdateDialog: () -> Unit,
+    snackbarHostState: SnackbarHostState
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
+    var showCloudflareTermsDialog by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val settingsSheetState = rememberModalBottomSheetState()
     val searchFocusRequester = remember { FocusRequester() }
-    
-    // Collect image loading preferences
-    val alwaysLoadRemoteImages by preferencesRepository.alwaysLoadRemoteImages.collectAsState(initial = false)
-    val enablePrivacyProxy by preferencesRepository.enablePrivacyProxy.collectAsState(initial = false)
-    val cloudflareTermsAccepted by preferencesRepository.cloudflareTermsAccepted.collectAsState(initial = false)
-    var showCloudflareTermsDialog by remember { mutableStateOf(false) }
-    var showDiagnostics by remember { mutableStateOf(false) }
-    var updateUiState by remember { mutableStateOf<UpdateUiState>(UpdateUiState.Idle) }
-    val context = LocalContext.current
-    
+
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let { onOpenFile(it) }
     }
-    
+
     // Request focus when search becomes active
     LaunchedEffect(isSearchActive) {
         if (isSearchActive) {
             searchFocusRequester.requestFocus()
         }
     }
-    
+
     Scaffold(
-        topBar = { 
+        topBar = {
             if (isSearchActive) {
                 // Search mode top bar
                 TopAppBar(
@@ -557,7 +638,7 @@ private fun LetterboxScaffold(
             ) {
                 Text("Open file")
             }
-            
+
             // Sort and Filter controls
             if (history.isNotEmpty() || isSearchActive || filterHasAttachments) {
                 Row(
@@ -572,15 +653,7 @@ private fun LetterboxScaffold(
                         FilterChip(
                             selected = false,
                             onClick = { showSortMenu = true },
-                            label = {
-                                Text(
-                                    when (sortField) {
-                                        SortField.DATE -> "Date"
-                                        SortField.SUBJECT -> "Subject"
-                                        SortField.SENDER -> "Sender"
-                                    } + if (sortDirection == SortDirection.ASCENDING) " ↑" else " ↓"
-                                )
-                            },
+                            label = { Text(sortChipLabel(sortField, sortDirection)) },
                             leadingIcon = {
                                 Icon(
                                     Icons.Default.ArrowDropDown,
@@ -594,75 +667,42 @@ private fun LetterboxScaffold(
                             expanded = showSortMenu,
                             onDismissRequest = { showSortMenu = false }
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("Date (newest first)") },
-                                onClick = {
-                                    onSortChange(SortField.DATE, SortDirection.DESCENDING)
-                                    showSortMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Date (oldest first)") },
-                                onClick = {
-                                    onSortChange(SortField.DATE, SortDirection.ASCENDING)
-                                    showSortMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Subject (A-Z)") },
-                                onClick = {
-                                    onSortChange(SortField.SUBJECT, SortDirection.ASCENDING)
-                                    showSortMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Subject (Z-A)") },
-                                onClick = {
-                                    onSortChange(SortField.SUBJECT, SortDirection.DESCENDING)
-                                    showSortMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Sender (A-Z)") },
-                                onClick = {
-                                    onSortChange(SortField.SENDER, SortDirection.ASCENDING)
-                                    showSortMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Sender (Z-A)") },
-                                onClick = {
-                                    onSortChange(SortField.SENDER, SortDirection.DESCENDING)
-                                    showSortMenu = false
-                                }
-                            )
+                            SORT_OPTIONS.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label) },
+                                    onClick = {
+                                        onSortChange(option.field, option.direction)
+                                        showSortMenu = false
+                                    }
+                                )
+                            }
                         }
                     }
-                    
+
                     // Attachments filter chip
                     FilterChip(
                         selected = filterHasAttachments,
                         onClick = onToggleAttachmentsFilter,
-                        label = { 
-                            Text(if (filterHasAttachments) "📎 Attachments" else "Has attachments") 
+                        label = {
+                            Text(if (filterHasAttachments) "📎 Attachments" else "Has attachments")
                         },
-                        modifier = Modifier.semantics { 
-                            contentDescription = if (filterHasAttachments) 
-                                "Filter: showing only emails with attachments" 
-                            else 
+                        modifier = Modifier.semantics {
+                            contentDescription = if (filterHasAttachments)
+                                "Filter: showing only emails with attachments"
+                            else
                                 "Filter by attachments"
                         }
                     )
                 }
             }
-            
+
             // History list with appropriate empty message
             val emptyMessage = when {
                 isSearchActive && searchQuery.isNotBlank() -> "No emails match \"$searchQuery\""
                 filterHasAttachments -> "No emails with attachments"
                 else -> "Open an .eml or .msg file to get started."
             }
-            
+
             HistoryList(
                 entries = history,
                 onEntryClick = onEntryClick,
@@ -672,7 +712,7 @@ private fun LetterboxScaffold(
             )
         }
     }
-    
+
     // Settings bottom sheet
     if (showSettingsSheet) {
         ModalBottomSheet(
@@ -681,22 +721,15 @@ private fun LetterboxScaffold(
         ) {
             SettingsContent(
                 cacheStats = cacheStats,
-                alwaysLoadRemoteImages = alwaysLoadRemoteImages,
-                onAlwaysLoadRemoteImagesChange = { 
-                    scope.launch { 
-                        preferencesRepository.setAlwaysLoadRemoteImages(it)
-                    }
-                },
-                enablePrivacyProxy = enablePrivacyProxy,
-                cloudflareTermsAccepted = cloudflareTermsAccepted,
-                onEnablePrivacyProxyChange = { newValue ->
-                    if (newValue && !cloudflareTermsAccepted) {
-                        // Show ToS dialog when user tries to enable proxy without accepting ToS
+                preferences = preferences,
+                onAlwaysLoadRemoteImagesChange = onAlwaysLoadRemoteImagesChange,
+                onEnablePrivacyProxyChange = { enabled ->
+                    // The consent gate is a decision over values; only the write
+                    // is an effect, and it is delegated upward.
+                    if (enabled && !preferences.cloudflareTermsAccepted) {
                         showCloudflareTermsDialog = true
                     } else {
-                        scope.launch {
-                            preferencesRepository.setEnablePrivacyProxy(newValue)
-                        }
+                        onEnablePrivacyProxyChange(enabled)
                     }
                 },
                 onClearCache = {
@@ -708,25 +741,7 @@ private fun LetterboxScaffold(
                     showSettingsSheet = false
                     showDiagnostics = true
                 },
-                onCheckForUpdate = {
-                    if (updateUiState != UpdateUiState.Checking) {
-                        updateUiState = UpdateUiState.Checking
-                        scope.launch {
-                            updateUiState = try {
-                                val result = ImageProxyService.getInstance(context)
-                                    .checkForUpdate(BuildConfig.VERSION_NAME)
-                                preferencesRepository.setLastUpdateCheck(System.currentTimeMillis())
-                                if (result.updateAvailable) {
-                                    UpdateUiState.Available(result)
-                                } else {
-                                    UpdateUiState.UpToDate(BuildConfig.VERSION_NAME)
-                                }
-                            } catch (e: Exception) {
-                                UpdateUiState.Failed(e.message ?: "Update check failed")
-                            }
-                        }
-                    }
-                }
+                onCheckForUpdate = onCheckForUpdate
             )
         }
     }
@@ -737,47 +752,45 @@ private fun LetterboxScaffold(
     }
 
     // Update check dialogs
-    when (val update = updateUiState) {
-        is UpdateUiState.Available -> UpdateAvailableDialog(
+    when (val update = updateCheckState) {
+        is UpdateCheckState.Available -> UpdateAvailableDialog(
             result = update.result,
-            onDismiss = { updateUiState = UpdateUiState.Idle }
+            onDismiss = onDismissUpdateDialog
         )
-        is UpdateUiState.UpToDate -> UpToDateDialog(
+        is UpdateCheckState.UpToDate -> UpToDateDialog(
             currentVersion = update.currentVersion,
-            onDismiss = { updateUiState = UpdateUiState.Idle }
+            onDismiss = onDismissUpdateDialog
         )
-        is UpdateUiState.Failed -> AlertDialog(
-            onDismissRequest = { updateUiState = UpdateUiState.Idle },
+        is UpdateCheckState.Failed -> AlertDialog(
+            onDismissRequest = onDismissUpdateDialog,
             title = { Text("Update check failed") },
             text = { Text(update.message) },
             confirmButton = {
-                TextButton(onClick = { updateUiState = UpdateUiState.Idle }) { Text("OK") }
+                TextButton(onClick = onDismissUpdateDialog) { Text("OK") }
             }
         )
-        UpdateUiState.Checking, UpdateUiState.Idle -> Unit
+        UpdateCheckState.Checking, UpdateCheckState.Idle -> Unit
     }
-    
+
     // Cloudflare WARP Terms of Service dialog
     if (showCloudflareTermsDialog) {
         CloudflareTermsDialog(
             onAccept = {
                 showCloudflareTermsDialog = false
-                scope.launch {
-                    preferencesRepository.acceptCloudflareTermsAndEnableProxy()
-                }
+                onAcceptCloudflareTerms()
             },
             onDecline = {
                 showCloudflareTermsDialog = false
             }
         )
     }
-    
+
     // About dialog
     if (showAboutDialog) {
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
             title = { Text("About Letterbox") },
-            text = { 
+            text = {
                 Text(
                     "Letterbox is a privacy-focused .eml and .msg file viewer.\n\n" +
                     "• Zero network permissions\n" +
@@ -792,17 +805,17 @@ private fun LetterboxScaffold(
             }
         )
     }
-    
+
     // Clear cache confirmation dialog
     if (showClearCacheDialog) {
         AlertDialog(
             onDismissRequest = { showClearCacheDialog = false },
             title = { Text("Clear cache?") },
-            text = { 
+            text = {
                 Text(
                     "This will delete all ${cacheStats.entryCount} cached emails " +
                     "(${formatStorageSize(cacheStats.totalSizeBytes)}). This action cannot be undone."
-                ) 
+                )
             },
             confirmButton = {
                 TextButton(
@@ -826,9 +839,41 @@ private fun LetterboxScaffold(
     }
 }
 
+/** One entry in the sort dropdown: a label paired with the order it selects. */
+private data class SortOption(
+    val label: String,
+    val field: SortField,
+    val direction: SortDirection
+)
+
+/**
+ * The offered sort orders, in menu order. Listing them as data rather than as
+ * six near-identical menu items keeps the label and the order it applies in one
+ * place, so they cannot disagree.
+ */
+private val SORT_OPTIONS = listOf(
+    SortOption("Date (newest first)", SortField.DATE, SortDirection.DESCENDING),
+    SortOption("Date (oldest first)", SortField.DATE, SortDirection.ASCENDING),
+    SortOption("Subject (A-Z)", SortField.SUBJECT, SortDirection.ASCENDING),
+    SortOption("Subject (Z-A)", SortField.SUBJECT, SortDirection.DESCENDING),
+    SortOption("Sender (A-Z)", SortField.SENDER, SortDirection.ASCENDING),
+    SortOption("Sender (Z-A)", SortField.SENDER, SortDirection.DESCENDING)
+)
+
+/** Label for the sort chip: the active field plus an arrow for the direction. */
+private fun sortChipLabel(field: SortField, direction: SortDirection): String {
+    val name = when (field) {
+        SortField.DATE -> "Date"
+        SortField.SUBJECT -> "Subject"
+        SortField.SENDER -> "Sender"
+    }
+    val arrow = if (direction == SortDirection.ASCENDING) " ↑" else " ↓"
+    return name + arrow
+}
+
 /**
  * Dialog for Cloudflare WARP Terms of Service consent.
- * 
+ *
  * This dialog is shown when the user enables the privacy proxy for the first time.
  * Images are fetched through Cloudflare WARP infrastructure, which requires users
  * to accept Cloudflare's Terms of Service.
@@ -839,11 +884,11 @@ private fun CloudflareTermsDialog(
     onDecline: () -> Unit
 ) {
     val context = LocalContext.current
-    
+
     AlertDialog(
         onDismissRequest = onDecline,
         title = { Text("Cloudflare WARP Terms") },
-        text = { 
+        text = {
             Column {
                 Text(
                     "The privacy proxy uses Cloudflare WARP to hide your IP address when loading remote images.\n\n" +
@@ -878,10 +923,8 @@ private fun CloudflareTermsDialog(
 @Composable
 private fun SettingsContent(
     cacheStats: CacheStats,
-    alwaysLoadRemoteImages: Boolean,
+    preferences: AppPreferences,
     onAlwaysLoadRemoteImagesChange: (Boolean) -> Unit,
-    enablePrivacyProxy: Boolean,
-    cloudflareTermsAccepted: Boolean,
     onEnablePrivacyProxyChange: (Boolean) -> Unit,
     onClearCache: () -> Unit,
     appVersion: String,
@@ -899,7 +942,7 @@ private fun SettingsContent(
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(bottom = 16.dp)
         )
-        
+
         // Remote images section
         Text(
             text = "Remote Images",
@@ -907,7 +950,7 @@ private fun SettingsContent(
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(vertical = 8.dp)
         )
-        
+
         // Always load remote images toggle
         Row(
             modifier = Modifier
@@ -928,12 +971,12 @@ private fun SettingsContent(
                 )
             }
             Switch(
-                checked = alwaysLoadRemoteImages,
+                checked = preferences.alwaysLoadRemoteImages,
                 onCheckedChange = onAlwaysLoadRemoteImagesChange,
                 modifier = Modifier.testTag("alwaysLoadRemoteImagesSwitch")
             )
         }
-        
+
         // Privacy proxy toggle
         Row(
             modifier = Modifier
@@ -948,26 +991,27 @@ private fun SettingsContent(
                     style = MaterialTheme.typography.titleSmall
                 )
                 Text(
-                    text = if (enablePrivacyProxy && cloudflareTermsAccepted) {
-                        "Images loaded through Cloudflare WARP to hide your IP"
-                    } else if (enablePrivacyProxy) {
-                        "Cloudflare terms acceptance required"
-                    } else {
-                        "Load images through a privacy proxy to hide your IP address"
+                    text = when {
+                        preferences.enablePrivacyProxy && preferences.cloudflareTermsAccepted ->
+                            "Images loaded through Cloudflare WARP to hide your IP"
+                        preferences.enablePrivacyProxy ->
+                            "Cloudflare terms acceptance required"
+                        else ->
+                            "Load images through a privacy proxy to hide your IP address"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Switch(
-                checked = enablePrivacyProxy,
+                checked = preferences.enablePrivacyProxy,
                 onCheckedChange = onEnablePrivacyProxyChange,
                 modifier = Modifier.testTag("privacyProxySwitch")
             )
         }
-        
+
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-        
+
         // Storage section (Telegram-style clear cache)
         Text(
             text = "Storage",
@@ -975,7 +1019,7 @@ private fun SettingsContent(
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(vertical = 8.dp)
         )
-        
+
         // Cache info card
         Row(
             modifier = Modifier
@@ -1076,18 +1120,6 @@ private fun SettingsContent(
     }
 }
 
-/**
- * Format storage size in a human-readable format.
- */
-private fun formatStorageSize(bytes: Long): String {
-    return when {
-        bytes < 1024 -> "$bytes B"
-        bytes < 1024 * 1024 -> String.format("%.1f KB", bytes / 1024.0)
-        bytes < 1024 * 1024 * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
-        else -> String.format("%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0))
-    }
-}
-
 @Composable
 private fun HistoryList(
     entries: List<HistoryEntry>,
@@ -1109,6 +1141,12 @@ private fun HistoryList(
             )
         }
     } else {
+        // One clock reading for the whole list, refreshed when the list changes.
+        // Rows then render against a single instant, so two of them can never
+        // straddle a minute boundary and disagree about "now", and scrolling
+        // does not re-read the clock per row.
+        val now = remember(entries) { System.currentTimeMillis() }
+
         LazyColumn(
             modifier = modifier,
             contentPadding = PaddingValues(vertical = 8.dp)
@@ -1116,6 +1154,7 @@ private fun HistoryList(
             items(entries, key = { it.id }) { entry ->
                 HistoryRow(
                     entry = entry,
+                    now = now,
                     onClick = { onEntryClick(entry) },
                     onDelete = { onEntryDelete(entry) }
                 )
@@ -1127,7 +1166,8 @@ private fun HistoryList(
 
 @Composable
 private fun HistoryRow(
-    entry: HistoryEntry, 
+    entry: HistoryEntry,
+    now: Long,
     onClick: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -1136,7 +1176,7 @@ private fun HistoryRow(
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp)
-            .semantics { 
+            .semantics {
                 contentDescription = buildString {
                     append("Email: ${entry.displayName}")
                     if (entry.displaySender.isNotBlank()) {
@@ -1169,7 +1209,7 @@ private fun HistoryRow(
                 }
             }
             Spacer(modifier = Modifier.height(2.dp))
-            
+
             // Sender info (if available)
             if (entry.displaySender.isNotBlank()) {
                 Text(
@@ -1181,11 +1221,11 @@ private fun HistoryRow(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
             }
-            
+
             // Timestamp and source
             Row {
                 Text(
-                    text = formatTimestamp(entry.effectiveDate),
+                    text = formatRelativeTimestamp(entry.effectiveDate, now),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline
                 )
@@ -1196,7 +1236,7 @@ private fun HistoryRow(
                         color = MaterialTheme.colorScheme.outline
                     )
                     Text(
-                        text = extractSourceName(uri),
+                        text = sourceLabel(uri),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
                         maxLines = 1,
@@ -1216,32 +1256,6 @@ private fun HistoryRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-    }
-}
-
-private fun formatTimestamp(timestamp: Long): String {
-    val now = System.currentTimeMillis()
-    val diff = now - timestamp
-    
-    return when {
-        diff < TimeConstants.MINUTE_MS -> "Just now"
-        diff < TimeConstants.HOUR_MS -> "${diff / TimeConstants.MINUTE_MS}m ago"
-        diff < TimeConstants.DAY_MS -> "${diff / TimeConstants.HOUR_MS}h ago"
-        diff < TimeConstants.WEEK_MS -> "${diff / TimeConstants.DAY_MS}d ago"
-        else -> {
-            val sdf = SimpleDateFormat("MMM d", Locale.getDefault())
-            sdf.format(Date(timestamp))
-        }
-    }
-}
-
-private fun extractSourceName(uri: String): String {
-    return when {
-        uri.startsWith("content://com.google.android.gm") -> "Gmail"
-        uri.startsWith("content://com.google.android.apps.docs") -> "Drive"
-        uri.startsWith("content://com.android.providers.downloads") -> "Downloads"
-        uri.startsWith("content://media/") -> "Files"
-        else -> "External"
     }
 }
 

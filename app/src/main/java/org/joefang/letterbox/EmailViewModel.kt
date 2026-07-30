@@ -44,6 +44,19 @@ data class EmailUiState(
     val isSearchActive: Boolean = false
 )
 
+/**
+ * Outcome of parsing raw email bytes: the renderable [content] when parsing
+ * succeeded, together with the [metadata] used to index the message for search.
+ *
+ * The metadata is not nullable because it is always produced — a failed parse
+ * still yields fallback values — and naming the two fields keeps callers from
+ * having to remember which position of a `Pair` meant which.
+ */
+private data class ParsedEmail(
+    val content: EmailContent?,
+    val metadata: EmailMetadata
+)
+
 class EmailViewModel(
     private val repository: HistoryRepository
 ) : ViewModel() {
@@ -205,31 +218,17 @@ class EmailViewModel(
             
             try {
                 // Parse the email to extract metadata for indexing
-                val parseResult = parseEmailBytesWithMetadata(bytes)
-                val parsed = parseResult.first
-                val metadata = parseResult.second
+                val (parsed, metadata) = parseEmailBytesWithMetadata(bytes)
                 val displayName = parsed?.subject?.takeIf { it.isNotBlank() } ?: filename
-                
+
                 // Store in repository with metadata for search/filter
                 val entry = repository.ingest(bytes, displayName, uri, metadata)
-                
+
                 // If successfully parsed, show the email
                 if (parsed != null) {
-                    // Use Rust FFI to detect remote images
-                    // Note: Must catch both Exception and Error (UnsatisfiedLinkError)
-                    // to gracefully handle cases where native library is unavailable
-                    val hasRemoteImages = try {
-                        val remoteImages = extractRemoteImages(parsed.bodyHtml ?: "")
-                        remoteImages.isNotEmpty()
-                    } catch (e: Exception) {
-                        false
-                    } catch (e: UnsatisfiedLinkError) {
-                        // Native library not available
-                        false
-                    } catch (e: ExceptionInInitializerError) {
-                        // Library initialization failed
-                        false
-                    }
+                    // Detected before the update: `update` retries its lambda on
+                    // a lost compare-and-set, and this crosses the FFI boundary.
+                    val hasRemoteImages = detectRemoteImages(parsed.bodyHtml)
                     _uiState.update { it.copy(
                         isLoading = false,
                         currentEmail = parsed,
@@ -275,21 +274,7 @@ class EmailViewModel(
                         // Read bytes for sharing functionality
                         // Note: This could be optimized to load lazily only when sharing
                         val bytes = file.readBytes()
-                        // Use Rust FFI to detect remote images
-                        // Note: Must catch both Exception and Error (UnsatisfiedLinkError)
-                        // to gracefully handle cases where native library is unavailable
-                        val hasRemoteImages = try {
-                            val remoteImages = extractRemoteImages(parsed.bodyHtml ?: "")
-                            remoteImages.isNotEmpty()
-                        } catch (e: Exception) {
-                            false
-                        } catch (e: UnsatisfiedLinkError) {
-                            // Native library not available
-                            false
-                        } catch (e: ExceptionInInitializerError) {
-                            // Library initialization failed
-                            false
-                        }
+                        val hasRemoteImages = detectRemoteImages(parsed.bodyHtml)
                         _uiState.update { it.copy(
                             isLoading = false,
                             currentEmail = parsed,
@@ -395,25 +380,41 @@ class EmailViewModel(
     }
 
     /**
-     * Parse email bytes using the Rust FFI via UniFFI bindings.
-     * 
+     * Whether [html] references at least one remote image, as judged by the Rust
+     * FFI. Crosses the native boundary, so callers evaluate it once rather than
+     * inside a `MutableStateFlow.update` lambda, which retries on a lost
+     * compare-and-set.
+     *
+     * Total by construction: the native library can be absent or fail to
+     * initialise (notably on a host JVM), and neither is something the user can
+     * act on, so every failure answers "no remote images" rather than
+     * propagating. `Error` subclasses are caught deliberately for that reason.
+     */
+    private fun detectRemoteImages(html: String?): Boolean =
+        try {
+            extractRemoteImages(html ?: "").isNotEmpty()
+        } catch (e: UnsatisfiedLinkError) {
+            false // Native library not available
+        } catch (e: ExceptionInInitializerError) {
+            false // Library initialization failed
+        } catch (e: Exception) {
+            false
+        }
+
+    /**
+     * Parse email bytes and extract metadata for search/filter indexing, using
+     * the Rust FFI via UniFFI bindings.
+     *
      * Uses stalwart's mail-parser for robust RFC 5322 parsing:
      * - Full MIME multipart support
      * - Proper character encoding (non-UTF8 charsets)
      * - Inline asset extraction for cid: URLs
      * - Memory-efficient opaque handle pattern
+     *
+     * Falls back to the Kotlin parser when the native library is unavailable or
+     * rejects the input; metadata is produced either way.
      */
-    private suspend fun parseEmailBytes(bytes: ByteArray): EmailContent? {
-        return parseEmailBytesWithMetadata(bytes).first
-    }
-    
-    /**
-     * Parse email bytes and extract metadata for search/filter indexing.
-     * 
-     * Returns a pair of (EmailContent?, EmailMetadata).
-     * The metadata is always extracted even if parsing fails, with fallback values.
-     */
-    private suspend fun parseEmailBytesWithMetadata(bytes: ByteArray): Pair<EmailContent?, EmailMetadata> {
+    private suspend fun parseEmailBytesWithMetadata(bytes: ByteArray): ParsedEmail {
         return withContext(Dispatchers.Default) {
             try {
                 val handle: EmailHandle = parseEml(bytes)
@@ -468,19 +469,23 @@ class EmailViewModel(
                     getAttachmentContent = { index -> handle.getAttachmentContent(index.toUInt()) }
                 )
                 
-                Pair(content, metadata)
+                ParsedEmail(content, metadata)
             } catch (e: ParseException) {
                 // Rust parser returned a parse error - fall back to Kotlin parser
-                Pair(parseEmailBytesKotlin(bytes), extractMetadataFallback(bytes))
+                kotlinFallback(bytes)
             } catch (e: UnsatisfiedLinkError) {
                 // Native library not available - fall back to Kotlin parser
-                Pair(parseEmailBytesKotlin(bytes), extractMetadataFallback(bytes))
+                kotlinFallback(bytes)
             } catch (e: ExceptionInInitializerError) {
                 // Library initialization failed - fall back to Kotlin parser
-                Pair(parseEmailBytesKotlin(bytes), extractMetadataFallback(bytes))
+                kotlinFallback(bytes)
             }
         }
     }
+
+    /** Parse and index [bytes] with the pure-Kotlin parser. */
+    private fun kotlinFallback(bytes: ByteArray): ParsedEmail =
+        ParsedEmail(parseEmailBytesKotlin(bytes), extractMetadataFallback(bytes))
     
     /**
      * Extract metadata using fallback Kotlin parser.
