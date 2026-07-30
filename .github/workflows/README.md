@@ -73,6 +73,25 @@ This directory contains the CI/CD workflows for the Letterbox project. The workf
 - **build**: Compiles the release APK (overrides permission to `contents: read`)
 - **publish**: Uploads APK to the release (uses `contents: write`)
 
+### 6. `schema-export.yml` - Export Room Schemas
+**Trigger:** Push to `main` only (ignoring `app/schemas/**`, `docs/**` and Markdown), plus `workflow_dispatch`.
+
+**Permissions:** `contents: write` — the only workflow in this repository that can write to the default branch.
+
+**Purpose:** Runs Room's annotation processor and commits the generated schema JSON to `app/schemas/`.
+
+**Why this exists:** `MigrationTestHelper` creates a database at a starting version by executing the SQL from that version's exported JSON, so a migration from N to N+1 can only be tested if the JSON for **N** is already committed. Generating it requires Room's processor and therefore an Android SDK, so it cannot be produced by hand or in an SDK-less environment. See [`app/schemas/README.md`](../../app/schemas/README.md).
+
+**Loop prevention:** A workflow that pushes to the branch it watches is a self-triggering loop by default. Three independent guards:
+
+1. The push uses the automatic `GITHUB_TOKEN`. GitHub does not raise workflow events for that token, so the commit this job creates cannot start any run — including this one. This is the load-bearing guard.
+2. `paths-ignore` excludes `app/schemas/**`, so a schemas-only push would not re-enter even under a different token.
+3. The commit step is skipped when the generated output already matches what is committed, which is the steady state.
+
+**Concurrency:** Runs queue rather than cancel (`cancel-in-progress: false`). Cancelling could drop an export whose triggering commit has already passed, leaving no later run to regenerate it.
+
+**Cost:** No Rust build and no APK assembly — only `:app:kspProdDebugKotlin`. One variant suffices because the schema does not vary by build type or flavour.
+
 ## Workflow Dependencies
 
 ```
@@ -95,6 +114,19 @@ This directory contains the CI/CD workflows for the Letterbox project. The workf
 │   (UI tests)    │ │ (PRs only)    │ │ (main only)   │ │   consumers)    │
 │                 │ │ ci:test env   │ │ ci:release env│ │                 │
 └─────────────────┘ └───────────────┘ └───────────────┘ └─────────────────┘
+
+Independent of the chain above:
+
+┌─────────────────────────────────────────────────────────────┐
+│                      Push to main only                       │
+└─────────────────────────┬───────────────────────────────────┘
+                          ▼
+              ┌───────────────────────────┐
+              │    schema-export.yml      │
+              │  ksp -> app/schemas/*.json│
+              │  contents: write          │
+              │  commits back to main     │
+              └───────────────────────────┘
 ```
 
 ## Security Improvements
@@ -105,6 +137,7 @@ This directory contains the CI/CD workflows for the Letterbox project. The workf
 4. **Scoped Rust cache writes**: The Rust compiler cache (`Swatinem/rust-cache`) is only *written* on trusted refs (`push` to `main` or release tags). Pull requests and feature branches restore the cache read-only, so an untrusted/unauthorized PR cannot poison the shared cache.
 5. **Job-Level Permission Overrides**: Within workflows that need write permissions, individual jobs override to read-only where possible.
 6. **Clear Separation of Concerns**: Different workflows for different purposes makes it easier to audit and maintain security policies.
+7. **Write access to `main` is isolated to one workflow**: `schema-export.yml` is the only workflow with `contents: write` on the default branch, and it triggers **only** on `push` to `main` — never on `pull_request` and never on `workflow_run`. An untrusted pull request therefore cannot reach it, cannot run with its permissions, and cannot influence what it commits. A push to `main` is already a trusted event, since it requires push access. The job runs one Gradle task, commits only `app/schemas`, and pushes nothing else.
 
 ## Runners and native-library build constraint
 
