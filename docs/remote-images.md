@@ -182,3 +182,18 @@ Test coverage includes:
 - `RemoteImagePolicy`: the banner is offered exactly when a tap would unblock
   loading, checked over the whole input space rather than one path
 - Settings persistence across app restarts
+
+### Known coverage gap
+
+`RemoteImageWarpE2ETest` calls `ImageProxyService.fetchImage` directly, so it
+proves the tunnel and the proxy work but never crosses the WebView gate. The
+2026-07-30 failure lived exactly there — in the predicate deciding whether the
+WebView was allowed to ask — so that test passed throughout while no image in
+any email loaded.
+
+`RemoteImagePolicyTest` now covers the decision as an algebra, which is the part
+that was wrong. What remains untested end to end is the *wiring*: that
+`EmailDetailScreen` passes `policy.allowsNetworkLoads` into `EmailWebView`, and
+that `EmailWebView` turns it into `blockNetworkLoads = !allow`. An instrumented
+test that taps "Show images" and asserts `webView.settings.blockNetworkLoads`
+became `false` would close it, and is the test whose absence let this ship.
