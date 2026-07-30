@@ -16,12 +16,24 @@ name: Export Generated Sources
 #   with no compile-time warning and no obvious cause. Regenerating here means
 #   the bindings cannot drift from the Rust that produced them.
 #
-# Both are generated in one job and pushed as one commit, so the two artefacts
-# never race each other for the branch.
+# ## Why two jobs
 #
-# Isolated on purpose. This is the only workflow in the repository with
-# `contents: write`, so the ability to push to the default branch is scoped to
-# this file and this job rather than granted to the main build.
+# This is the only workflow in the repository that can write to the default
+# branch, so the token that can do it is the most valuable thing in CI. It is
+# therefore kept away from every line of code that is not ours to trust.
+#
+# Generating both artefacts means running Gradle and Cargo, which execute
+# arbitrary third-party code by design: Gradle plugins, KSP processors, Cargo
+# `build.rs` scripts and proc macros all run as part of an ordinary build. A
+# single job would have that code executing while a push-capable token sat in
+# `.git/config`, which is a supply-chain compromise away from a commit to
+# `main` that nobody wrote.
+#
+# So `generate` builds with `contents: read` and no persisted credentials, and
+# hands its output over as an artefact. `commit` holds the writable token and
+# runs no project code at all — it unpacks that artefact, diffs it, and pushes.
+# A compromised build dependency can therefore corrupt the *content* of a
+# generated file, which review catches, but cannot reach the token.
 #
 # ## Loop prevention
 #
@@ -55,32 +67,38 @@ concurrency:
   group: export-generated-sources
   cancel-in-progress: false
 
-permissions:
-  contents: write
+# Default deny. Each job below grants itself the minimum it needs, so a new job
+# added later starts with nothing rather than inheriting write access.
+permissions: {}
 
 env:
   # Where UniFFI writes; it appends the package path from each crate's
   # namespace, yielding `org/joefang/letterbox/ffi/...`.
   BINDINGS_OUT_DIR: app/src/main/java
   GENERATED_PATHS: app/schemas app/src/main/java/org/joefang/letterbox/ffi
+  # Handover between the two jobs. A tarball rather than a bare upload so the
+  # paths are reproduced exactly; `upload-artifact` would otherwise rebase them
+  # on the common ancestor of the two directories.
+  BUNDLE: generated-sources.tar.gz
 
 jobs:
-  export:
-    name: Generate and commit sources
+  generate:
+    name: Generate sources
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # Full history and tags: the Gradle build resolves its version from git
-          # during configuration, and the rebase below needs real history rather
-          # than a shallow clone.
+          # Full history and tags: the Gradle build resolves its version from
+          # git during configuration.
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
-          # A writable remote for the push below; the default checkout token is
-          # scoped to this repository only.
-          persist-credentials: true
+          # This job runs untrusted build code. Nothing here needs to talk to
+          # the remote, so the token is not left on disk for that code to find.
+          persist-credentials: false
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -135,6 +153,46 @@ jobs:
             generate --library target/debug/libletterbox_proxy.so \
             --language kotlin --no-format --out-dir "$BINDINGS_OUT_DIR"
 
+      - name: Package generated sources
+        run: tar -czf "$BUNDLE" -- $GENERATED_PATHS
+
+      - name: Upload generated sources
+        uses: actions/upload-artifact@v7
+        with:
+          name: generated-sources
+          path: ${{ env.BUNDLE }}
+          retention-days: 1
+          if-no-files-found: error
+
+  commit:
+    name: Commit generated sources
+    needs: generate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Real history for the rebase below.
+          fetch-depth: 0
+          # No submodules and no toolchains: this job runs nothing but git.
+          # The writable token is deliberately the only privileged thing here.
+          persist-credentials: true
+
+      - name: Download generated sources
+        uses: actions/download-artifact@v8
+        with:
+          name: generated-sources
+
+      - name: Unpack generated sources
+        run: |
+          set -euo pipefail
+          # Restrict extraction to the paths this workflow owns, so a tarball
+          # that somehow carried anything else cannot overwrite tracked source.
+          tar -xzf "$BUNDLE" -- $GENERATED_PATHS
+          rm -f "$BUNDLE"
+
       - name: Detect changes
         id: diff
         run: |
@@ -157,12 +215,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # Only ever the generated paths. `git add -A` here would let anything
+          # the extraction produced reach a commit.
           git add -- $GENERATED_PATHS
           git commit -m "chore(generated): Export generated sources for ${VERSION:0:8}" \
             -m "Generated by the Export Generated Sources workflow. Room schema JSON must be committed before the schema changes again, because MigrationTestHelper creates a database from the JSON of the version it starts at. UniFFI bindings must match the library they load, because their embedded checksums are asserted on the first FFI call." \
             --no-verify
 
-          # main may have advanced while the SDK was installing. Rebasing a
+          # main may have advanced while the build ran. Rebasing a
           # generated-only commit is safe: it touches no file another commit
           # can, since sources under these paths are never hand-edited.
           for attempt in 1 2 3; do

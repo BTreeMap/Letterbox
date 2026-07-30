@@ -130,13 +130,19 @@ Independent of the chain above:
 │                      Push to main only                       │
 └─────────────────────────┬───────────────────────────────────┘
                           ▼
-              ┌────────────────────────────────┐
-              │ export-generated-sources.yml   │
-              │  ksp      -> app/schemas/*.json│
-              │  bindgen  -> ffi/*.kt          │
-              │  contents: write               │
-              │  commits back to main          │
-              └────────────────────────────────┘
+        ┌──────────────────────────────────────────────┐
+        │ export-generated-sources.yml                 │
+        │                                              │
+        │  generate   contents: read                   │
+        │    ksp     -> app/schemas/*.json             │
+        │    bindgen -> ffi/*.kt                       │
+        │    persist-credentials: false                │
+        │            │ artifact                        │
+        │            ▼                                 │
+        │  commit     contents: write                  │
+        │    git only — runs no project build code     │
+        │    commits back to main                      │
+        └──────────────────────────────────────────────┘
 ```
 
 ## Security Improvements
@@ -147,7 +153,37 @@ Independent of the chain above:
 4. **Scoped Rust cache writes**: The Rust compiler cache (`Swatinem/rust-cache`) is only *written* on trusted refs (`push` to `main` or release tags). Pull requests and feature branches restore the cache read-only, so an untrusted/unauthorized PR cannot poison the shared cache.
 5. **Job-Level Permission Overrides**: Within workflows that need write permissions, individual jobs override to read-only where possible.
 6. **Clear Separation of Concerns**: Different workflows for different purposes makes it easier to audit and maintain security policies.
-7. **Write access to `main` is isolated to one workflow**: `export-generated-sources.yml` is the only workflow with `contents: write` on the default branch, and it triggers **only** on `push` to `main` — never on `pull_request` and never on `workflow_run`. An untrusted pull request therefore cannot reach it, cannot run with its permissions, and cannot influence what it commits. A push to `main` is already a trusted event, since it requires push access. The job commits only the generated paths listed above and pushes nothing else. Adding the UniFFI bindings extends *what* that job regenerates without widening *who* can write: a second privileged workflow would have been the costlier design.
+7. **Write access to `main` is isolated to one workflow**: `export-generated-sources.yml` is the only workflow with `contents: write` on the default branch, and it triggers **only** on `push` to `main` — never on `pull_request` and never on `workflow_run`. An untrusted pull request therefore cannot reach it, cannot run with its permissions, and cannot influence what it commits. A push to `main` is already a trusted event, since it requires push access. Adding the UniFFI bindings extends *what* that job regenerates without widening *who* can write: a second privileged workflow would have been the costlier design.
+8. **The push-capable token never coexists with project build code**: within that workflow, `generate` builds with `contents: read` and `persist-credentials: false`, and `commit` holds the writable token but runs nothing except `git`. Gradle plugins, KSP processors, Cargo `build.rs` scripts and proc macros are all third-party code executing by design during a build; keeping them out of the privileged job means a compromised build dependency can corrupt a generated file — which review catches — but cannot reach a token that writes to `main`. The `commit` job also restricts extraction and `git add` to the generated paths, so a tampered artefact cannot smuggle a change to tracked source.
+9. **Default deny**: every workflow declares `permissions: {}` at the top level and every job grants itself the minimum it needs. A job added later starts with no scopes rather than silently inheriting whatever the workflow happened to declare.
+10. **Credentials are not persisted into the work tree** for any job that runs project code. `actions/checkout` writes the token into `.git/config` by default and leaves it there for the rest of the job; only the `commit` job above, which runs no build, keeps it.
+
+### Known gap: actions are referenced by mutable tags
+
+Every `uses:` in this repository names a tag or branch rather than a commit SHA:
+
+| Reference | Mutability |
+| --- | --- |
+| `dtolnay/rust-toolchain@stable` | **branch** — moves on every upstream push |
+| `actions/checkout@v7`, `actions/setup-java@v5`, `actions/upload-artifact@v7`, `actions/download-artifact@v8` | major-version tag, repointed by the publisher |
+| `android-actions/setup-android@v4`, `Swatinem/rust-cache@v2`, `softprops/action-gh-release@v3` | major-version tag, third-party |
+| `gradle/actions/setup-gradle@v6.2.0` | patch tag, still re-pointable |
+
+A tag is a pointer the action's owner can move, so an upstream account compromise substitutes code into these jobs without any change here. That matters most for `pre-release.yml` and `release.yml`, which hold `contents: write` and repository secrets, and for `export-generated-sources.yml`, which can push to `main`.
+
+The fix is to pin each to a full commit SHA with the version in a trailing comment, so Dependabot can still offer upgrades:
+
+```yaml
+- uses: actions/checkout@<40-char-sha> # v7.0.0
+```
+
+Resolve the SHAs with:
+
+```sh
+gh api repos/actions/checkout/git/ref/tags/v7 --jq '.object.sha'
+```
+
+This is deliberately **not** done by guesswork — a wrong SHA breaks every workflow — and is left as a follow-up requiring network access to the GitHub API.
 
 ## Runners and native-library build constraint
 

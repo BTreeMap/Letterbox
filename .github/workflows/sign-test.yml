@@ -5,15 +5,20 @@ on:
     workflows: ["Build"]
     types: [completed]
 
-permissions:
-  contents: read
-  actions: read  # Required to download artifacts
+# Default deny at the workflow level; each job grants itself the minimum it
+# needs. A job added later then starts with no token scopes rather than
+# silently inheriting whatever the workflow happened to declare.
+permissions: {}
 
 jobs:
   sign-test:
     name: Sign Test APK
     runs-on: ubuntu-24.04
     environment: ci:test
+    permissions:
+      contents: read
+      # Download artifacts from the triggering workflow run.
+      actions: read
     # Only run if build succeeded and is from a pull request
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' }}
     steps:

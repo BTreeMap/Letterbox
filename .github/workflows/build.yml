@@ -24,8 +24,10 @@ on:
         description: "Name of the shared Android native-libraries artifact"
         value: ${{ jobs.build.outputs.jnilibs-artifact-name }}
 
-permissions:
-  contents: read
+# Default deny at the workflow level; each job grants itself the minimum it
+# needs. A job added later then starts with no token scopes rather than
+# silently inheriting whatever the workflow happened to declare.
+permissions: {}
 
 # Restrict Rust compiler-cache *writes* to trusted refs (main + release tags).
 # Pull requests and feature branches still restore the cache read-only, so an
@@ -37,6 +39,8 @@ jobs:
   lint-and-test:
     name: Lint and Test
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -44,6 +48,10 @@ jobs:
           fetch-depth: 0  # Full git history for version calculation
           fetch-tags: true
           submodules: recursive
+          # No step here talks to the remote, and every job runs project
+          # build code. The token is not left in `.git/config` for that
+          # code to find.
+          persist-credentials: false
 
       - name: Determine Build Type
         id: build-type
@@ -139,6 +147,8 @@ jobs:
   warp-smoke-test:
     name: Real MASQUE smoke test
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     # The full privacy path (provision a real WARP device -> MASQUE CONNECT-IP
     # -> DoH -> TLS -> HTTP image fetch -> delete device) is exercised against
     # live Cloudflare here. It is inherently flaky (network, rate limits, anycast
@@ -149,6 +159,10 @@ jobs:
         uses: actions/checkout@v7
         with:
           submodules: recursive
+          # No step here talks to the remote, and every job runs project
+          # build code. The token is not left in `.git/config` for that
+          # code to find.
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -190,6 +204,8 @@ jobs:
       test-artifact-name: ${{ steps.artifact-names.outputs.test }}
       prod-release-artifact-name: ${{ steps.artifact-names.outputs.prod-release }}
       jnilibs-artifact-name: ${{ steps.artifact-names.outputs.jnilibs }}
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -197,6 +213,10 @@ jobs:
           fetch-depth: 0  # Full git history for version calculation
           fetch-tags: true
           submodules: recursive
+          # No step here talks to the remote, and every job runs project
+          # build code. The token is not left in `.git/config` for that
+          # code to find.
+          persist-credentials: false
 
       - name: Determine Build Type
         id: build-type

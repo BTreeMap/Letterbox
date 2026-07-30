@@ -6,14 +6,19 @@ on:
     types: [completed]
     branches: ["main", "copilot/**"]
 
-permissions:
-  contents: read
-  actions: read  # Required to download artifacts from triggering workflow
+# Default deny at the workflow level; each job grants itself the minimum it
+# needs. A job added later then starts with no token scopes rather than
+# silently inheriting whatever the workflow happened to declare.
+permissions: {}
 
 jobs:
   ui-tests:
     name: Instrumented UI Tests
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # Download artifacts from the triggering workflow run.
+      actions: read
     timeout-minutes: 60
     # Only run if the build workflow succeeded
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
@@ -26,6 +31,10 @@ jobs:
           fetch-depth: 0  # Full git history for version calculation
           fetch-tags: true
           submodules: recursive
+          # No step here talks to the remote, and every job runs project
+          # build code. The token is not left in `.git/config` for that
+          # code to find.
+          persist-credentials: false
 
       - name: Enable KVM group perms
         run: |

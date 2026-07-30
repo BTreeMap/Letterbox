@@ -6,15 +6,21 @@ on:
     types: [completed]
     branches: ["main"]
 
-permissions:
-  contents: write  # Required for creating releases
-  actions: read    # Required to download artifacts
+# Default deny at the workflow level; each job grants itself the minimum it
+# needs. A job added later then starts with no token scopes rather than
+# silently inheriting whatever the workflow happened to declare.
+permissions: {}
 
 jobs:
   pre-release:
     name: Create Pre-release
     runs-on: ubuntu-24.04
     environment: ci:release
+    permissions:
+      # Create the pre-release and upload its assets.
+      contents: write
+      # Download artifacts from the triggering workflow run.
+      actions: read
     # Only run if build succeeded and on main branch
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     steps:
@@ -25,6 +31,10 @@ jobs:
           fetch-depth: 0  # Full git history for version calculation
           fetch-tags: true
           submodules: recursive
+          # No step here talks to the remote, and every job runs project
+          # build code. The token is not left in `.git/config` for that
+          # code to find.
+          persist-credentials: false
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
