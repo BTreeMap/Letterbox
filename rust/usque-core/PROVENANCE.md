@@ -100,12 +100,6 @@ bookkeeping against a diff.
    with it. On Android that is an ANR. `TunnelConfig::new` rejects an idle
    timeout that does not exceed the keepalive period, which would otherwise
    disconnect a healthy tunnel between its own keepalives.
-7. **A failed UDP send ends the session** instead of being retried on the next
-   iteration of the forwarding loop. Retrying read as the forgiving option but
-   left the tunnel reporting itself connected while nothing flowed, for as long
-   as the idle timeout allowed. Failing surfaces the fault at once and lets the
-   manager rebuild — the same reasoning as the finite idle timeout above.
-
 The protocol itself is unchanged: the QUIC handshake, endpoint pinning,
 extended-CONNECT exchange, datagram framing (`parse_datagram`) and PMTU
 handling all behave as upstream does.
@@ -132,7 +126,10 @@ comparing against upstream will notice.
   anything a test catches.
 - **`src/tunnel.rs`** is split into named phases (`complete_handshake`,
   `open_connect_ip_flow`, `forward_packets`) with one `flush_egress` where
-  there were five copies of the same drain loop. `ip_version` returns
+  there were five copies of the same drain loop. Those copies were not quite
+  identical: a refused UDP datagram is fatal while connecting and survivable
+  once established, and that difference is preserved as a `Flushed` value each
+  phase eliminates for itself. `ip_version` returns
   `Option<IpVersion>` rather than indexing byte 0 of a possibly-empty buffer,
   and the `pending_pkt` in/out parameter is gone: it existed for
   `maintain_tunnel`'s reconnect path and has been dead since that was removed.

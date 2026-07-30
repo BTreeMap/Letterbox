@@ -9,7 +9,10 @@
 //!
 //! Phases 1, 3 and 4 all have to push whatever QUIC has queued onto the socket
 //! after every event; that is [`flush_egress`], and it is the same operation in
-//! each, not three similar ones.
+//! each, not three similar ones. What differs is only how they answer a socket
+//! that refuses the datagram — fatal while connecting, survivable once
+//! established — so that answer is a [`Flushed`] value each phase eliminates,
+//! not a policy the shared code picks for them.
 
 use anyhow::{bail, Context, Result};
 use portable_atomic::{AtomicBool, AtomicU64, Ordering};
@@ -216,27 +219,49 @@ struct Session<'a> {
     stats: &'a Stats,
 }
 
+/// How a flush ended.
+///
+/// A refused datagram is not a failed session, and it is not the caller's
+/// business to guess which: the two phases answer it differently, so the
+/// outcome is a value they each eliminate rather than a policy baked in here.
+#[must_use]
+enum Flushed {
+    /// quiche has nothing further to send.
+    Drained,
+    /// The socket would not take a datagram.
+    SocketRefused(std::io::Error),
+}
+
 /// Push every QUIC packet quiche has ready onto the socket.
 ///
 /// `Error::Done` terminates the drain and is not a failure — it is quiche
-/// saying there is nothing further to send right now.
-///
-/// A socket that refuses the datagram ends the session rather than being
-/// retried on the next iteration. Retrying looked more forgiving but left the
-/// tunnel reporting itself connected while nothing flowed, for as long as the
-/// idle timeout allowed; failing here surfaces the fault immediately and lets
-/// the manager rebuild.
-async fn flush_egress(conn: &mut quiche::Connection, io: &mut Io<'_>, phase: &str) -> Result<()> {
+/// saying there is nothing further to send right now. A quiche error *is* a
+/// failure and propagates; a socket error is reported as [`Flushed`].
+async fn flush_egress(
+    conn: &mut quiche::Connection,
+    io: &mut Io<'_>,
+    phase: &str,
+) -> Result<Flushed> {
     loop {
         let (len, info) = match conn.send(io.out) {
             Ok(sent) => sent,
-            Err(quiche::Error::Done) => return Ok(()),
+            Err(quiche::Error::Done) => return Ok(Flushed::Drained),
             Err(e) => bail!("send during {phase}: {e}"),
         };
-        io.socket
-            .send_to(&io.out[..len], info.to)
-            .await
-            .with_context(|| format!("UDP send during {phase}"))?;
+        if let Err(e) = io.socket.send_to(&io.out[..len], info.to).await {
+            return Ok(Flushed::SocketRefused(e));
+        }
+    }
+}
+
+/// Flush during connection setup, where a refused datagram is fatal.
+///
+/// Nothing is established yet, so there is no loss recovery to absorb the
+/// packet and no session worth keeping if the socket will not carry it.
+async fn flush_or_fail(conn: &mut quiche::Connection, io: &mut Io<'_>, phase: &str) -> Result<()> {
+    match flush_egress(conn, io, phase).await? {
+        Flushed::Drained => Ok(()),
+        Flushed::SocketRefused(e) => Err(e).with_context(|| format!("UDP send during {phase}")),
     }
 }
 
@@ -283,11 +308,11 @@ fn drain_socket(conn: &mut quiche::Connection, io: &mut Io<'_>) {
 
 /// Drive QUIC until the connection is established.
 async fn complete_handshake(conn: &mut quiche::Connection, io: &mut Io<'_>) -> Result<()> {
-    flush_egress(conn, io, "handshake").await?;
+    flush_or_fail(conn, io, "handshake").await?;
 
     loop {
         service_once(conn, io, IDLE_POLL_INTERVAL, Duration::MAX).await?;
-        flush_egress(conn, io, "handshake").await?;
+        flush_or_fail(conn, io, "handshake").await?;
 
         if conn.is_established() {
             return Ok(());
@@ -336,13 +361,13 @@ async fn open_connect_ip_flow(
     let flow_id = stream_id / 4;
     log::debug!("CONNECT request sent on stream {stream_id}, flow_id={flow_id}");
 
-    flush_egress(conn, io, "CONNECT").await?;
+    flush_or_fail(conn, io, "CONNECT").await?;
 
     for _ in 0..CONNECT_RESPONSE_ATTEMPTS {
         service_once(conn, io, IDLE_POLL_INTERVAL, Duration::MAX).await?;
 
         let accepted = poll_connect_response(conn, h3_conn, stream_id)?;
-        flush_egress(conn, io, "CONNECT").await?;
+        flush_or_fail(conn, io, "CONNECT").await?;
 
         if accepted {
             return Ok(Flow {
@@ -480,7 +505,19 @@ where
         }
 
         deliver_inbound(conn, tun_writer, flow.id, stats).await;
-        flush_egress(conn, io, "session").await?;
+
+        // A refused datagram does not end an established session. quiche has
+        // already accounted for that packet as sent and will retransmit it
+        // under loss recovery, so this is a lost packet — which QUIC is built
+        // to absorb — not a lost tunnel. `ENOBUFS` under load and
+        // `ENETUNREACH` across a WiFi/cellular handoff are both routine and
+        // both transient; tearing the session down would force a full
+        // handshake and CONNECT rebuild for a condition that clears itself. A
+        // fault that does *not* clear stops the keepalives, and the finite
+        // idle timeout closes the connection within `idle_timeout`.
+        if let Flushed::SocketRefused(e) = flush_egress(conn, io, "session").await? {
+            log::warn!("UDP send error: {e}");
+        }
 
         let quic = conn.stats();
         stats.quic_lost.store(quic.lost as u64, Ordering::Relaxed);
