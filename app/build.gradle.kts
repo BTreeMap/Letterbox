@@ -96,11 +96,29 @@ object Versioning {
             else -> BuildType.LOCAL
         }
         
-        // Get the latest version tag matching v*.*.*
-        val describeOutput = exec("git", "describe", "--tags", "--match", "v[0-9]*.[0-9]*.[0-9]*", "--abbrev=0")
-        
-        // Parse the version tag (format: vMAJOR.MINOR.PATCH)
+        // A stable release tag, and the *only* notion of one.
+        //
+        // Selection and parsing were two different predicates: `git describe`
+        // selected with the glob `v[0-9]*.[0-9]*.[0-9]*`, and this regex parsed
+        // the result. A glob's `*` swallows any suffix, so the loose form
+        // admits everything the strict form rejects. That cost nothing while
+        // pre-release tags were named `pre-release-<sha>` and matched neither.
+        // The moment they became version-shaped, `describe` started returning
+        // one, `matchEntire` rejected it, and the version silently fell back to
+        // 0.0.0 — versionCode 66063 -> 516, which Android refuses to install as
+        // an update, and which the next build would then compound by describing
+        // against its own bad tag.
+        //
+        // One predicate now decides both. `--sort=-v:refname` also makes this
+        // the *highest* reachable release rather than the nearest, which is the
+        // one whose successor's versionCode is guaranteed to be larger.
         val versionRegex = Regex("""^v(\d+)\.(\d+)\.(\d+)$""")
+        val describeOutput = exec("git", "tag", "--merged", "HEAD", "--sort=-v:refname")
+            .lineSequence()
+            .map(String::trim)
+            .firstOrNull(versionRegex::matches)
+            ?: ""
+
         val match = versionRegex.matchEntire(describeOutput)
         
         val (major, minor, patch) = if (match != null) {
