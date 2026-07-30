@@ -288,6 +288,7 @@ mod tests {
             warp_enabled: true,
             account_type: "test".to_string(),
             last_updated: 0,
+            masque: None,
         }
     }
 

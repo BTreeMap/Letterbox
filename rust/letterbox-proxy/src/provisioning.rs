@@ -11,7 +11,9 @@
 //! The WARP client API is accessed at `api.cloudflareclient.com`.
 //! This is the same API used by the official WARP client and wgcf.
 
-use crate::config::{WarpAccountData, WarpConfig, WarpInterfaceConfig, WarpPeerConfig};
+use crate::config::{
+    MasqueCredentials, WarpAccountData, WarpConfig, WarpInterfaceConfig, WarpPeerConfig,
+};
 use crate::error::ProxyError;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::Utc;
@@ -368,6 +370,123 @@ impl WarpProvisioner {
             warp_enabled: config_response.warp_enabled,
             account_type,
             last_updated: Utc::now().timestamp(),
+            // Enrolled separately by `enroll_masque_key`: fetching a config is a
+            // read, and minting a key is not.
+            masque: None,
+        })
+    }
+
+    /// Generate a P-256 keypair for MASQUE.
+    ///
+    /// Returns `(pkcs8_der, spki_der)` — the private key in PKCS#8 and the
+    /// public key in `SubjectPublicKeyInfo`. Both are DER but they are not
+    /// interchangeable, which is why [`MasqueCredentials`] keeps them in
+    /// separately named fields rather than a pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProxyError::CryptoError`] if encoding fails.
+    pub fn generate_masque_keypair() -> Result<(Vec<u8>, Vec<u8>), ProxyError> {
+        use p256::ecdsa::SigningKey;
+        use p256::pkcs8::{EncodePrivateKey, EncodePublicKey};
+
+        let signing_key = SigningKey::random(&mut rand_core::OsRng);
+
+        let private_der = signing_key
+            .to_pkcs8_der()
+            .map_err(|e| ProxyError::CryptoError {
+                details: format!("Failed to encode MASQUE private key: {e}"),
+            })?
+            .as_bytes()
+            .to_vec();
+
+        let public_der = signing_key
+            .verifying_key()
+            .to_public_key_der()
+            .map_err(|e| ProxyError::CryptoError {
+                details: format!("Failed to encode MASQUE public key: {e}"),
+            })?
+            .as_bytes()
+            .to_vec();
+
+        Ok((private_der, public_der))
+    }
+
+    /// Enrol a MASQUE key on an existing device.
+    ///
+    /// Registration mints a throwaway X25519 key purely to obtain a device
+    /// identity; this PATCH replaces it with the P-256 key the MASQUE session
+    /// authenticates with, and asks the account to be switched to the `masque`
+    /// tunnel type.
+    ///
+    /// The returned credentials pair the new private key with the endpoint's
+    /// public key taken from the PATCH response, so the two always come from the
+    /// same enrolment and cannot drift apart.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProxyError::ProvisioningFailed`] if the API rejects the request
+    /// or returns no usable peer key.
+    pub async fn enroll_masque_key(
+        &self,
+        account: &WarpAccountData,
+    ) -> Result<MasqueCredentials, ProxyError> {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+
+        let (private_der, public_der) = Self::generate_masque_keypair()?;
+
+        #[derive(Serialize)]
+        struct MasqueEnrollment {
+            key: String,
+            key_type: String,
+            tunnel_type: String,
+        }
+
+        let url = format!("{}/{}/reg/{}", API_BASE, API_VERSION, account.account_id);
+        let response = self
+            .client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", account.access_token))
+            .json(&MasqueEnrollment {
+                key: BASE64.encode(&public_der),
+                key_type: "secp256r1".to_string(),
+                tunnel_type: "masque".to_string(),
+            })
+            .send()
+            .await
+            .map_err(|e| ProxyError::ProvisioningFailed {
+                details: format!("MASQUE enrolment failed: {e}"),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(ProxyError::ProvisioningFailed {
+                details: format!("MASQUE enrolment failed with status {status}: {body}"),
+            });
+        }
+
+        let enrolled: ConfigResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| ProxyError::ProvisioningFailed {
+                    details: format!("Failed to parse MASQUE enrolment response: {e}"),
+                })?;
+
+        let peer_key = enrolled
+            .config
+            .peers
+            .into_iter()
+            .next()
+            .map(|peer| peer.public_key)
+            .ok_or_else(|| ProxyError::ProvisioningFailed {
+                details: "MASQUE enrolment returned no peer key".to_string(),
+            })?;
+
+        Ok(MasqueCredentials {
+            ec_private_key_der: BASE64.encode(&private_der),
+            endpoint_pub_key_spki: BASE64.encode(decode_peer_key(&peer_key)?),
         })
     }
 
@@ -455,8 +574,43 @@ impl WarpProvisioner {
             config.warp_enabled = true;
         }
 
+        // Step 5: Enrol a MASQUE key.
+        //
+        // Best-effort by design. A device that cannot enrol still has a working
+        // WireGuard configuration, and refusing to provision at all would turn a
+        // transport preference into a hard failure of the whole proxy.
+        match self.enroll_masque_key(&account).await {
+            Ok(credentials) => config.masque = Some(credentials),
+            Err(e) => log::warn!("MASQUE enrolment failed, continuing on WireGuard: {e}"),
+        }
+
         Ok(config)
     }
+}
+
+/// Decode the endpoint public key Cloudflare returns into SPKI DER.
+///
+/// The API is inconsistent about framing: a MASQUE peer key comes back as PEM,
+/// while the WireGuard field is bare base64. Accepting both here keeps the
+/// caller from having to guess, and normalises to the one representation
+/// [`usque_core::TunnelIdentity`] accepts.
+fn decode_peer_key(encoded: &str) -> Result<Vec<u8>, ProxyError> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+
+    let body: String = if encoded.contains("BEGIN") {
+        encoded
+            .lines()
+            .filter(|line| !line.starts_with("-----"))
+            .collect()
+    } else {
+        encoded.to_string()
+    };
+
+    BASE64
+        .decode(body.trim())
+        .map_err(|e| ProxyError::CryptoError {
+            details: format!("Invalid endpoint public key: {e}"),
+        })
 }
 
 impl Default for WarpProvisioner {

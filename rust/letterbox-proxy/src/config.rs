@@ -42,6 +42,50 @@ pub struct WarpInterfaceConfig {
     pub address_ipv4: String,
 }
 
+/// Key material for a MASQUE tunnel.
+///
+/// Separate from [`WarpAccountData`] because it is a different key for a
+/// different protocol: registration mints a throwaway X25519 key to obtain a
+/// device identity, then enrolment PATCHes a P-256 key which is what the MASQUE
+/// session actually authenticates with. Storing both under one `private_key`
+/// invites using the wrong one, and the resulting failure appears deep inside
+/// the TLS handshake rather than at the boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MasqueCredentials {
+    /// This device's enrolled P-256 private key: base64 of PKCS#8 DER.
+    pub ec_private_key_der: String,
+    /// The endpoint's public key: base64 of `SubjectPublicKeyInfo` DER.
+    pub endpoint_pub_key_spki: String,
+}
+
+impl MasqueCredentials {
+    /// Decode the device private key to DER.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProxyError::CryptoError`] if the stored value is not base64.
+    pub fn decode_private_key(&self) -> Result<Vec<u8>, ProxyError> {
+        decode_der("MASQUE private key", &self.ec_private_key_der)
+    }
+
+    /// Decode the endpoint public key to SPKI DER.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProxyError::CryptoError`] if the stored value is not base64.
+    pub fn decode_endpoint_key(&self) -> Result<Vec<u8>, ProxyError> {
+        decode_der("MASQUE endpoint key", &self.endpoint_pub_key_spki)
+    }
+}
+
+/// Decode one base64 field, naming it in any error.
+fn decode_der(label: &str, encoded: &str) -> Result<Vec<u8>, ProxyError> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+    BASE64.decode(encoded).map_err(|e| ProxyError::CryptoError {
+        details: format!("Invalid {label}: {e}"),
+    })
+}
+
 /// Complete WARP configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WarpConfig {
@@ -57,6 +101,14 @@ pub struct WarpConfig {
     pub account_type: String,
     /// Timestamp when this configuration was last updated
     pub last_updated: i64,
+    /// MASQUE key material, absent on accounts provisioned before MASQUE
+    /// support existed.
+    ///
+    /// `#[serde(default)]` makes reading an older config file total rather than
+    /// an error: those accounts keep working over WireGuard and are upgraded by
+    /// enrolling a key, not by being discarded.
+    #[serde(default)]
+    pub masque: Option<MasqueCredentials>,
 }
 
 /// Proxy configuration including WARP settings and cache options.
@@ -261,6 +313,7 @@ mod tests {
             warp_enabled: true,
             account_type: "free".to_string(),
             last_updated: 1704326400,
+            masque: None,
         };
 
         config.update_warp_config(warp_config).await.unwrap();
@@ -323,6 +376,7 @@ mod tests {
             warp_enabled: true,
             account_type: "free".to_string(),
             last_updated: 1234567890,
+            masque: None,
         };
 
         let json = serde_json::to_string(&config).unwrap();

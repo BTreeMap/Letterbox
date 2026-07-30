@@ -13,8 +13,11 @@
 
 pub mod device;
 pub mod dns;
+pub mod duplex;
 pub mod http1;
+pub mod link;
 pub mod manager;
+pub mod masque;
 pub mod stack;
 pub mod tls;
 pub mod transport;

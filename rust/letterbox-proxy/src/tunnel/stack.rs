@@ -13,7 +13,8 @@
 use crate::config::WarpConfig;
 use crate::error::ProxyError;
 use crate::tunnel::device::VirtualDevice;
-use crate::tunnel::transport::{TunnelStats, WireGuardTransport};
+use crate::tunnel::link::Link;
+use crate::tunnel::transport::TunnelStats;
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer, State as TcpState};
 use smoltcp::time::Instant as SmoltcpInstant;
@@ -51,7 +52,7 @@ fn parse_ipv4_octets(addr: &str) -> Result<[u8; 4], ProxyError> {
 
 /// A WireGuard-backed userspace TCP/IP stack to Cloudflare WARP.
 pub struct WarpTunnel {
-    transport: WireGuardTransport,
+    transport: Link,
     interface: Interface,
     sockets: SocketSet<'static>,
     device: VirtualDevice,
@@ -62,7 +63,7 @@ pub struct WarpTunnel {
 impl WarpTunnel {
     /// Build a tunnel from provisioned WARP configuration (no I/O yet).
     pub fn new(config: &WarpConfig) -> Result<Self, ProxyError> {
-        let transport = WireGuardTransport::new(config)?;
+        let transport = Link::for_config(config)?;
         let local_ipv4 = parse_ipv4_octets(&config.interface.address_ipv4)?;
 
         let mut device = VirtualDevice::new();
@@ -341,6 +342,7 @@ mod tests {
             warp_enabled: true,
             account_type: "test".to_string(),
             last_updated: 0,
+            masque: None,
         }
     }
 
