@@ -168,6 +168,16 @@ jobs:
         working-directory: rust/letterbox-proxy
         run: cargo test --test warp_real -- --ignored --nocapture
 
+      # The MASQUE path has one dependency nothing local can check: that
+      # Cloudflare keeps accepting `api.cloudflare.com` as the tunnel SNI. That
+      # is a server-side policy we do not control and could lose without notice,
+      # so it is worth a standing check here rather than a user-reported outage.
+      - name: Run real Cloudflare MASQUE end-to-end test
+        id: masque
+        continue-on-error: true
+        working-directory: rust/letterbox-proxy
+        run: cargo test --test masque_real -- --ignored --nocapture --test-threads=1
+
       - name: Report WARP test outcome
         if: always()
         run: |
@@ -175,6 +185,15 @@ jobs:
             echo "Real Cloudflare WARP end-to-end test passed."
           else
             echo "::warning title=Real WARP test failed::The live Cloudflare WARP end-to-end test did not pass (outcome: ${{ steps.warp.outcome }}). This is non-blocking and is most often transient network/anycast/rate-limit flakiness, but should be investigated if it persists."
+          fi
+
+      - name: Report MASQUE test outcome
+        if: always()
+        run: |
+          if [[ "${{ steps.masque.outcome }}" == "success" ]]; then
+            echo "Real Cloudflare MASQUE end-to-end test passed (SNI api.cloudflare.com accepted)."
+          else
+            echo "::warning title=Real MASQUE test failed::The live Cloudflare MASQUE end-to-end test did not pass (outcome: ${{ steps.masque.outcome }}). Non-blocking. If it fails repeatedly while the WARP test passes, suspect the substituted SNI (tunnel::masque::MASQUE_SNI) being rejected rather than a broken tunnel."
           fi
 
   build:
