@@ -86,8 +86,12 @@ env:
   # image has": if the image moves, this fetches r27.3 and the build stays
   # reproducible, only slower for that one run.
   NDK_VERSION: "27.3.13750724"
-  ANDROID_BUILD_TOOLS: "36.0.0"
-  ANDROID_PLATFORM: "android-36"
+  ANDROID_BUILD_TOOLS: "37.0.0"
+  # API 37 ships only as minor releases: Google's index has no plain
+  # `platforms;android-37`, only `37.0` and `37.1`, which is why AGP's own
+  # error text suggests "37.1". Both are installed so the resolution of
+  # `compileSdk = 37` cannot depend on which one AGP happens to pick.
+  ANDROID_PLATFORMS: "platforms;android-37.0 platforms;android-37.1"
 
   JNILIBS_ARTIFACT: letterbox-jnilibs
   STAGING_DEBUG_ARTIFACT: letterbox-staging-apk
@@ -271,7 +275,9 @@ jobs:
       - name: Install Android components
         run: |
           set -euo pipefail
-          sdkmanager "platform-tools" "platforms;${ANDROID_PLATFORM}" "build-tools;${ANDROID_BUILD_TOOLS}"
+          # Unquoted on purpose: ANDROID_PLATFORMS is a list of packages.
+          # shellcheck disable=SC2086
+          sdkmanager "platform-tools" $ANDROID_PLATFORMS "build-tools;${ANDROID_BUILD_TOOLS}"
           # Bounded input rather than `yes |`. sdkmanager stops reading once
           # every licence is accepted, and the SIGPIPE that then kills `yes`
           # is a pipeline failure under `pipefail`. 200 bytes fits the pipe
@@ -367,7 +373,9 @@ jobs:
       - name: Install Android components
         run: |
           set -euo pipefail
-          sdkmanager "platform-tools" "platforms;${ANDROID_PLATFORM}" "build-tools;${ANDROID_BUILD_TOOLS}"
+          # Unquoted on purpose: ANDROID_PLATFORMS is a list of packages.
+          # shellcheck disable=SC2086
+          sdkmanager "platform-tools" $ANDROID_PLATFORMS "build-tools;${ANDROID_BUILD_TOOLS}"
           # Bounded input rather than `yes |`. sdkmanager stops reading once
           # every licence is accepted, and the SIGPIPE that then kills `yes`
           # is a pipeline failure under `pipefail`. 200 bytes fits the pipe

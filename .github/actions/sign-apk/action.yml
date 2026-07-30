@@ -49,7 +49,7 @@ inputs:
   build-tools-version:
     description: Android build-tools version providing apksigner and aapt2.
     required: false
-    default: "36.0.0"
+    default: "37.0.0"
   output-name:
     description: >-
       Filename to publish the signed APK under. Deliberately a constant rather

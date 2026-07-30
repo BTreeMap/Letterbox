@@ -109,7 +109,7 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Install Android components
-        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platform-tools" "platforms;android-37.0" "platforms;android-37.1" "build-tools;37.0.0"
 
       # Bounded input rather than `yes |`, which dies of SIGPIPE once sdkmanager
       # stops reading and would fail this step the moment anyone adds

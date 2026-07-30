@@ -210,12 +210,12 @@ logger.lifecycle("Version Info: name=${versionInfo.versionName}, code=${versionI
 
 android {
     namespace = "org.joefang.letterbox"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "org.joefang.letterbox"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = versionInfo.versionCode
         versionName = versionInfo.versionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
