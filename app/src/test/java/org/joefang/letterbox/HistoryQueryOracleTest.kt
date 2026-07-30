@@ -191,10 +191,10 @@ class HistoryQueryOracleTest {
         }
 
         assertEquals(
-            "interpreters disagreed on ${disagreements.size} of ${allQueries.size} queries:\n" +
-                disagreements.joinToString("\n"),
-            0,
-            disagreements.size
+            expected = 0,
+            actual = disagreements.size,
+            message = "interpreters disagreed on ${disagreements.size} of " +
+                "${allQueries.size} queries:\n" + disagreements.joinToString("\n")
         )
     }
 
@@ -206,7 +206,7 @@ class HistoryQueryOracleTest {
             .associateWith { specIds(HistoryQuery(text = it)) }
 
         matching.forEach { (needle, ids) ->
-            assertTrue("\"$needle\" matched nothing", ids.isNotEmpty())
+            assertTrue(ids.isNotEmpty(), "\"$needle\" matched nothing")
         }
         assertTrue(specIds(HistoryQuery(text = "zzzz")).isEmpty())
         assertEquals(fixtures.size, specIds(HistoryQuery()).size)
@@ -234,7 +234,11 @@ class HistoryQueryOracleTest {
         for (field in SortField.entries) {
             for (direction in SortDirection.entries) {
                 val query = HistoryQuery(sortField = field, sortDirection = direction)
-                assertEquals("$field $direction", specIds(query), sqlIds(query))
+                assertEquals(
+                    expected = specIds(query),
+                    actual = sqlIds(query),
+                    message = "$field $direction"
+                )
             }
         }
     }
