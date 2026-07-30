@@ -152,23 +152,21 @@ class UserPreferencesRepositoryTest {
     }
 
     @Test
-    fun `onboardingCompleted defaults to false`() = runBlocking {
+    fun `completeOnboarding records only that the intro was seen`() = runBlocking {
         val repository = UserPreferencesRepository(context)
 
-        assertFalse(repository.onboardingCompleted.first())
-    }
-
-    @Test
-    fun `completeOnboarding persists and leaves image settings untouched`() = runBlocking {
-        val repository = UserPreferencesRepository(context)
+        // The DataStore is a process-wide singleton and survives tearDown, so
+        // this compares against whatever is actually stored rather than against
+        // the documented defaults. The invariant under test is that onboarding
+        // *changes nothing except its own flag* — it is disclosure, not a grant.
+        val imagesBefore = repository.alwaysLoadRemoteImages.first()
+        val proxyBefore = repository.enablePrivacyProxy.first()
 
         repository.completeOnboarding()
 
         assertTrue(repository.onboardingCompleted.first())
-        // Onboarding grants nothing. Remote images stay off until asked for, and
-        // the proxy keeps its default — the screen is disclosure, not a switch.
-        assertFalse(repository.alwaysLoadRemoteImages.first())
-        assertTrue(repository.enablePrivacyProxy.first())
+        assertEquals(imagesBefore, repository.alwaysLoadRemoteImages.first())
+        assertEquals(proxyBefore, repository.enablePrivacyProxy.first())
     }
 
     @Test

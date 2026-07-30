@@ -35,14 +35,22 @@ Access Settings from the main screen menu:
 
 ### Cloudflare WARP Terms of Service
 
-When you first enable the privacy proxy, you will be asked to accept Cloudflare's Terms of Service. This is required because images are fetched through Cloudflare's WARP infrastructure. 
+Settings carries a standing disclosure beside the privacy-proxy switch: loading
+a remote image sends the request through the Cloudflare WARP tunnel, subject to
+Cloudflare's Terms of Service, with a link to read them.
 
-The Terms of Service dialog:
-- Explains that images are fetched through Cloudflare WARP
-- Provides a link to view Cloudflare's Terms of Service
-- Requires explicit acceptance before the proxy is enabled
+There is no separate acceptance step. Loading an image is itself the opt-in —
+remote images are blocked by default and require either a per-message "Show
+images" tap or an explicit setting — so a second confirmation adds a condition
+without adding a choice.
 
-Once you accept the terms, the proxy can be enabled or disabled without showing the dialog again.
+It also caused a total failure. A `cloudflareTermsAccepted` flag was AND-ed into
+the WebView's network gate, while the "Show images" banner that sets the other
+half tested only itself. Tapping the banner retired it and left the gate shut,
+so every image failed with no surface anywhere explaining why, and anyone who
+had onboarded before the flag existed had it false permanently. The gate is now
+a single value, `RemoteImagePolicy`, that both the banner and the WebView read —
+an offer the app will not honour is unrepresentable.
 
 ## Technical Details
 
@@ -171,5 +179,6 @@ Test coverage includes:
 - Cache behavior
 - Error handling scenarios
 - Remote image banner display and interaction
-- Cloudflare ToS consent flow
+- `RemoteImagePolicy`: the banner is offered exactly when a tap would unblock
+  loading, checked over the whole input space rather than one path
 - Settings persistence across app restarts

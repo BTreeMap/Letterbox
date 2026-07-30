@@ -16,9 +16,49 @@ Traditional image proxy approaches have several issues:
 
 We implement a fully in-app image proxy using:
 1. **Cloudflare WARP** for network anonymization
-2. **WireGuard** for encrypted tunnel transport
+2. **MASQUE** or **WireGuard** for encrypted tunnel transport (see below)
 3. **smoltcp** for userspace TCP/IP networking
 4. **rustls** for TLS/HTTPS connections
+
+### Two transports, one interface
+
+Both transports do the same job — take an IP packet, get it to Cloudflare, bring
+replies back — and differ only in how they wrap it. `tunnel::link::Link` is a
+closed enum over the two, so everything above it (`stack`, `tls`, `http1`,
+`dns`) is written once and is unaware of which is carrying it.
+
+| | WireGuard | MASQUE |
+|---|---|---|
+| Wire format | WireGuard over UDP | CONNECT-IP in QUIC datagrams, HTTP/3 |
+| Port | UDP 500 | UDP 443 |
+| Looks like | WireGuard | ordinary HTTP/3 |
+| Credential | X25519, from registration | P-256, enrolled by PATCH |
+| Implementation | boringtun | `usque-core` (derived from usque-rs) |
+
+MASQUE is preferred wherever the account has enrolled credentials. WireGuard is
+the fallback for accounts provisioned before MASQUE support existed and for
+enrolments that fail — a blocked-but-configured tunnel beats no tunnel, and the
+alternative is a proxy that refuses to start.
+
+The reason for the migration is firewall compatibility: WireGuard's handshake is
+trivially fingerprinted and widely blocked, while MASQUE traffic is
+indistinguishable from any other QUIC flow on 443.
+
+#### The SNI is deliberately not Cloudflare's
+
+The tunnel sends **`api.cloudflare.com`** in its TLS ClientHello, not the
+`consumer-masque.cloudflareclient.com` that reference implementations use.
+
+The SNI is the only name a passive observer can read: the `:authority` on the
+CONNECT request travels inside the encrypted HTTP/3 stream. Any
+`*.cloudflareclient.com` name would label the connection as WARP to anything
+watching, which defeats the point of tunnelling.
+
+Substituting a name is safe because peer identity does not depend on it. The
+session runs with `verify_peer(false)` and pins the endpoint by its
+`SubjectPublicKeyInfo`, so the certificate's name is never consulted. Whether
+the endpoint *serves* an unexpected SNI is a server-side policy question, and is
+verified empirically rather than assumed.
 
 ### Architecture Diagram
 
@@ -120,7 +160,35 @@ struct WarpAccountData {
 }
 ```
 
-### 2. WireGuard Transport (`transport.rs`)
+### 2a. MASQUE Transport (`tunnel/masque.rs`)
+
+CONNECT-IP over HTTP/3, using the vendored `usque-core` crate. The session loop
+is `usque_core::run_tunnel_session`, unchanged from usque-rs apart from the
+edits listed in `rust/usque-core/PROVENANCE.md`.
+
+That loop is async and owns its socket; the rest of the tunnel is a blocking
+poll loop on one worker thread. Rather than convert either side, the session
+runs on its own thread with a current-thread runtime, bridged by
+`tunnel::duplex::PacketDuplex`.
+
+#### Packet framing is the load-bearing detail
+
+`run_tunnel_session` was written against a TUN device, where one `read` returns
+exactly one IP packet. `AsyncRead` makes no such promise — a byte stream may
+split or coalesce — but the loop hands whatever one read produced straight to
+`dgram_send_vec` as a single datagram.
+
+`PacketDuplex` restores that guarantee. A packet too large for the caller's
+buffer is **dropped, not truncated**: a partial packet is not a smaller packet
+but a malformed one, and forwarding it would put corrupt bytes on the wire under
+a valid-looking length.
+
+Both queues are bounded and drop on overflow rather than blocking. IP is lossy
+by contract and TCP above retransmits, whereas blocking would stall the loop
+that also drives QUIC timers — losing a packet costs a retransmit, stalling the
+loop costs the connection.
+
+### 2b. WireGuard Transport (`transport.rs`)
 
 Implements userspace WireGuard using boringtun (Mullvad's fork of Cloudflare's BoringTun).
 
