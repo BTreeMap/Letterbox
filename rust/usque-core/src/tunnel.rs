@@ -441,7 +441,7 @@ fn send_ip_datagram(
     datagram.extend_from_slice(prefix);
     datagram.extend_from_slice(ip_packet);
 
-    conn.dgram_send_vec(datagram)?;
+    conn.dgram_send(&datagram)?;
     stats.record_tx(ip_packet.len() as u64);
     Ok(())
 }
@@ -462,6 +462,11 @@ where
     let Session { flow, cfg, stats } = session;
     let keepalive = cfg.keepalive_period;
     let mut tun_buf = vec![0u8; cfg.mtu as usize + 128];
+    // Inbound CONNECT-IP datagrams land here. Sized to the largest datagram
+    // QUIC can deliver rather than to the tunnel MTU, because `dgram_recv`
+    // reports `BufferTooShort` instead of truncating, and silently dropping
+    // an oversized datagram would be a stall with no symptom.
+    let mut dgram_buf = vec![0u8; RECV_BUFFER_SIZE];
 
     loop {
         let (socket, path) = (io.socket, io.path);
@@ -504,7 +509,7 @@ where
             }
         }
 
-        deliver_inbound(conn, tun_writer, flow.id, stats).await;
+        deliver_inbound(conn, tun_writer, flow.id, stats, &mut dgram_buf).await;
 
         // A refused datagram does not end an established session. quiche has
         // already accounted for that packet as sent and will retransmit it
@@ -574,27 +579,35 @@ async fn forward_outbound<W>(
 }
 
 /// Deliver every queued inbound datagram to the stack.
+///
+/// `scratch` is the caller's, and must be at least [`RECV_BUFFER_SIZE`]: quiche
+/// 0.29 replaced the allocating `dgram_recv_vec` with a fill-my-buffer
+/// `dgram_recv`, which answers `BufferTooShort` rather than truncating. Owning
+/// the buffer one level up keeps that to one allocation per session instead of
+/// one per datagram, which is what the old signature cost.
 async fn deliver_inbound<W>(
     conn: &mut quiche::Connection,
     tun_writer: &mut W,
     flow_id: u64,
     stats: &Stats,
+    scratch: &mut [u8],
 ) where
     W: tokio::io::AsyncWrite + Unpin,
 {
     loop {
-        let datagram = match conn.dgram_recv_vec() {
-            Ok(datagram) => datagram,
+        let len = match conn.dgram_recv(scratch) {
+            Ok(len) => len,
             Err(quiche::Error::Done) => return,
             Err(e) => {
                 log::debug!("dgram recv error: {e}");
                 return;
             }
         };
+        let datagram = &scratch[..len];
 
         // A datagram for another flow, or one that is not a valid IP packet, is
         // discarded: this is untrusted input from the network.
-        let Some(ip_payload) = parse_datagram(&datagram, flow_id) else {
+        let Some(ip_payload) = parse_datagram(datagram, flow_id) else {
             continue;
         };
         if packet::validate_incoming(ip_payload).is_err() {

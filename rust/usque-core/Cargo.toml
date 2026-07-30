@@ -8,25 +8,29 @@ license = "MIT"
 [dependencies]
 # QUIC + HTTP/3. Sans-IO: the caller drives it with byte buffers, which is why it
 # fits Letterbox's blocking worker thread where an async-only stack would not.
-quiche = { version = "0.22.0", features = ["boringssl-vendored"] }
-octets = "0.3.0"
+# Floor is deliberate, not incidental: the use-after-free in the connection-ID
+# iterator (GHSA-mh64-ph39-mrc9) is fixed in 0.29.2, so a resolve that landed
+# below it would be a silent regression. The caret still admits every 0.29.x
+# above it.
+quiche = "0.29.3"
+octets = "0.3"
 
 # The session loop is async internally (tokio::select! over socket and packet
 # source), even though the crate exposes no runtime of its own.
-tokio = { version = "1.49.0", features = ["net", "time", "io-util", "macros"] }
+tokio = { version = "1", features = ["net", "time", "io-util", "macros"] }
 
 # Client certificate generation and endpoint pinning.
-rcgen = "0.13.2"
-p256 = { version = "0.13.2", features = ["ecdsa", "pkcs8", "pem"] }
-x509-parser = "0.16.0"
-tempfile = "3.24.0"
-time = "0.3.44"
+rcgen = "0.14"
+p256 = { version = "0.14", features = ["ecdsa", "pkcs8", "pem"] }
+x509-parser = "0.18"
+tempfile = "3"
+time = "0.3"
 
-ring = "0.17.14"
-anyhow = "1.0.101"
-thiserror = "2.0.18"
-log = "0.4.29"
+ring = "0.17"
+anyhow = "1.0"
+thiserror = "2.0"
+log = "0.4"
 
 # Software fallback for 64-bit atomics on targets lacking them natively; kept
 # from upstream because armeabi-v7a is a shipped Android ABI.
-portable-atomic = { version = "1.11.4", features = ["fallback"] }
+portable-atomic = { version = "1", features = ["fallback"] }

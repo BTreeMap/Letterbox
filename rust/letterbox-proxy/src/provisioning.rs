@@ -398,9 +398,17 @@ impl WarpProvisioner {
     /// Returns [`ProxyError::CryptoError`] if encoding fails.
     pub fn generate_masque_keypair() -> Result<(Vec<u8>, Vec<u8>), ProxyError> {
         use p256::ecdsa::SigningKey;
+        use p256::elliptic_curve::Generate;
         use p256::pkcs8::{EncodePrivateKey, EncodePublicKey};
 
-        let signing_key = SigningKey::random(&mut rand_core::OsRng);
+        // `try_generate` rather than `generate`: drawing from the system RNG can
+        // fail, and this function already returns a `Result`, so the failure has
+        // somewhere to go without a panic. p256 0.13 made the caller thread an
+        // RNG in; 0.14 asks the system itself, so there is no longer a
+        // randomness source to pass around or to get wrong.
+        let signing_key = SigningKey::try_generate().map_err(|e| ProxyError::CryptoError {
+            details: format!("System RNG unavailable for MASQUE key generation: {e}"),
+        })?;
 
         let private_der = signing_key
             .to_pkcs8_der()

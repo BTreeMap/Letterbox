@@ -99,6 +99,43 @@ internal open class ForeignBytes : Structure() {
 
     class ByValue : ForeignBytes(), Structure.ByValue
 }
+
+// Converter for `&[u8]` / `[ByRef] bytes` arguments.
+//
+// Only `lower` is valid — zero-copy byte buffers only flow foreign -> Rust,
+// and only in argument position. `lift`, `read`, `write`, and
+// `allocationSize` have no sound implementation here and all panic at
+// runtime. The `FfiConverter` interface is implemented so that the
+// compiler enforces the full method set (rather than relying on eyeball).
+//
+// The provided `ByteBuffer` MUST be direct — only direct buffers have a
+// stable native address that JNA can expose via `getDirectBufferPointer`.
+// The returned `ForeignBytes.ByValue` is only valid for the duration of
+// the FFI call; the Rust side treats it as a borrow.
+internal object FfiConverterByRefBytes : FfiConverter<java.nio.ByteBuffer, ForeignBytes.ByValue> {
+    override fun lower(value: java.nio.ByteBuffer): ForeignBytes.ByValue {
+        require(value.isDirect) { "UniFFI zero-copy &[u8] requires a direct ByteBuffer. Use ByteBuffer.allocateDirect()." }
+        val remaining = value.remaining()
+        val fb = ForeignBytes.ByValue()
+        fb.len = remaining
+        // Zero-length direct buffers: skip getDirectBufferPointer (platform-variable behavior)
+        // and pass null. The Rust side treats (null, 0) as &[].
+        fb.data = if (remaining == 0) null else com.sun.jna.Native.getDirectBufferPointer(value)
+        return fb
+    }
+
+    override fun lift(value: ForeignBytes.ByValue): java.nio.ByteBuffer =
+        error("ByRef bytes cannot be lifted: zero-copy &[u8] only flows foreign->Rust")
+
+    override fun read(buf: java.nio.ByteBuffer): java.nio.ByteBuffer =
+        error("ByRef bytes cannot be read from a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+
+    override fun write(value: java.nio.ByteBuffer, buf: java.nio.ByteBuffer): Unit =
+        error("ByRef bytes cannot be written to a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+
+    override fun allocationSize(value: java.nio.ByteBuffer): ULong =
+        error("ByRef bytes have no RustBuffer allocation size: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+}
 /**
  * The FfiConverter interface handles converter types to and from the FFI
  *
@@ -877,79 +914,79 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_letterbox_core_checksum_func_extract_remote_images() != 27542) {
+    if (lib.uniffi_letterbox_core_checksum_func_extract_remote_images() != 15611) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_func_parse_eml() != 48112) {
+    if (lib.uniffi_letterbox_core_checksum_func_parse_eml() != 43620) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_func_parse_eml_from_path() != 36307) {
+    if (lib.uniffi_letterbox_core_checksum_func_parse_eml_from_path() != 25040) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_attachment_count() != 2946) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_attachment_count() != 20778) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_html() != 37584) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_html() != 24655) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_preview() != 56708) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_preview() != 16072) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_text() != 49627) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_body_text() != 4730) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_cc() != 21092) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_cc() != 34239) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_date() != 5435) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_date() != 47373) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_date_timestamp() != 22451) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_date_timestamp() != 50754) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_from() != 17732) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_from() != 10229) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_attachment_content() != 16894) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_attachment_content() != 52852) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_attachments() != 4360) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_attachments() != 2194) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource() != 30043) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource() != 17823) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_content_type() != 29102) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_content_type() != 36587) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_ids() != 36234) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_ids() != 61366) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_metadata() != 14885) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_get_resource_metadata() != 22791) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_message_id() != 52741) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_message_id() != 24269) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_recipient_info() != 35618) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_recipient_info() != 61368) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_reply_to() != 59962) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_reply_to() != 7943) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_sender_info() != 20160) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_sender_info() != 8284) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_subject() != 19561) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_subject() != 45073) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_to() != 837) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_to() != 35367) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_attachment_to_path() != 37276) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_attachment_to_path() != 51315) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_resource_to_path() != 7585) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_resource_to_path() != 21765) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1563,6 +1600,11 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     private val wasDestroyed = AtomicBoolean(false)
     private val callCounter = AtomicLong(1)
 
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
     override fun destroy() {
         // Only allow a single call to this method.
         // TODO: maybe we should log a warning if called more than once?
@@ -1769,6 +1811,7 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_get_attachment_content(
         it,
+        
         FfiConverterUInt.lower(`index`),_status)
 }
     }
@@ -1802,6 +1845,7 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_get_resource(
         it,
+        
         FfiConverterString.lower(`cid`),_status)
 }
     }
@@ -1819,6 +1863,7 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_get_resource_content_type(
         it,
+        
         FfiConverterString.lower(`cid`),_status)
 }
     }
@@ -1976,7 +2021,9 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     uniffiRustCallWithError(ParseException) { _status ->
     UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_write_attachment_to_path(
         it,
-        FfiConverterUInt.lower(`index`),FfiConverterString.lower(`path`),_status)
+        
+        FfiConverterUInt.lower(`index`),
+        FfiConverterString.lower(`path`),_status)
 }
     }
     )
@@ -2001,7 +2048,9 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     uniffiRustCallWithError(ParseException) { _status ->
     UniffiLib.uniffi_letterbox_core_fn_method_emailhandle_write_resource_to_path(
         it,
-        FfiConverterString.lower(`cid`),FfiConverterString.lower(`path`),_status)
+        
+        FfiConverterString.lower(`cid`),
+        FfiConverterString.lower(`path`),_status)
 }
     }
     )
@@ -2577,6 +2626,7 @@ public object FfiConverterSequenceTypeResourceMeta: FfiConverterRustBuffer<List<
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_letterbox_core_fn_func_extract_remote_images(
     
+        
         FfiConverterString.lower(`html`),_status)
 }
     )
@@ -2592,6 +2642,7 @@ public object FfiConverterSequenceTypeResourceMeta: FfiConverterRustBuffer<List<
     uniffiRustCallWithError(ParseException) { _status ->
     UniffiLib.uniffi_letterbox_core_fn_func_parse_eml(
     
+        
         FfiConverterByteArray.lower(`data`),_status)
 }
     )
@@ -2614,6 +2665,7 @@ public object FfiConverterSequenceTypeResourceMeta: FfiConverterRustBuffer<List<
     uniffiRustCallWithError(ParseException) { _status ->
     UniffiLib.uniffi_letterbox_core_fn_func_parse_eml_from_path(
     
+        
         FfiConverterString.lower(`path`),_status)
 }
     )

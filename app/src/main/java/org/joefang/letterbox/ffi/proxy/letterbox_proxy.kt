@@ -98,6 +98,43 @@ internal open class ForeignBytes : Structure() {
 
     class ByValue : ForeignBytes(), Structure.ByValue
 }
+
+// Converter for `&[u8]` / `[ByRef] bytes` arguments.
+//
+// Only `lower` is valid — zero-copy byte buffers only flow foreign -> Rust,
+// and only in argument position. `lift`, `read`, `write`, and
+// `allocationSize` have no sound implementation here and all panic at
+// runtime. The `FfiConverter` interface is implemented so that the
+// compiler enforces the full method set (rather than relying on eyeball).
+//
+// The provided `ByteBuffer` MUST be direct — only direct buffers have a
+// stable native address that JNA can expose via `getDirectBufferPointer`.
+// The returned `ForeignBytes.ByValue` is only valid for the duration of
+// the FFI call; the Rust side treats it as a borrow.
+internal object FfiConverterByRefBytes : FfiConverter<java.nio.ByteBuffer, ForeignBytes.ByValue> {
+    override fun lower(value: java.nio.ByteBuffer): ForeignBytes.ByValue {
+        require(value.isDirect) { "UniFFI zero-copy &[u8] requires a direct ByteBuffer. Use ByteBuffer.allocateDirect()." }
+        val remaining = value.remaining()
+        val fb = ForeignBytes.ByValue()
+        fb.len = remaining
+        // Zero-length direct buffers: skip getDirectBufferPointer (platform-variable behavior)
+        // and pass null. The Rust side treats (null, 0) as &[].
+        fb.data = if (remaining == 0) null else com.sun.jna.Native.getDirectBufferPointer(value)
+        return fb
+    }
+
+    override fun lift(value: ForeignBytes.ByValue): java.nio.ByteBuffer =
+        error("ByRef bytes cannot be lifted: zero-copy &[u8] only flows foreign->Rust")
+
+    override fun read(buf: java.nio.ByteBuffer): java.nio.ByteBuffer =
+        error("ByRef bytes cannot be read from a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+
+    override fun write(value: java.nio.ByteBuffer, buf: java.nio.ByteBuffer): Unit =
+        error("ByRef bytes cannot be written to a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+
+    override fun allocationSize(value: java.nio.ByteBuffer): ULong =
+        error("ByRef bytes have no RustBuffer allocation size: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+}
 /**
  * The FfiConverter interface handles converter types to and from the FFI
  *
@@ -819,43 +856,43 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_check_for_update() != 8783) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_check_for_update() != 62323) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_clear_cache() != 62065) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_clear_cache() != 42385) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_diagnostics() != 39962) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_diagnostics() != 42476) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 63800) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 23362) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 3727) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 23587) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_url() != 15037) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_url() != 47834) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_init() != 38752) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_init() != 58641) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_shutdown() != 19042) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_shutdown() != 21086) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 8452) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 14770) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_verify_tunnel() != 54509) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_verify_tunnel() != 50283) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_reset_identity() != 22232) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_reset_identity() != 16269) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_stored_config() != 59842) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_stored_config() != 60610) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_tls_self_test() != 20758) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_tls_self_test() != 58559) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -2394,7 +2431,7 @@ public object FfiConverterTypeTlsSelfTestOutcome : FfiConverterRustBuffer<TlsSel
         }
     }
 
-    override fun allocationSize(value: TlsSelfTestOutcome) = when(value) {
+    override fun allocationSize(value: TlsSelfTestOutcome): ULong = when(value) {
         is TlsSelfTestOutcome.Verified -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
@@ -2672,7 +2709,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     uniffiRustCallWithError(ProxyException) { _status ->
     UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_check_for_update(
     
-        FfiConverterString.lower(`currentVersion`),FfiConverterOptionalString.lower(`repo`),_status)
+        
+        FfiConverterString.lower(`currentVersion`),
+        FfiConverterOptionalString.lower(`repo`),_status)
 }
     )
     }
@@ -2713,7 +2752,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     uniffiRustCallWithError(ProxyException) { _status ->
     UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_fetch_image(
     
-        FfiConverterString.lower(`url`),FfiConverterOptionalMapStringString.lower(`headers`),_status)
+        
+        FfiConverterString.lower(`url`),
+        FfiConverterOptionalMapStringString.lower(`headers`),_status)
 }
     )
     }
@@ -2730,7 +2771,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     uniffiRustCallWithError(ProxyException) { _status ->
     UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_fetch_images_batch(
     
-        FfiConverterSequenceString.lower(`urls`),FfiConverterUInt.lower(`maxConcurrent`),_status)
+        
+        FfiConverterSequenceString.lower(`urls`),
+        FfiConverterUInt.lower(`maxConcurrent`),_status)
 }
     )
     }
@@ -2744,7 +2787,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     uniffiRustCallWithError(ProxyException) { _status ->
     UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_fetch_url(
     
-        FfiConverterString.lower(`url`),FfiConverterOptionalMapStringString.lower(`headers`),_status)
+        
+        FfiConverterString.lower(`url`),
+        FfiConverterOptionalMapStringString.lower(`headers`),_status)
 }
     )
     }
@@ -2762,7 +2807,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     uniffiRustCallWithError(ProxyException) { _status ->
     UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_init(
     
-        FfiConverterString.lower(`storagePath`),FfiConverterUInt.lower(`maxCacheSize`),_status)
+        
+        FfiConverterString.lower(`storagePath`),
+        FfiConverterUInt.lower(`maxCacheSize`),_status)
 }
     
     

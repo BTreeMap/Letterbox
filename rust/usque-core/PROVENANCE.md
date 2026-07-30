@@ -134,6 +134,27 @@ comparing against upstream will notice.
   and the `pending_pkt` in/out parameter is gone: it existed for
   `maintain_tunnel`'s reconnect path and has been dead since that was removed.
 
+## Dependency divergence: quiche 0.29
+
+Upstream pins quiche `0.22`. This fork tracks `0.29.3`, because 0.22 carries two
+advisories — an infinite loop on connection-ID retirement (GHSA-m3hh-f9gh-74c2,
+high, fixed in 0.24.5) and a use-after-free in the connection-ID iterator
+(GHSA-mh64-ph39-mrc9, fixed in 0.29.2). Both are in the QUIC layer this tunnel
+depends on, so staying on upstream's pin was not an option.
+
+Two API changes came with it, and both narrow rather than widen what we do:
+
+- The `boringssl-vendored` feature is gone; vendoring BoringSSL is what the
+  default build does now, so the feature list is empty.
+- `dgram_send_vec`/`dgram_recv_vec` are gone in favour of `dgram_send`/
+  `dgram_recv`, which take a caller's buffer instead of allocating one per
+  datagram. `deliver_inbound` therefore takes a `scratch: &mut [u8]` owned by
+  `forward_packets`, alongside the `tun_buf` already living there — one
+  allocation per session where the old signature cost one per datagram. It is
+  sized to `RECV_BUFFER_SIZE` rather than the tunnel MTU because `dgram_recv`
+  answers `BufferTooShort` rather than truncating, and a dropped oversized
+  datagram would be a stall with no symptom.
+
 ## Consulting upstream
 
 Upstream remains useful as a reference when reading the protocol code — it is
