@@ -143,11 +143,11 @@ data class HistoryItemEntity(
      * Case-folded concatenation of every searchable field, maintained at write
      * time by `searchTextOf`.
      *
-     * Exists because SQLite's `LIKE`, `lower()` and `NOCASE` collation fold ASCII
-     * only, and Android's SQLite ships without ICU. Folding both the stored text
-     * and the needle in Kotlin, where case mapping is Unicode-aware, lets SQL
-     * perform a plain substring match that is correct in every script — so
-     * "müller" finds "Müller".
+     * Exists because SQLite's `LIKE` and `NOCASE` collation fold ASCII only, and
+     * how far `lower()` folds depends on the platform's SQLite build. Folding both
+     * the stored text and the needle in Kotlin, where case mapping is
+     * Unicode-aware, lets SQL perform a plain substring match that is correct in
+     * every script and identical on every device — so "müller" finds "Müller".
      */
     @ColumnInfo(name = "search_text", defaultValue = "")
     val searchText: String = ""

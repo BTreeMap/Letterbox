@@ -1,6 +1,11 @@
 package org.joefang.letterbox
 
 import android.util.Log
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
+import androidx.paging.map
+import androidx.sqlite.db.SimpleSQLiteQuery
 import org.joefang.letterbox.data.BlobDao
 import org.joefang.letterbox.data.BlobEntity
 import org.joefang.letterbox.data.HistoryItemDao
@@ -14,9 +19,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -31,6 +39,14 @@ private const val TAG = "HistoryRepository"
  * a full export is not dominated by query round trips.
  */
 private const val EXPORT_PAGE_SIZE = 200
+
+/**
+ * Rows per page in the history list.
+ *
+ * Sized so a page comfortably exceeds a screenful, which keeps scrolling ahead of
+ * the loader without holding much: peak memory tracks the window, not the cache.
+ */
+private const val HISTORY_PAGE_SIZE = 40
 
 /**
  * This row with `search_text` derived from its own searchable fields.
@@ -75,8 +91,14 @@ class HistoryRepository(
     private val casDir: File = File(baseDir, "cas").also { it.mkdirs() }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val _items = MutableStateFlow<List<HistoryEntry>>(emptyList())
-    val items: StateFlow<List<HistoryEntry>> = _items.asStateFlow()
+    /**
+     * Entry count and total cached bytes, re-emitted on every change.
+     *
+     * A single-row aggregate query rather than something derived from the loaded
+     * list: the list is paged now, so it does not know the totals, and computing
+     * them must not walk the cache.
+     */
+    val cacheStats: Flow<CacheStats> = historyItemDao.cacheStats()
 
     /**
      * Serialises writing a blob file against registering its row, and both
@@ -88,19 +110,6 @@ class HistoryRepository(
     private val blobMutex = Mutex()
 
     init {
-        // Load initial items from database
-        scope.launch {
-            try {
-                historyItemDao.getAllOrderedByAccess().collect { entities ->
-                    _items.value = entities.map { it.toHistoryEntry() }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Error loading items", e)
-            }
-        }
-
         // Reconcile cas/ against the database once, off the UI path.
         scope.launch {
             try {
@@ -114,6 +123,43 @@ class HistoryRepository(
                 Log.w(TAG, "Orphan reclamation failed", e)
             }
         }
+    }
+
+    /**
+     * History matching [query], loaded a page at a time.
+     *
+     * The query is rendered to SQL so filtering and ordering happen in SQLite and
+     * only the visible window is materialised. `HistoryQuery.applyTo` remains the
+     * specification the rendered SQL is tested against; see `HistoryQueryOracleTest`.
+     */
+    fun pagedHistory(query: HistoryQuery): Flow<PagingData<HistoryEntry>> {
+        val select = query.toSqlSelect()
+        return Pager(
+            config = PagingConfig(
+                pageSize = HISTORY_PAGE_SIZE,
+                // No placeholders: the row count is unknown without a second
+                // COUNT query per keystroke, and a blank row is a worse answer
+                // than a slightly shorter list.
+                enablePlaceholders = false
+            ),
+            pagingSourceFactory = {
+                historyItemDao.pagingSource(
+                    SimpleSQLiteQuery(select.sql, select.args.toTypedArray())
+                )
+            }
+        ).flow.map { page -> page.map { it.toHistoryEntry() } }
+    }
+
+    /**
+     * Release the background scope.
+     *
+     * The repository owns a scope for the startup reclamation sweep, and a scope
+     * that is never cancelled outlives the object that created it — a new
+     * Activity with a fresh ViewModelStore builds a new repository, and the old
+     * one would keep running. Called from `EmailViewModel.onCleared`.
+     */
+    fun close() {
+        scope.cancel()
     }
 
     /**
@@ -251,34 +297,13 @@ class HistoryRepository(
     }
 
     /**
-     * Entry count and total cached bytes.
-     *
-     * Two aggregate queries returning one row each. This runs on every history
-     * change, so it must not scale with the cache: the previous implementation
-     * loaded every row and then called `File.length()` once per blob, which is
-     * one filesystem syscall per cached email.
-     *
-     * Sizes come from `blobs.size_bytes`, recorded from the content length at
-     * ingestion, rather than from the file system. The two agree because the
-     * file is written with exactly those bytes.
-     */
-    suspend fun getCacheStats(): CacheStats {
-        return withContext(Dispatchers.IO) {
-            CacheStats(
-                entryCount = historyItemDao.count(),
-                totalSizeBytes = blobDao.totalSizeBytes() ?: 0L
-            )
-        }
-    }
-
-    /**
      * Delete `cas/` files the database does not know about, returning the number
      * of bytes reclaimed.
      *
      * The database and the blob directory are two stores that can disagree.
      * `fallbackToDestructiveMigration()` drops both tables on a schema change but
      * cannot touch the file system, so every schema bump strands the entire
-     * previous cache on disk — invisible to [getCacheStats], unreachable from
+     * previous cache on disk — invisible to [cacheStats], unreachable from
      * "Clear cache", and never reclaimed. A crash between writing a blob and
      * inserting its row leaves the same kind of orphan.
      *

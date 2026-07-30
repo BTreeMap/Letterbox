@@ -16,10 +16,11 @@ data class SqlSelect(val sql: String, val args: List<Any?>)
  * Case-fold text for searching.
  *
  * The single folding rule, applied on both sides — to the stored haystack at
- * ingestion and to the needle at query time. It exists because **SQLite's `LIKE`,
- * `lower()` and `NOCASE` collation only fold ASCII**, and Android's SQLite ships
- * without ICU. Matching "müller" against "Müller" in SQL therefore requires that
- * neither side still carries case by the time SQL sees it.
+ * ingestion and to the needle at query time. It exists because **SQLite's `LIKE`
+ * and `NOCASE` collation fold ASCII only**, and how far `lower()` folds depends on
+ * how the platform built SQLite. Matching "müller" against "Müller" therefore
+ * requires that neither side still carries case by the time SQL sees it, rather
+ * than trusting the database to fold consistently across devices.
  *
  * Kotlin's [String.lowercase] is Unicode-aware and locale-independent, so folding
  * here and comparing raw text in SQL is both correct for all scripts and
@@ -57,13 +58,17 @@ internal const val SEARCH_FIELD_SEPARATOR = "\n"
 /**
  * Which history entries to show, and in what order.
  *
- * A query is a plain value: [applyTo] is a pure total function from
- * `(HistoryQuery, List<HistoryEntry>)` to `List<HistoryEntry>`, so the app's
- * search, filter and sort semantics are defined in exactly one place and can be
- * tested without Android, Room or coroutines. Previously the same semantics
- * existed in three implementations — an unused FTS4/SQL layer, an in-memory
- * copy in the view model, and a second in-memory copy in the test double — and
- * they disagreed about which fields were searchable.
+ * A query is a plain value with two interpreters. [toSqlSelect] renders it to
+ * SQL and is what the app runs: the list is paged, so filtering and ordering
+ * happen in SQLite and only the visible window is materialised. [applyTo] is the
+ * pure, in-memory **executable specification** — it needs no Android, Room or
+ * coroutines, and the SQL interpreter is asserted to agree with it on real rows
+ * rather than assumed to.
+ *
+ * That arrangement is deliberate. These semantics once existed in three
+ * implementations — an unused FTS4/SQL layer, an in-memory copy in the view
+ * model, and a second copy in the test double — which disagreed about which
+ * fields were searchable precisely because none of them was the reference.
  *
  * ## Search semantics
  *
@@ -90,6 +95,10 @@ data class HistoryQuery(
 
     /**
      * Entries this query admits, in this query's order.
+     *
+     * The specification [toSqlSelect] is tested against, and the reference for
+     * what the SQL must return. Not on the app's hot path since the list moved to
+     * paging, but it is the definition of correct.
      *
      * One `filter` (cardinality may shrink) followed by one `sortedWith`
      * (cardinality and every element preserved, order changed). Combining both

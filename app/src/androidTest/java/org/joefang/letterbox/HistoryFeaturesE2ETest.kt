@@ -39,6 +39,11 @@ class HistoryFeaturesE2ETest {
 
     // Test data.
     //
+    // `searchText` is set explicitly because search now matches that column in
+    // SQL. Production fills it at ingestion via `withSearchText`; a fixture that
+    // omits it is simply unsearchable, which would make the search assertions
+    // below fail for a reason unrelated to what they test.
+    //
     // `displayName` mirrors `subject` to match production ingestion, where
     // `EmailViewModel.ingestFromUri` stores the parsed subject as the display
     // name (falling back to the filename only when the subject is blank). The
@@ -55,7 +60,14 @@ class HistoryFeaturesE2ETest {
         senderName = "Amazon",
         emailDate = 1700000000000L, // 2023-11-14
         hasAttachments = true,
-        bodyPreview = "Your order has shipped"
+        bodyPreview = "Your order has shipped",
+        searchText = searchTextOf(
+            subject = "Invoice from Amazon",
+            senderName = "Amazon",
+            senderEmail = "amazon@example.com",
+            displayName = "Invoice from Amazon",
+            bodyPreview = "Your order has shipped"
+        )
     )
 
     private val email2 = HistoryItemEntity(
@@ -69,7 +81,14 @@ class HistoryFeaturesE2ETest {
         senderName = "The Boss",
         emailDate = 1701000000000L, // 2023-11-26
         hasAttachments = false,
-        bodyPreview = "Let's meet on Monday"
+        bodyPreview = "Let's meet on Monday",
+        searchText = searchTextOf(
+            subject = "Meeting with Team",
+            senderName = "The Boss",
+            senderEmail = "boss@example.com",
+            displayName = "Meeting with Team",
+            bodyPreview = "Let's meet on Monday"
+        )
     )
 
     private val email3 = HistoryItemEntity(
@@ -83,7 +102,14 @@ class HistoryFeaturesE2ETest {
         senderName = "Tech News",
         emailDate = 1699000000000L, // 2023-11-03
         hasAttachments = false,
-        bodyPreview = "Here are the top stories"
+        bodyPreview = "Here are the top stories",
+        searchText = searchTextOf(
+            subject = "Weekly Newsletter",
+            senderName = "Tech News",
+            senderEmail = "news@example.com",
+            displayName = "Weekly Newsletter",
+            bodyPreview = "Here are the top stories"
+        )
     )
 
     @Before

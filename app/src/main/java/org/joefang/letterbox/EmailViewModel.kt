@@ -3,6 +3,8 @@ package org.joefang.letterbox
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.paging.PagingData
+import androidx.paging.cachedIn
 import org.joefang.letterbox.ffi.EmailHandle
 import org.joefang.letterbox.ffi.ParseException
 import org.joefang.letterbox.ffi.parseEml
@@ -11,9 +13,14 @@ import org.joefang.letterbox.ffi.extractRemoteImages
 import org.joefang.letterbox.ui.AttachmentData
 import org.joefang.letterbox.ui.EmailContent
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -26,8 +33,6 @@ import org.joefang.letterbox.data.SortDirection
  * UI State for the main screen.
  */
 data class EmailUiState(
-    val history: List<HistoryEntry> = emptyList(),
-    val filteredHistory: List<HistoryEntry> = emptyList(),
     val currentEmail: EmailContent? = null,
     val currentEntryId: Long? = null,
     val currentEmailBytes: ByteArray? = null,
@@ -65,14 +70,18 @@ class EmailViewModel(
     val uiState: StateFlow<EmailUiState> = _uiState.asStateFlow()
 
     init {
-        // Observe history changes
         viewModelScope.launch {
-            repository.items.collect { items ->
-                _uiState.update { it.copy(history = items).refiltered() }
-                // Refresh cache stats whenever history changes
-                refreshCacheStats()
+            repository.cacheStats.collect { stats ->
+                _uiState.update { it.copy(cacheStats = stats) }
             }
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        // The repository owns a scope for its startup reclamation sweep; without
+        // this it would outlive the view model that created it.
+        repository.close()
     }
 
     /**
@@ -86,26 +95,21 @@ class EmailViewModel(
     )
 
     /**
-     * Re-derive [EmailUiState.filteredHistory] from this state's own inputs.
+     * The history list, paged from the database.
      *
-     * `filteredHistory` is a cached function of `(history, query)`, so exactly
-     * one place recomputes it and every mutator ends with a call here. The
-     * previous code instead built a throwaway `state.copy(...)` to hand to the
-     * filter and then built the real copy again, restating each field twice —
-     * five times over, once per mutator.
+     * `distinctUntilChanged` keeps a state change that does not affect the query —
+     * entering search mode, an error appearing — from restarting paging and
+     * scrolling the user back to the top. `flatMapLatest` abandons the previous
+     * query's pages as soon as the query changes, so a fast typist is never
+     * served results for an earlier prefix. `cachedIn` keeps loaded pages across
+     * configuration changes and lets several collectors share one stream.
      */
-    private fun EmailUiState.refiltered(): EmailUiState =
-        copy(filteredHistory = query().applyTo(history))
-    
-    /**
-     * Refresh cache statistics.
-     */
-    private fun refreshCacheStats() {
-        viewModelScope.launch {
-            val stats = repository.getCacheStats()
-            _uiState.update { it.copy(cacheStats = stats) }
-        }
-    }
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val history: Flow<PagingData<HistoryEntry>> = _uiState
+        .map { it.query() }
+        .distinctUntilChanged()
+        .flatMapLatest { repository.pagedHistory(it) }
+        .cachedIn(viewModelScope)
     
     // =========================================================================
     // Search, Filter, and Sort Methods
@@ -115,7 +119,7 @@ class EmailViewModel(
      * Update the search query and re-filter results.
      */
     fun setSearchQuery(query: String) {
-        _uiState.update { it.copy(searchQuery = query).refiltered() }
+        _uiState.update { it.copy(searchQuery = query) }
     }
 
     /**
@@ -126,7 +130,7 @@ class EmailViewModel(
             if (active) {
                 it.copy(isSearchActive = true)
             } else {
-                it.copy(isSearchActive = false, searchQuery = "").refiltered()
+                it.copy(isSearchActive = false, searchQuery = "")
             }
         }
     }
@@ -136,7 +140,7 @@ class EmailViewModel(
      */
     fun setSortOrder(field: SortField, direction: SortDirection) {
         _uiState.update {
-            it.copy(sortField = field, sortDirection = direction).refiltered()
+            it.copy(sortField = field, sortDirection = direction)
         }
     }
 
@@ -145,7 +149,7 @@ class EmailViewModel(
      */
     fun toggleAttachmentsFilter() {
         _uiState.update {
-            it.copy(filterHasAttachments = !it.filterHasAttachments).refiltered()
+            it.copy(filterHasAttachments = !it.filterHasAttachments)
         }
     }
 

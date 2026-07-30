@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Clear
@@ -79,6 +78,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.paging.LoadState
+import androidx.paging.PagingData
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.paging.compose.itemKey
 import org.joefang.letterbox.data.LetterboxDatabase
 import org.joefang.letterbox.data.SortDirection
 import org.joefang.letterbox.data.SortField
@@ -99,6 +103,7 @@ import org.joefang.letterbox.ui.sourceLabel
 import org.joefang.letterbox.ui.theme.LetterboxTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -243,6 +248,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun LetterboxApp() {
         val uiState by viewModel.uiState.collectAsState()
+        val history = viewModel.history.collectAsLazyPagingItems()
         val snackbarHostState = remember { SnackbarHostState() }
         val scope = rememberCoroutineScope()
 
@@ -361,7 +367,7 @@ class MainActivity : ComponentActivity() {
             )
 
             else -> LetterboxScaffold(
-                history = uiState.filteredHistory,
+                history = history,
                 cacheStats = uiState.cacheStats,
                 searchQuery = uiState.searchQuery,
                 onSearchQueryChange = { viewModel.setSearchQuery(it) },
@@ -610,7 +616,7 @@ private fun LoadingScreen() {
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 private fun LetterboxScaffold(
-    history: List<HistoryEntry>,
+    history: LazyPagingItems<HistoryEntry>,
     cacheStats: CacheStats,
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
@@ -759,7 +765,7 @@ private fun LetterboxScaffold(
             }
 
             // Sort and Filter controls
-            if (history.isNotEmpty() || isSearchActive || filterHasAttachments) {
+            if (history.itemCount > 0 || isSearchActive || filterHasAttachments) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1274,13 +1280,17 @@ private fun SettingsContent(
 
 @Composable
 private fun HistoryList(
-    entries: List<HistoryEntry>,
+    entries: LazyPagingItems<HistoryEntry>,
     onEntryClick: (HistoryEntry) -> Unit,
     onEntryDelete: (HistoryEntry) -> Unit,
     modifier: Modifier = Modifier,
     emptyMessage: String = "Open an .eml or .msg file to get started."
 ) {
-    if (entries.isEmpty()) {
+    // "No results" and "not loaded yet" are different states and must not look
+    // the same: an empty first frame is normal while the first page is in
+    // flight, so the message waits until loading has actually finished.
+    val settled = entries.loadState.refresh is LoadState.NotLoading
+    if (entries.itemCount == 0 && settled) {
         Column(
             modifier = modifier,
             verticalArrangement = Arrangement.Center,
@@ -1293,24 +1303,30 @@ private fun HistoryList(
             )
         }
     } else {
-        // One clock reading for the whole list, refreshed when the list changes.
-        // Rows then render against a single instant, so two of them can never
-        // straddle a minute boundary and disagree about "now", and scrolling
-        // does not re-read the clock per row.
-        val now = remember(entries) { System.currentTimeMillis() }
+        // One clock reading per refresh. Rows then render against a single
+        // instant, so two of them can never straddle a minute boundary and
+        // disagree about "now", and scrolling does not re-read the clock per row.
+        val now = remember(entries.loadState.refresh) { System.currentTimeMillis() }
 
         LazyColumn(
             modifier = modifier,
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
-            items(entries, key = { it.id }) { entry ->
-                HistoryRow(
-                    entry = entry,
-                    now = now,
-                    onClick = { onEntryClick(entry) },
-                    onDelete = { onEntryDelete(entry) }
-                )
-                HorizontalDivider()
+            items(
+                count = entries.itemCount,
+                key = entries.itemKey { it.id }
+            ) { index ->
+                // Null only if a page were dropped between count and read.
+                // Placeholders are disabled, so this is not the common path.
+                entries[index]?.let { entry ->
+                    HistoryRow(
+                        entry = entry,
+                        now = now,
+                        onClick = { onEntryClick(entry) },
+                        onDelete = { onEntryDelete(entry) }
+                    )
+                    HorizontalDivider()
+                }
             }
         }
     }
@@ -1414,17 +1430,20 @@ private fun HistoryRow(
 @Preview(showBackground = true)
 @Composable
 private fun PreviewHistoryList() {
+    val sample = PagingData.from(
+        listOf(
+            HistoryEntry(
+                id = 1,
+                blobHash = "abc",
+                displayName = "Sample Email",
+                originalUri = "content://email/1",
+                lastAccessed = System.currentTimeMillis()
+            )
+        )
+    )
     LetterboxTheme {
         HistoryList(
-            entries = listOf(
-                HistoryEntry(
-                    id = 1,
-                    blobHash = "abc",
-                    displayName = "Sample Email",
-                    originalUri = "content://email/1",
-                    lastAccessed = System.currentTimeMillis()
-                )
-            ),
+            entries = flowOf(sample).collectAsLazyPagingItems(),
             onEntryClick = {},
             onEntryDelete = {}
         )

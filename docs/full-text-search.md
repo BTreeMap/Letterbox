@@ -18,8 +18,8 @@ It has two interpreters, and both are pure:
 
 | Interpreter | Result | Role |
 |---|---|---|
-| `applyTo(entries)` | `List<HistoryEntry>` | The **executable specification**, and what the UI runs today |
-| `toSqlSelect()` | `SqlSelect` (SQL + bound args) | The paged path: filtering and ordering done by SQLite |
+| `toSqlSelect()` | `SqlSelect` (SQL + bound args) | **What the app runs**: filtering and ordering done by SQLite, a page at a time |
+| `applyTo(entries)` | `List<HistoryEntry>` | The **executable specification** the SQL is tested against |
 
 Keeping the specification executable is deliberate. These semantics previously
 existed in three implementations that disagreed about which fields were
@@ -96,14 +96,16 @@ enumerates all twelve and asserts none contains caller text.
 | `SUBJECT` | `subject`, case-insensitive |
 | `SENDER` | `senderName`, falling back to `senderEmail`, case-insensitive |
 
-`DESCENDING` reverses the *comparator*, not the sorted list. Both agree on
-distinct keys; among ties, reversing the comparator preserves incoming order where
-reversing the result flipped it, and it avoids a full list copy.
+`DESCENDING` reverses the *comparator*, not the sorted list, which avoids a full
+list copy.
 
-Every SQL ordering appends `id`. Under paging a total order is not cosmetic: with
-ties, rows have no stable sequence between separately loaded pages, so an entry
-could appear twice or not at all while scrolling. `id` is unique, which makes the
-order total.
+Both interpreters append `id` as the final tie-breaker, making the order **total**.
+Under paging that is not cosmetic: with ties, rows have no stable sequence between
+separately loaded pages, so an entry could appear twice or not at all while
+scrolling. It also has to match, or the two interpreters disagree on every tie —
+which is exactly what the oracle test caught before this shipped. Reversing a
+comparator that already includes `id` reverses the tie-break too, mirroring
+`ORDER BY key DESC, id DESC`.
 
 ## Why not SQLite FTS4
 
@@ -151,12 +153,12 @@ find out, which keeps it trivially correct. Any partly folded row repairs itself
 `HistoryRepository.ingest` re-folds `search_text` whenever an email is opened
 again, and writes nothing when the value already agrees.
 
-## Why the query is moving into SQL
+## Why the query lives in SQL
 
-Search was never the constraint; the eager full-history load is.
-`HistoryRepository` collects every row into memory because the list UI renders
-from it, at roughly 1–1.5 KB per entry dominated by `bodyPreview`, held twice as
-`history` and `filteredHistory`:
+Search was never the constraint; the eager full-history load was.
+`HistoryRepository` used to collect every row into memory because the list UI
+rendered from it, at roughly 1–1.5 KB per entry dominated by `bodyPreview`, held
+twice as `history` and `filteredHistory`:
 
 | Entries | In-memory match per keystroke | Heap held by the list |
 |---------|-------------------------------|-----------------------|
@@ -165,26 +167,31 @@ from it, at roughly 1–1.5 KB per entry dominated by `bodyPreview`, held twice 
 | 10⁴ | ~5–15 ms, borderline at 60 fps | tens of MB |
 | 10⁵ | ~100 ms, janky | 100–200 MB — likely OOM first |
 
-The cache never evicts, so entry count only grows. An index would speed the row
-scan, but the memory ceiling arrives first — at 10⁵ the app dies of the full-list
-load regardless. Bounding it means *not* holding everything: a `PagingSource`, a
-windowed list, and both filtering and ordering pushed into SQL. `toSqlSelect()` is
-that path.
+The cache never evicts, so entry count only grows. An index would have sped the row
+scan, but the memory ceiling arrived first — at 10⁵ the app would die of the
+full-list load regardless. Bounding it meant *not* holding everything, which is
+what the list does now: a `PagingSource` over `toSqlSelect()`, a windowed list, and
+both filtering and ordering pushed into SQLite. Peak memory tracks the visible
+window rather than the size of the cache.
 
 ## Data flow
-
-Today, in memory:
 
 ```
 user types
     ↓  EmailViewModel.setSearchQuery(text)
-state.copy(searchQuery = text).refiltered()
-    ↓  HistoryQuery(...).applyTo(state.history)
-EmailUiState.filteredHistory  →  UI recomposes
+EmailUiState.searchQuery
+    ↓  map { it.query() }.distinctUntilChanged()
+HistoryQuery
+    ↓  flatMapLatest { repository.pagedHistory(it) }
+Pager(RawQuery from toSqlSelect) → Flow<PagingData<HistoryEntry>>
+    ↓  cachedIn(viewModelScope) → collectAsLazyPagingItems()
+LazyColumn renders the loaded window
 ```
 
-`filteredHistory` is a cached function of `(history, query)`, and exactly one place
-recomputes it — `refiltered()` — so the derived value cannot drift from its inputs.
+`distinctUntilChanged` keeps a state change that does not affect the query — entering
+search mode, an error appearing — from restarting paging and scrolling the user back
+to the top. `flatMapLatest` abandons the previous query's pages the moment the query
+changes, so a fast typist is never served results for an earlier prefix.
 
 ## Testing
 

@@ -51,7 +51,7 @@ assertEquals(first.id, second.id)
 assertEquals(first.blobHash, second.blobHash)
 
 // Only one entry in history
-assertEquals(1, repository.items.value.size)
+assertEquals(1, repository.items.value.size)   // InMemoryHistoryRepository
 ```
 
 ## Database Schema
@@ -78,7 +78,7 @@ files without rows:
 - **Schema changes.** The database is built with `fallbackToDestructiveMigration()`.
   A schema bump drops `blobs` and `history_items` but cannot touch the file
   system, so the entire previous cache is stranded on disk: not counted by
-  `getCacheStats`, not reachable from "Clear cache", never reclaimed.
+  `cacheStats`, not reachable from "Clear cache", never reclaimed.
 - **Interrupted ingestion.** A crash between writing a blob file and inserting
   its row leaves the same kind of orphan.
 
@@ -110,10 +110,11 @@ migration.
 - SHA-256 computation is fast for typical email sizes
 - One indexed lookup to detect a duplicate
 - Duplicate content costs no additional storage
-- `getCacheStats` is two aggregate queries — `COUNT(*)` over `history_items` and
-  `SUM(size_bytes)` over `blobs` — so it does not scale with the cache. It runs on
-  every history change, and previously loaded every row and then called
-  `File.length()` once per blob.
+- `cacheStats` is one row from two correlated sub-selects — `COUNT(*)` over
+  `history_items` and `SUM(size_bytes)` over `blobs` — so it costs the same at ten
+  emails or a hundred thousand. Room re-emits it whenever either table changes. It
+  previously loaded every row and then called `File.length()` once per blob, on
+  every history change.
 - `clearAll` is two `DELETE` statements and one directory sweep, rather than one
   statement per entry.
 
