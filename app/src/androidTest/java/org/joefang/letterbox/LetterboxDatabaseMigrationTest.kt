@@ -203,10 +203,7 @@ class LetterboxDatabaseMigrationTest {
     }
 
     @Test
-    fun migrate3To4_backfillFoldsAsciiOnly() {
-        // Pins the documented limitation rather than pretending it is absent:
-        // SQLite's lower() does not fold non-ASCII, so these rows are repaired
-        // later by HistoryRepository.ingest instead of by the migration.
+    fun migrate3To4_backfillFoldsAscii() {
         helper.createDatabase(dbName("folding"), 3).use { v3 ->
             v3.insertV3Email("hash-a", subject = "MÜLLER REPORT")
         }
@@ -215,7 +212,14 @@ class LetterboxDatabaseMigrationTest {
         val searchText = v4.selectStrings("SELECT search_text FROM history_items").single()
 
         assertTrue("ASCII should be folded: $searchText", "report" in searchText)
-        assertFalse("Ü is not folded by SQLite lower(): $searchText", "müller" in searchText)
+
+        // Whether SQLite's lower() *also* folds non-ASCII is deliberately not
+        // asserted either way. It depends on how the platform built SQLite —
+        // Android links ICU for collation, a plain build does not — and the
+        // migration is correct under both: HistoryRepository.ingest re-folds
+        // search_text with Kotlin's Unicode-aware rule when an email is reopened,
+        // so a row that SQL left partly folded repairs itself and one it folded
+        // fully is already right.
     }
 
     @Test

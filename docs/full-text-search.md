@@ -48,11 +48,12 @@ trimmed; punctuation is matched literally and never interpreted as syntax.
 
 ## Case folding, and why `search_text` exists
 
-**SQLite's `LIKE`, `lower()` and `NOCASE` collation fold ASCII only**, and
-Android's SQLite ships without ICU. Translating `contains(ignoreCase = true)`
-straight into `LIKE '%q%'` would therefore stop "müller" from finding "Müller" —
-breaking search for every cased non-ASCII script: accented Latin, Cyrillic, Greek,
-Turkish.
+**SQLite's `LIKE` and `NOCASE` collation fold ASCII only**, and how far `lower()`
+folds depends on how the platform built SQLite. Translating
+`contains(ignoreCase = true)` straight into `LIKE '%q%'` would therefore stop
+"müller" from finding "Müller" — breaking search for every cased non-ASCII script:
+accented Latin, Cyrillic, Greek, Turkish — and would do so inconsistently across
+devices, which is worse than doing it wrong everywhere.
 
 So case is folded **once at each boundary, in Kotlin**, where `lowercase()` is
 Unicode-aware and locale-independent:
@@ -142,12 +143,13 @@ and go first, because they fire on writes to `history_items` and the migration
 writes to that table when backfilling. Their names were taken verbatim from the
 exported version 3 schema rather than reconstructed from Room's naming convention.
 
-The backfill uses SQL `lower()`, which folds ASCII only, so a pre-existing
-"MÜLLER" is stored as "mÜller" and will not match "müller". This is deliberate: it
-keeps the migration trivially correct instead of iterating every row through
-Kotlin. The gap is self-healing — `HistoryRepository.ingest` re-folds `search_text`
-whenever an email is opened again, and writes nothing when the value is already
-correct.
+The backfill uses SQL `lower()`. How far that folds depends on the platform's
+SQLite build — a plain build folds ASCII only, an ICU-linked one folds more — so a
+pre-existing "MÜLLER" may be stored as either "mÜller" or "müller". The migration
+is correct under both and deliberately does not iterate every row through Kotlin to
+find out, which keeps it trivially correct. Any partly folded row repairs itself:
+`HistoryRepository.ingest` re-folds `search_text` whenever an email is opened
+again, and writes nothing when the value already agrees.
 
 ## Why the query is moving into SQL
 

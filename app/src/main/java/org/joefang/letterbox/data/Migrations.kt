@@ -35,16 +35,19 @@ private val FTS_SYNC_TRIGGERS = listOf(
  * Concatenates the same fields, in the same order, with the same separator as
  * `searchTextOf`. Every column involved is `NOT NULL`, so `||` cannot yield null.
  *
- * ## Known limitation
+ * ## Folding caveat
  *
- * SQLite's `lower()` folds ASCII only, so a pre-existing subject of "MÜLLER"
- * becomes "mÜller" here, which will not match the Unicode-folded needle "müller".
- * The alternative — iterating every row through Kotlin's case mapping inside the
- * migration — was rejected in favour of keeping the migration trivially correct.
- * The gap is narrow and self-healing: `HistoryRepository.ingest` re-folds
- * `search_text` with Kotlin whenever an email is opened again, so any affected row
- * repairs itself on next use. New rows are never affected, because they are folded
- * in Kotlin at write time.
+ * How far SQL `lower()` folds is a property of the platform's SQLite build, not
+ * something this migration can rely on: a plain build folds ASCII only, while a
+ * build linked against ICU folds more. A pre-existing subject of "MÜLLER" may
+ * therefore end up as "mÜller" or "müller".
+ *
+ * The migration is correct either way, and deliberately does not iterate every row
+ * through Kotlin's case mapping to find out. `HistoryRepository.ingest` re-folds
+ * `search_text` with Kotlin's Unicode-aware rule whenever an email is opened
+ * again, so a partly folded row repairs itself on next use and a fully folded one
+ * is already right. New rows are never affected: they are folded in Kotlin at
+ * write time.
  */
 private const val BACKFILL_SEARCH_TEXT = """
     UPDATE history_items SET search_text = lower(
