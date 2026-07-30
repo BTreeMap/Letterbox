@@ -69,6 +69,14 @@ Every change is marked in the source with `MODIFIED FROM UPSTREAM` or `ADDED`.
 5. **Added `established: Arc<AtomicBool>`**, set after the CONNECT-IP response
    is accepted. Upstream printed "connected" and a human read it; a library
    caller needs the transition as a value it can poll.
+6. **`set_max_idle_timeout` is finite**, configured via a new
+   `TunnelConfig::idle_timeout`, where upstream passes `0`. In quiche `0` means
+   *no* idle timeout, which is defensible for a daemon an operator can kill but
+   not for a library: the handshake loop has no other exit, so an unreachable
+   endpoint spins the session thread forever and anything joining it blocks
+   with it. On Android that is an ANR. `TunnelConfig::new` rejects an idle
+   timeout that does not exceed the keepalive period, which would otherwise
+   disconnect a healthy tunnel between its own keepalives.
 
 Not modified: the QUIC handshake, endpoint pinning, extended-CONNECT exchange,
 datagram framing (`parse_datagram`), PMTU handling, or the forwarding loop.

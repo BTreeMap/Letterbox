@@ -62,6 +62,13 @@ pub const MASQUE_SNI: &str = "api.cloudflare.com";
 /// Interval between QUIC keepalives.
 const KEEPALIVE: Duration = Duration::from_secs(25);
 
+/// How long QUIC tolerates silence before closing.
+///
+/// Must exceed [`KEEPALIVE`]. Bounded rather than infinite so an unreachable
+/// endpoint ends the session on its own — otherwise the session thread never
+/// exits and `Drop` blocks joining it.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Path MTU for the tunnelled interface.
 ///
 /// 1280 is the IPv6 minimum, which no conforming path may fragment below. The
@@ -294,11 +301,20 @@ fn run_session(
         }
     };
 
-    let tunnel_cfg = TunnelConfig {
+    let tunnel_cfg = match TunnelConfig::new(
         endpoint,
-        sni: MASQUE_SNI.to_string(),
-        keepalive_period: KEEPALIVE,
-        mtu: TUNNEL_MTU,
+        MASQUE_SNI.to_string(),
+        KEEPALIVE,
+        IDLE_TIMEOUT,
+        TUNNEL_MTU,
+    ) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            // Unreachable while the constants above are consistent; the
+            // constructor exists so that ceases to be a thing to remember.
+            log::error!("invalid MASQUE tunnel configuration: {e}");
+            return;
+        }
     };
 
     // `run_tunnel_session` borrows reader and writer separately; the duplex is

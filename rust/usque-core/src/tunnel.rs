@@ -27,7 +27,51 @@ pub struct TunnelConfig {
     pub sni: String,
 
     pub keepalive_period: Duration,
+
+    /// How long QUIC tolerates silence before closing the connection.
+    ///
+    /// Must be greater than [`Self::keepalive_period`]; see the note at the
+    /// `set_max_idle_timeout` call for why this is finite here and zero
+    /// upstream. [`TunnelConfig::new`] enforces the ordering.
+    pub idle_timeout: Duration,
+
     pub mtu: u32,
+}
+
+/// Why a [`TunnelConfig`] could not be built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum TunnelConfigError {
+    #[error("idle timeout must exceed the keepalive period")]
+    IdleTimeoutTooShort,
+}
+
+impl TunnelConfig {
+    /// Build a session configuration, checking the one relationship between
+    /// fields that silently breaks the tunnel when inverted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TunnelConfigError::IdleTimeoutTooShort`] if `idle_timeout` does
+    /// not exceed `keepalive_period` — a combination that disconnects a healthy
+    /// tunnel between its own keepalives.
+    pub fn new(
+        endpoint: SocketAddr,
+        sni: String,
+        keepalive_period: Duration,
+        idle_timeout: Duration,
+        mtu: u32,
+    ) -> Result<Self, TunnelConfigError> {
+        if idle_timeout <= keepalive_period {
+            return Err(TunnelConfigError::IdleTimeoutTooShort);
+        }
+        Ok(Self {
+            endpoint,
+            sni,
+            keepalive_period,
+            idle_timeout,
+            mtu,
+        })
+    }
 }
 
 /// Live counters for one session.
@@ -140,7 +184,16 @@ where
         .load_priv_key_from_pem_file(tls_material.key_pem_file.path().to_str().unwrap())
         .map_err(|e| anyhow::anyhow!("load key: {e}"))?;
 
-    quic_config.set_max_idle_timeout(0);
+    // MODIFIED FROM UPSTREAM: upstream sets 0, meaning *no* idle timeout. That
+    // suits a daemon an operator can kill, but here it makes an unreachable
+    // endpoint unkillable: the handshake loop below has no exit condition, so
+    // the session thread spins forever and anything joining it — including
+    // `Drop` — blocks with it. On Android that is an ANR.
+    //
+    // A finite timeout gives QUIC its own exit. It must exceed the keepalive
+    // period or an idle-but-healthy tunnel would tear itself down between
+    // keepalives.
+    quic_config.set_max_idle_timeout(tunnel_cfg.idle_timeout.as_millis() as u64);
     quic_config.set_max_recv_udp_payload_size(MAX_DATAGRAM_SIZE);
     quic_config.set_max_send_udp_payload_size(MAX_DATAGRAM_SIZE);
     quic_config.set_initial_max_data(10_000_000);
@@ -605,6 +658,57 @@ mod tests {
     // functions: they rendered the terminal status line, which has no analogue
     // in a library. The six `parse_datagram` cases above are the protocol ones
     // and are kept verbatim.
+
+    #[test]
+    fn idle_timeout_must_outlast_keepalive() {
+        let endpoint = "127.0.0.1:443".parse().expect("addr");
+        let keepalive = Duration::from_secs(25);
+
+        // Equal is not enough: the tunnel would race its own keepalive.
+        assert_eq!(
+            TunnelConfig::new(endpoint, "h".into(), keepalive, keepalive, 1280).err(),
+            Some(TunnelConfigError::IdleTimeoutTooShort)
+        );
+        assert_eq!(
+            TunnelConfig::new(
+                endpoint,
+                "h".into(),
+                keepalive,
+                Duration::from_secs(5),
+                1280
+            )
+            .err(),
+            Some(TunnelConfigError::IdleTimeoutTooShort)
+        );
+        assert!(TunnelConfig::new(
+            endpoint,
+            "h".into(),
+            keepalive,
+            Duration::from_secs(60),
+            1280
+        )
+        .is_ok());
+    }
+
+    /// A zero idle timeout means *no* timeout in quiche, which is what made an
+    /// unreachable endpoint hang the session thread forever. It must not be
+    /// constructible.
+    #[test]
+    fn zero_idle_timeout_is_rejected() {
+        let endpoint = "127.0.0.1:443".parse().expect("addr");
+
+        assert_eq!(
+            TunnelConfig::new(
+                endpoint,
+                "h".into(),
+                Duration::from_secs(25),
+                Duration::ZERO,
+                1280
+            )
+            .err(),
+            Some(TunnelConfigError::IdleTimeoutTooShort)
+        );
+    }
 
     #[test]
     fn stats_snapshot_reports_every_counter() {
