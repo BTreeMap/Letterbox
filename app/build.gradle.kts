@@ -388,7 +388,9 @@ dependencies {
     testImplementation(kotlin("test-junit"))
     testImplementation(libs.coroutines.test)
     testImplementation(libs.robolectric)
-    testImplementation("net.java.dev.jna:jna:5.19.0")
+    // The JAR, where the main source set takes the AAR. Same coordinates, so
+    // the version comes from the catalog rather than being restated here.
+    testImplementation(libs.jna)
 
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.androidx.test.ext)
