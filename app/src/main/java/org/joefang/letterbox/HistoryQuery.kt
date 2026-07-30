@@ -4,6 +4,57 @@ import org.joefang.letterbox.data.SortDirection
 import org.joefang.letterbox.data.SortField
 
 /**
+ * A rendered SQL statement together with its bound arguments.
+ *
+ * Deliberately not a `SupportSQLiteQuery`: that type is Android-only, and
+ * keeping it out of this file is what lets query construction be unit-tested off
+ * device. The data layer wraps this at the boundary.
+ */
+data class SqlSelect(val sql: String, val args: List<Any?>)
+
+/**
+ * Case-fold text for searching.
+ *
+ * The single folding rule, applied on both sides — to the stored haystack at
+ * ingestion and to the needle at query time. It exists because **SQLite's `LIKE`,
+ * `lower()` and `NOCASE` collation only fold ASCII**, and Android's SQLite ships
+ * without ICU. Matching "müller" against "Müller" in SQL therefore requires that
+ * neither side still carries case by the time SQL sees it.
+ *
+ * Kotlin's [String.lowercase] is Unicode-aware and locale-independent, so folding
+ * here and comparing raw text in SQL is both correct for all scripts and
+ * equivalent to the in-memory `contains(ignoreCase = true)` path.
+ */
+internal fun foldForSearch(text: String): String = text.lowercase()
+
+/**
+ * The folded haystack persisted alongside a history row.
+ *
+ * Concatenates exactly the fields [HistoryQuery] searches, in a fixed order,
+ * separated so that a needle cannot span two fields and produce a false match.
+ * Written once at ingestion; queried with a plain substring match.
+ */
+internal fun searchTextOf(
+    subject: String,
+    senderName: String,
+    senderEmail: String,
+    displayName: String,
+    bodyPreview: String
+): String = foldForSearch(
+    listOf(subject, senderName, senderEmail, displayName, bodyPreview)
+        .joinToString(SEARCH_FIELD_SEPARATOR)
+)
+
+/**
+ * Separator between concatenated searchable fields.
+ *
+ * A newline cannot appear in a single-line header value or in the
+ * whitespace-collapsed body preview, so it cannot be typed into the search box in
+ * a way that bridges two fields.
+ */
+internal const val SEARCH_FIELD_SEPARATOR = "\n"
+
+/**
  * Which history entries to show, and in what order.
  *
  * A query is a plain value: [applyTo] is a pure total function from
@@ -91,4 +142,84 @@ data class HistoryQuery(
             SortDirection.DESCENDING -> ascending.reversed()
         }
     }
+
+    /**
+     * This query as SQL over `history_items`, for paging straight out of the
+     * database instead of holding the whole history in memory.
+     *
+     * [applyTo] remains the executable specification: the two interpret the same
+     * value and must agree, which is asserted by running both over one fixture
+     * rather than trusting them to stay in step.
+     *
+     * ## Why this is injection-safe by construction
+     *
+     * The only caller-supplied value, the needle, is a **bound parameter**. Every
+     * interpolated fragment comes from eliminating a closed enum — [SortField] and
+     * [SortDirection] — through a total `when`, so the set of statements this can
+     * produce is finite and enumerable. No string from outside the process reaches
+     * the SQL text.
+     *
+     * ## Why `LIKE` and not `MATCH`
+     *
+     * `LIKE '%needle%'` reproduces substring semantics exactly, so the in-memory
+     * oracle stays valid. It cannot use an index, but it scans one narrow
+     * pre-folded column rather than materialising every row as an object — and
+     * paging means only the requested window is read. See
+     * `docs/full-text-search.md`.
+     */
+    fun toSqlSelect(): SqlSelect {
+        val conditions = mutableListOf<String>()
+        val args = mutableListOf<Any?>()
+
+        if (onlyWithAttachments) {
+            conditions += "has_attachments = 1"
+        }
+        if (needle.isNotEmpty()) {
+            // Both sides are already case-folded, so a plain substring match is
+            // correct for every script; see foldForSearch.
+            conditions += "search_text LIKE ? ESCAPE '\\'"
+            args += "%${escapeLikeWildcards(foldForSearch(needle))}%"
+        }
+
+        val where = if (conditions.isEmpty()) "" else " WHERE " + conditions.joinToString(" AND ")
+        return SqlSelect(
+            sql = "SELECT * FROM history_items$where ORDER BY ${orderBySql()}",
+            args = args
+        )
+    }
+
+    /**
+     * `ORDER BY` clause for this query.
+     *
+     * `id` is appended as a final tie-breaker. Under paging a total order is not
+     * cosmetic: a query with ties has no stable row sequence across separately
+     * loaded pages, so an entry could appear twice or not at all while scrolling.
+     * `id` is unique, which makes the order total.
+     */
+    private fun orderBySql(): String {
+        val key = when (sortField) {
+            SortField.DATE ->
+                "CASE WHEN email_date > 0 THEN email_date ELSE last_accessed END"
+            SortField.SUBJECT -> "subject COLLATE NOCASE"
+            SortField.SENDER ->
+                "CASE WHEN sender_name != '' THEN sender_name ELSE sender_email END COLLATE NOCASE"
+        }
+        val direction = when (sortDirection) {
+            SortDirection.ASCENDING -> "ASC"
+            SortDirection.DESCENDING -> "DESC"
+        }
+        return "$key $direction, id $direction"
+    }
 }
+
+/**
+ * Neutralise `LIKE` metacharacters so a needle matches literally.
+ *
+ * Without this, typing `%` would match every row and `_` would match any single
+ * character — the needle is data, not a pattern. Paired with `ESCAPE '\'` in the
+ * statement. The backslash is escaped first, so escaping cannot escape itself.
+ */
+internal fun escapeLikeWildcards(text: String): String = text
+    .replace("\\", "\\\\")
+    .replace("%", "\\%")
+    .replace("_", "\\_")

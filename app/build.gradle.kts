@@ -358,6 +358,9 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
+    implementation(libs.room.paging)
+    implementation(libs.paging.runtime)
+    implementation(libs.paging.compose)
     implementation(libs.datastore.preferences)
     implementation(libs.jna) { artifact { type = "aar" } }
     implementation(libs.browser)
