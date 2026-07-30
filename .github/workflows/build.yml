@@ -89,9 +89,17 @@ env:
   ANDROID_BUILD_TOOLS: "37.0.0"
   # API 37 ships only as minor releases: Google's index has no plain
   # `platforms;android-37`, only `37.0` and `37.1`, which is why AGP's own
-  # error text suggests "37.1". Both are installed so the resolution of
-  # `compileSdk = 37` cannot depend on which one AGP happens to pick.
-  ANDROID_PLATFORMS: "platforms;android-37.0 platforms;android-37.1"
+  # error text suggests "37.1". `37.0` is the base release for API 37 — the
+  # role `android-36` played for API 36 — so it is what `compileSdk = 37`
+  # resolves to, and it is the only one installed.
+  #
+  # Installing several would be the same mistake as leaving ANDROID_NDK_HOME
+  # and ANDROID_NDK_ROOT disagreeing: what the app compiles against would
+  # depend on which minor happened to be present rather than on what the build
+  # file says, and adding a `37.2` to the image later could move it silently.
+  # If AGP wants something else it names the platform it cannot find, at
+  # configuration time, in one line.
+  ANDROID_PLATFORMS: "platforms;android-37.0"
 
   JNILIBS_ARTIFACT: letterbox-jnilibs
   STAGING_DEBUG_ARTIFACT: letterbox-staging-apk

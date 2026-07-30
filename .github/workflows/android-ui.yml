@@ -58,7 +58,7 @@ jobs:
 
       - name: Install Android components
         run: |
-          sdkmanager "platform-tools" "platforms;android-37.0" "platforms;android-37.1" "build-tools;37.0.0"
+          sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
           sdkmanager "system-images;android-34;google_apis;x86_64"
           sdkmanager "emulator"
 
