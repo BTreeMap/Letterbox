@@ -6,7 +6,7 @@ val forcedDependencies = listOf(
     "com.google.protobuf:protobuf-java:4.35.0",
     "com.google.protobuf:protobuf-kotlin:4.35.0",
     "io.netty:netty-codec:4.2.15.Final",
-    "io.netty:netty-codec-http:4.2.15.Final",
+    "io.netty:netty-codec-http:4.2.16.Final",
     "io.netty:netty-codec-http2:4.2.15.Final",
     "io.netty:netty-common:4.2.15.Final",
     "io.netty:netty-handler:4.2.15.Final",
