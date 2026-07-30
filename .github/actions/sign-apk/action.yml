@@ -1,0 +1,231 @@
+name: Sign APK
+description: >-
+  Sign an unsigned APK, prove which key actually signed it, and give the result
+  a filename derived from the APK's own versionName.
+
+# Three workflows sign an APK: sign-test (untrusted PR builds, `ci:test`),
+# pre-release and release (`ci:release`). They had three copies of the same
+# script, which is three places for the handling of a signing key to drift.
+#
+# ## Why the fingerprint assertion is the point of this action
+#
+# `secrets.ANDROID_KEYSTORE_B64` resolves against the job's `environment`
+# first and the repository second. If an environment does not define it,
+# GitHub falls back to the repository secret *silently*. So a `ci:test` job
+# that is meant to sign untrusted pull-request code with a throwaway key will
+# happily sign it with the production key the moment that environment secret
+# is missing, renamed, or deleted — and nothing downstream can tell, because a
+# correctly signed APK looks the same either way.
+#
+# That failure hands an attacker an APK that Android accepts as an update to
+# the real app. It is the worst outcome in this repository and it is reachable
+# by a configuration mistake, not an exploit.
+#
+# So the key is not trusted, it is *checked*: after signing, the certificate is
+# read back out of the APK and compared against the fingerprint the calling
+# environment declares. A mismatch fails the job and the artefact is destroyed.
+# `expected-cert-sha256` is required precisely so that "nobody configured it"
+# cannot degrade into "unchecked".
+
+inputs:
+  apk-directory:
+    description: Directory holding exactly one unsigned APK.
+    required: true
+  keystore-base64:
+    description: Base64-encoded keystore (from the calling environment's secrets).
+    required: true
+  keystore-password:
+    description: Keystore and key password.
+    required: true
+  key-alias:
+    description: Key alias within the keystore.
+    required: true
+  expected-cert-sha256:
+    description: >-
+      SHA-256 digest of the certificate this environment's key must present,
+      hex, case- and colon-insensitive. Obtain it with
+      `apksigner verify --print-certs <apk>`.
+    required: true
+  build-tools-version:
+    description: Android build-tools version providing apksigner and aapt2.
+    required: false
+    default: "36.0.0"
+  output-name:
+    description: >-
+      Filename to publish the signed APK under. Deliberately a constant rather
+      than something derived from the version: the release tag already states
+      which build this is, and a filename that changes every release cannot be
+      addressed by a URL, which is what downstream scripts need. Restricted to
+      `[A-Za-z0-9._-]` so it cannot escape the artefact directory.
+    required: false
+    default: letterbox.apk
+
+outputs:
+  apk:
+    description: Path to the signed APK, named `output-name`.
+    value: ${{ steps.sign.outputs.apk }}
+  metadata:
+    description: >-
+      Path to a JSON sidecar describing the APK — version, versionCode, package,
+      size, SHA-256 and signing certificate. This is where the version lives for
+      machines, now that the filename is a constant.
+    value: ${{ steps.sign.outputs.metadata }}
+  version-name:
+    description: versionName read out of the APK (e.g. `v0.1.2-dev.7+abc1234`).
+    value: ${{ steps.sign.outputs.version-name }}
+  version-code:
+    description: versionCode read out of the APK.
+    value: ${{ steps.sign.outputs.version-code }}
+  cert-sha256:
+    description: SHA-256 digest of the certificate that signed the APK.
+    value: ${{ steps.sign.outputs.cert-sha256 }}
+
+runs:
+  using: composite
+  steps:
+    - name: Sign, verify and name the APK
+      id: sign
+      shell: bash
+      env:
+        # Secrets arrive through the environment, never through the rendered
+        # script and never through argv. `--ks-pass pass:...` would put the
+        # password in the process command line, where anything on the runner
+        # can read it out of /proc; `pass:env:` does not.
+        KEYSTORE_B64: ${{ inputs.keystore-base64 }}
+        ANDROID_KEYSTORE_PASSWORD: ${{ inputs.keystore-password }}
+        KEY_ALIAS: ${{ inputs.key-alias }}
+        EXPECTED_CERT: ${{ inputs.expected-cert-sha256 }}
+        APK_DIR: ${{ inputs.apk-directory }}
+        BUILD_TOOLS: ${{ inputs.build-tools-version }}
+        OUTPUT_NAME: ${{ inputs.output-name }}
+      run: |
+        set -euo pipefail
+        umask 077
+
+        TOOLS="${ANDROID_SDK_ROOT:?ANDROID_SDK_ROOT is not set}/build-tools/${BUILD_TOOLS}"
+        for tool in apksigner aapt2; do
+          if [[ ! -x "$TOOLS/$tool" ]]; then
+            echo "::error::$tool not found in $TOOLS. Install build-tools;${BUILD_TOOLS} before this step."
+            exit 1
+          fi
+        done
+        command -v jq > /dev/null || { echo "::error::jq is required to write the metadata sidecar."; exit 1; }
+
+        # `mv` to an unchecked name would let a caller write outside the artefact
+        # directory. One check at the boundary, before the value is used.
+        if [[ ! "$OUTPUT_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::output-name '$OUTPUT_NAME' must match [A-Za-z0-9._-]+"
+          exit 1
+        fi
+
+        if [[ -z "$EXPECTED_CERT" ]]; then
+          echo "::error::expected-cert-sha256 is empty. Set the signing certificate fingerprint as a variable on this job's environment; without it, a keystore substituted by a misconfigured environment would go unnoticed. Obtain it with: apksigner verify --print-certs <apk>"
+          exit 1
+        fi
+
+        # Exactly one unsigned APK, named explicitly. `ls | head -1` silently
+        # picks a winner when the artefact contains more than one, which is
+        # how the wrong APK gets signed.
+        mapfile -t APKS < <(find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' | sort)
+        if [[ ${#APKS[@]} -ne 1 ]]; then
+          echo "::error::Expected exactly one APK in $APK_DIR, found ${#APKS[@]}: ${APKS[*]-none}"
+          exit 1
+        fi
+        UNSIGNED="${APKS[0]}"
+
+        KEYSTORE="$(mktemp -d)/signing.jks"
+        # The keystore is removed however this step ends. The previous form
+        # deleted it on the last line, which `set -e` skips whenever apksigner
+        # fails — leaving the key on a runner that later steps still use.
+        trap 'rm -rf "$(dirname "$KEYSTORE")"' EXIT
+        printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE"
+
+        SIGNED="$APK_DIR/.signed.apk"
+        "$TOOLS/apksigner" sign \
+          --ks "$KEYSTORE" \
+          --ks-key-alias "$KEY_ALIAS" \
+          --ks-pass "env:ANDROID_KEYSTORE_PASSWORD" \
+          --key-pass "env:ANDROID_KEYSTORE_PASSWORD" \
+          --out "$SIGNED" \
+          "$UNSIGNED"
+
+        "$TOOLS/apksigner" verify --verbose "$SIGNED"
+
+        # Which key signed it, asked of the artefact rather than assumed from
+        # the configuration that produced it.
+        ACTUAL_CERT="$(
+          "$TOOLS/apksigner" verify --print-certs "$SIGNED" \
+            | awk '/certificate SHA-256 digest:/ { print $NF; exit }' \
+            | tr -d ': ' | tr '[:upper:]' '[:lower:]'
+        )"
+        WANT_CERT="$(printf '%s' "$EXPECTED_CERT" | tr -d ': ' | tr '[:upper:]' '[:lower:]')"
+
+        if [[ -z "$ACTUAL_CERT" ]]; then
+          echo "::error::Could not read a certificate digest back from the signed APK."
+          rm -f "$SIGNED"
+          exit 1
+        fi
+
+        if [[ "$ACTUAL_CERT" != "$WANT_CERT" ]]; then
+          # Deliberately does not print the expected value: on the test path a
+          # mismatch means the production key may have signed untrusted code,
+          # and the artefact must not survive to be downloaded.
+          rm -f "$SIGNED" "$UNSIGNED"
+          echo "::error::Signing certificate does not match this environment's expected certificate (got ${ACTUAL_CERT}). The wrong keystore was used; the signed APK has been destroyed."
+          exit 1
+        fi
+        echo "Signing certificate matches this environment: $ACTUAL_CERT"
+
+        # The APK states its own version, so the release tag and the metadata
+        # below cannot disagree with what the app reports in About.
+        BADGING="$("$TOOLS/aapt2" dump badging "$SIGNED")"
+        VERSION_NAME="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$BADGING" | head -1)"
+        VERSION_CODE="$(sed -n "s/.*versionCode='\([^']*\)'.*/\1/p" <<<"$BADGING" | head -1)"
+        PACKAGE="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$BADGING" | head -1)"
+        if [[ -z "$VERSION_NAME" ]]; then
+          echo "::error::Could not read versionName from the APK."
+          rm -f "$SIGNED"
+          exit 1
+        fi
+
+        FINAL="$APK_DIR/$OUTPUT_NAME"
+        mv "$SIGNED" "$FINAL"
+
+        # The unsigned input must not reach the release alongside the signed
+        # one; both match `*.apk` in an upload glob.
+        rm -f "$UNSIGNED"
+
+        SHA256="$(sha256sum "$FINAL" | cut -d' ' -f1)"
+        SIZE="$(stat -c%s "$FINAL")"
+
+        # With the filename held constant, this sidecar is the only machine-
+        # readable statement of which build the file is. It also publishes the
+        # digest and the signing certificate, so a sideloaded download can be
+        # checked against something other than trust in the transport.
+        #
+        # Written with `jq --arg` rather than string interpolation: versionName
+        # is read out of an artefact, and hand-built JSON is only correct until
+        # a value contains a quote.
+        METADATA="$APK_DIR/${OUTPUT_NAME%.apk}.json"
+        jq -n \
+          --arg version "$VERSION_NAME" \
+          --argjson versionCode "$VERSION_CODE" \
+          --arg package "$PACKAGE" \
+          --arg asset "$OUTPUT_NAME" \
+          --argjson size "$SIZE" \
+          --arg sha256 "$SHA256" \
+          --arg certSha256 "$ACTUAL_CERT" \
+          '{version: $version, versionCode: $versionCode, package: $package,
+            asset: $asset, size: $size, sha256: $sha256, certSha256: $certSha256}' \
+          > "$METADATA"
+
+        {
+          echo "apk=$FINAL"
+          echo "metadata=$METADATA"
+          echo "version-name=$VERSION_NAME"
+          echo "version-code=$VERSION_CODE"
+          echo "cert-sha256=$ACTUAL_CERT"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "Signed $VERSION_NAME (code $VERSION_CODE) -> $OUTPUT_NAME"
+        cat "$METADATA"

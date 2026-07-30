@@ -1,179 +1,125 @@
 name: Release Publication
 
+# This workflow used to contain a full copy of the Android build — SDK, NDK,
+# cargo-ndk, the cross-compile and `assembleProdRelease` — which meant that
+# publishing a release rebuilt an APK that the tag push had already built.
+# Worse, the artefact users downloaded was not the one CI had checked; it was a
+# second, separately produced APK that no job had verified.
+#
+# It now calls `build.yml`, which is the only place an APK is assembled, and
+# `build.yml` no longer triggers on tags. A release-stamped APK is therefore
+# built exactly once, here, and the native libraries behind it are a cache hit
+# against the `android-release` entry the main-branch builds already wrote —
+# because the `.so` files do not depend on the build type. Only the APK does.
+
 on:
   release:
     types: [published]
 
-# Minimal permissions: only what's needed for release asset uploads
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
 # Default deny at the workflow level; each job grants itself the minimum it
 # needs. A job added later then starts with no token scopes rather than
 # silently inheriting whatever the workflow happened to declare.
 permissions: {}
 
 jobs:
-  build:
-    name: Build Release APK
+  # A separate job so the tag is rejected before the build is paid for.
+  validate:
+    name: Validate release tag
     runs-on: ubuntu-24.04
-    permissions:
-      # Builds only; the release assets are uploaded by `publish`.
-      contents: read
+    timeout-minutes: 5
     steps:
-      - name: Validate release tag format
+      - name: Check tag format
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
-          TAG_NAME="${{ github.event.release.tag_name }}"
+          set -euo pipefail
           if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "ERROR: Release tag '$TAG_NAME' does not match required format v*.*.* (e.g., v1.2.3)"
-            echo "Please use semantic versioning format for release tags."
+            echo "::error::Release tag '$TAG_NAME' does not match v*.*.* (e.g. v1.2.3). Stable releases must use that form; the in-app update check parses it, and Versioning.resolveFromGit derives versionCode from it."
             exit 1
           fi
           echo "Release tag '$TAG_NAME' is valid"
 
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0  # Full git history for version calculation
-          fetch-tags: true
-          submodules: recursive
-          # No step here talks to the remote, and every job runs project
-          # build code. The token is not left in `.git/config` for that
-          # code to find.
-          persist-credentials: false
-
-      - name: Set up JDK
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Install Android components
-        run: |
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
-
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses
-
-      # The Android NDK only ships a linux-x86_64 host toolchain, so this Android
-      # cross-compile must run on an amd64 runner (ubuntu-24.04).
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
-
-      - name: Cache Rust build (android)
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: android
-          # Release builds run from tags; allow them to refresh the shared cache.
-          save-if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-
-      - name: Install cargo-ndk
-        run: |
-          if ! command -v cargo-ndk &> /dev/null; then
-            cargo install cargo-ndk --locked
-          else
-            echo "cargo-ndk already installed, skipping"
-          fi
-
-      - name: Install and pin NDK
-        run: |
-          sdkmanager --install "ndk;26.1.10909125"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Gradle permissions
-        run: chmod +x gradlew
-
-      # Single workspace invocation builds both letterbox-core and letterbox-proxy
-      # for all three ABIs in one pass.
-      - name: Build Android native libraries (release, all ABIs)
-        run: |
-          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --manifest-path ${{ github.workspace }}/Cargo.toml --release
-        working-directory: rust
-
-      - name: Verify native libraries were generated
-        run: |
-          echo "Checking for generated .so files in jniLibs:"
-          find ${{ github.workspace }}/app/src/main/jniLibs -maxdepth 2 -type f -name "*.so" -print
-          if [ -z "$(find ${{ github.workspace }}/app/src/main/jniLibs -maxdepth 2 -type f -name "*.so")" ]; then
-            echo "ERROR: No .so files found in jniLibs!"
-            exit 1
-          fi
-          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_core*.so" | head -1 || (echo "ERROR: letterbox_core not found!" && exit 1)
-          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_proxy*.so" | head -1 || (echo "ERROR: letterbox_proxy not found!" && exit 1)
-
-      - name: Build prod release APK
-        run: ./gradlew assembleProdRelease --no-daemon
-
-      - name: Verify native libraries in APK
-        run: |
-          echo "Checking for .so files in prod release APK:"
-          unzip -l app/build/outputs/apk/prod/release/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in prod release APK!" && exit 1)
-
-      - name: Upload release APK artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: letterbox-prod-release-unsigned-apk
-          path: app/build/outputs/apk/prod/release/*.apk
-          retention-days: 90
+  build:
+    name: Build
+    needs: validate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+    with:
+      # The APK is a function of this. Without it the assembly would inherit
+      # the trigger-derived default and stamp a dev version onto a release.
+      build_type: release
 
   publish:
-    name: Sign and Upload to Release
+    name: Sign and upload
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     environment: ci:release
     permissions:
-      # Upload the signed assets onto the release.
+      # Upload the signed asset onto the release.
       contents: write
     steps:
+      # Only the composite action, and only from the release's own tag — never
+      # the full tree, and never a ref anyone without push access can move.
+      # This job holds the production keystore; it runs no project build code.
+      - name: Checkout signing action
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
       - name: Install Android build tools
-        run: |
-          sdkmanager "build-tools;36.0.0"
+        run: sdkmanager "build-tools;36.0.0"
 
-      - name: Download release APK
+      - name: Download unsigned release APK
         uses: actions/download-artifact@v8
         with:
-          name: letterbox-prod-release-unsigned-apk
+          name: ${{ needs.build.outputs.prod-release-artifact }}
           path: ./artifacts
 
-      - name: Sign APK
+      - name: Sign
+        id: sign
+        uses: ./.github/actions/sign-apk
+        with:
+          apk-directory: ./artifacts
+          keystore-base64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          keystore-password: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          key-alias: ${{ vars.ANDROID_KEY_ALIAS }}
+          expected-cert-sha256: ${{ vars.ANDROID_SIGNING_CERT_SHA256 }}
+
+      # The tag names a version; the APK reports one. If they disagree, the
+      # release was published from a commit the tag does not point at, and the
+      # asset would claim a version it is not.
+      - name: Check the APK matches the tag
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          VERSION_NAME: ${{ steps.sign.outputs.version-name }}
         run: |
           set -euo pipefail
-          umask 077
+          if [[ "$VERSION_NAME" != "$TAG_NAME" ]]; then
+            echo "::error::The APK reports versionName '$VERSION_NAME' but the release is tagged '$TAG_NAME'. The release was most likely published from a commit that the tag does not point at."
+            exit 1
+          fi
+          echo "APK versionName matches the tag: $VERSION_NAME (code ${{ steps.sign.outputs.version-code }})"
 
-          # Rehydrate keystore
-          printf '%s' "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 --decode > signing.jks
-          chmod 600 signing.jks
-
-          # Select APK paths
-          UNSIGNED_APK="$(ls -1 ./artifacts/*.apk | head -n 1)"
-          SIGNED_APK="./artifacts/signed-$(basename "$UNSIGNED_APK")"
-
-          # Sign + verify
-          $ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner sign \
-            --ks signing.jks \
-            --ks-key-alias "${{ vars.ANDROID_KEY_ALIAS }}" \
-            --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            --key-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            --out "$SIGNED_APK" \
-            "$UNSIGNED_APK"
-
-          $ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner verify --verbose "$SIGNED_APK"
-
-          # Cleanup
-          rm -f signing.jks
-          rm -f "$UNSIGNED_APK"
-
-      - name: Upload release APK to release
+      # `letterbox.apk` is a constant, so
+      # `releases/latest/download/letterbox.apk` resolves for every stable
+      # release without a caller knowing the version. `letterbox.json` carries
+      # the version, versionCode and digests that the filename no longer states.
+      - name: Upload the signed APK to the release
         uses: softprops/action-gh-release@v3
         with:
-          files: ./artifacts/*.apk
+          files: |
+            ${{ steps.sign.outputs.apk }}
+            ${{ steps.sign.outputs.metadata }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

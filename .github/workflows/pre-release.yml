@@ -1,10 +1,49 @@
 name: Pre-release
 
+# Publishes the main-branch APK as a GitHub pre-release.
+#
+# ## Naming
+#
+# Identity and addressability are different jobs and are given to different
+# things. The **tag** is the APK's own `versionName` — `v0.1.1-dev.7+abc1234` —
+# read back out of the signed APK rather than recomputed here. The **asset** is
+# the constant `letterbox.apk`, because a filename that changes every release
+# cannot be written into a script or a URL, and the tag already said which build
+# this is. `letterbox.json` alongside it carries the version, versionCode and
+# SHA-256 for anything that needs those without parsing a filename.
+#
+# The previous tag was `pre-release-<short sha>`. GitHub paginates releases
+# roughly by time and then orders within the page by tag name, so a tag whose
+# leading characters are a constant followed by a hash sorts by nothing at all:
+# the list arrives shuffled. A tag that begins with the version sorts by
+# version, which is the order a reader expects. (`dev.N` is not zero-padded, so
+# ordering within one patch series is still lexical rather than numeric — a
+# consequence of `versionName`'s documented format, which this workflow
+# reports rather than defines.)
+#
+# The release title is the bare version too. GitHub truncates it in the sidebar
+# at roughly the width of "Pre-release v0.0.7-dev…", so a literal "Pre-release"
+# prefix spent the entire visible budget restating the badge already shown
+# beside it.
+#
+# ## Why the version is read from the APK
+#
+# This job used to check out the full history and re-derive the version in
+# shell — a second implementation of `Versioning.resolveFromGit` that could
+# disagree with the one that stamped the APK. Asking the artefact makes the
+# tag, the asset name and the version the app reports in About the same string
+# by construction, and removes the checkout of source code from a job that
+# holds the production keystore.
+
 on:
   workflow_run:
     workflows: ["Build"]
     types: [completed]
     branches: ["main"]
+
+concurrency:
+  group: pre-release
+  cancel-in-progress: false
 
 # Default deny at the workflow level; each job grants itself the minimum it
 # needs. A job added later then starts with no token scopes rather than
@@ -13,37 +52,34 @@ permissions: {}
 
 jobs:
   pre-release:
-    name: Create Pre-release
+    name: Create pre-release
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     environment: ci:release
     permissions:
-      # Create the pre-release and upload its assets.
+      # Create the pre-release and upload its asset.
       contents: write
       # Download artifacts from the triggering workflow run.
       actions: read
-    # Only run if build succeeded and on main branch
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     steps:
-      - name: Checkout
+      # Only the composite action, and only from the default branch — never
+      # the built commit. This job holds the production keystore and must not
+      # execute anything from the tree it is publishing.
+      - name: Checkout signing action
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 0  # Full git history for version calculation
-          fetch-tags: true
-          submodules: recursive
-          # No step here talks to the remote, and every job runs project
-          # build code. The token is not left in `.git/config` for that
-          # code to find.
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
       - name: Install Android build tools
-        run: |
-          sdkmanager "build-tools;36.0.0"
+        run: sdkmanager "build-tools;36.0.0"
 
-      - name: Download prod release APK from build workflow
+      - name: Download unsigned release APK
         uses: actions/download-artifact@v8
         with:
           name: letterbox-prod-release-unsigned-apk
@@ -51,90 +87,41 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
 
-      - name: List downloaded artifacts
-        run: ls -la ./artifacts
-
-      - name: Sign APK
-        run: |
-          set -euo pipefail
-          umask 077
-
-          # Rehydrate keystore
-          printf '%s' "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 --decode > signing.jks
-          chmod 600 signing.jks
-
-          # Select APK paths
-          UNSIGNED_APK="$(ls -1 ./artifacts/*.apk | head -n 1)"
-          SIGNED_APK="./artifacts/signed-$(basename "$UNSIGNED_APK")"
-
-          # Sign + verify
-          $ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner sign \
-            --ks signing.jks \
-            --ks-key-alias "${{ vars.ANDROID_KEY_ALIAS }}" \
-            --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            --key-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            --out "$SIGNED_APK" \
-            "$UNSIGNED_APK"
-
-          $ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner verify --verbose "$SIGNED_APK"
-
-          # Cleanup
-          rm -f signing.jks
-          rm -f "$UNSIGNED_APK"
-
-      - name: Get version info
-        id: version
-        run: |
-          # Get the latest version tag matching v*.*.*
-          VERSION_TAG=$(git describe --tags --match "v[0-9]*.[0-9]*.[0-9]*" --abbrev=0 2>/dev/null || echo "")
-          
-          # Extract version components
-          VERSION_REGEX='^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
-          if [[ -n "$VERSION_TAG" && $VERSION_TAG =~ $VERSION_REGEX ]]; then
-            MAJOR="${BASH_REMATCH[1]}"
-            MINOR="${BASH_REMATCH[2]}"
-            PATCH="${BASH_REMATCH[3]}"
-          else
-            # Fallback when no valid version tag exists
-            MAJOR=0
-            MINOR=0
-            PATCH=0
-            VERSION_TAG=""
-          fi
-          
-          # Count commits since last tag (or all commits if no tag exists)
-          if [ -n "$VERSION_TAG" ]; then
-            COMMITS_SINCE_TAG=$(git rev-list --count HEAD "^$VERSION_TAG")
-          else
-            COMMITS_SINCE_TAG=$(git rev-list --count HEAD)
-          fi
-          
-          # Get short SHA
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          
-          # Generate version name with "v" prefix (matches Gradle logic and design doc)
-          # Design doc: Pre-release format is v1.2.3-dev.N+hash
-          if [ "$COMMITS_SINCE_TAG" -eq 0 ]; then
-            VERSION_NAME="v${MAJOR}.${MINOR}.${PATCH}"
-          else
-            # Increment patch for dev builds (working towards next version)
-            EFFECTIVE_PATCH=$((PATCH + 1))
-            VERSION_NAME="v${MAJOR}.${MINOR}.${EFFECTIVE_PATCH}-dev.${COMMITS_SINCE_TAG}+${SHORT_SHA}"
-          fi
-          
-          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
-          echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION_NAME"
+      - name: Sign
+        id: sign
+        uses: ./.github/actions/sign-apk
+        with:
+          apk-directory: ./artifacts
+          keystore-base64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          keystore-password: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          key-alias: ${{ vars.ANDROID_KEY_ALIAS }}
+          expected-cert-sha256: ${{ vars.ANDROID_SIGNING_CERT_SHA256 }}
 
       - name: Create pre-release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: pre-release-${{ steps.version.outputs.short_sha }}
-          name: Pre-release ${{ steps.version.outputs.version_name }}
+          tag_name: ${{ steps.sign.outputs.version-name }}
+          # Without this the tag is created at whatever the default branch
+          # happens to be when the release is made, which is not necessarily
+          # the commit that was built — the tag and the body then name
+          # different commits.
+          target_commitish: ${{ github.event.workflow_run.head_sha }}
+          name: ${{ steps.sign.outputs.version-name }}
           prerelease: true
-          files: ./artifacts/*.apk
+          files: |
+            ${{ steps.sign.outputs.apk }}
+            ${{ steps.sign.outputs.metadata }}
           body: |
-            Automated pre-release from commit ${{ github.event.workflow_run.head_sha }}
-            Version: ${{ steps.version.outputs.version_name }}
+            Automated pre-release of ${{ github.event.workflow_run.head_sha }}.
+
+            | | |
+            | --- | --- |
+            | Version | `${{ steps.sign.outputs.version-name }}` |
+            | Version code | `${{ steps.sign.outputs.version-code }}` |
+            | Signing certificate (SHA-256) | `${{ steps.sign.outputs.cert-sha256 }}` |
+
+            The asset is always named `letterbox.apk`; this release's tag says
+            which build it is, and `letterbox.json` repeats that plus the
+            APK's SHA-256 for scripts.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

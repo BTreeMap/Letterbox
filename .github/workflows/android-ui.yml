@@ -6,6 +6,12 @@ on:
     types: [completed]
     branches: ["main", "copilot/**"]
 
+# An emulator run against a superseded commit answers a question nobody is
+# still asking, and these are the longest jobs in the pipeline.
+concurrency:
+  group: ui-tests-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
 # Default deny at the workflow level; each job grants itself the minimum it
 # needs. A job added later then starts with no token scopes rather than
 # silently inheriting whatever the workflow happened to declare.
@@ -30,7 +36,6 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0  # Full git history for version calculation
           fetch-tags: true
-          submodules: recursive
           # No step here talks to the remote, and every job runs project
           # build code. The token is not left in `.git/config` for that
           # code to find.
@@ -72,22 +77,34 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # The emulator is x86_64, so that is the ABI whose absence would actually
+      # break the run. Asserted directly: the previous form ended each check in
+      # `find ... | head -1 || (echo ERROR; exit 1)`, and `find` exits 0 when it
+      # matches nothing, so the `||` never fired.
       - name: Verify native libraries are present
         run: |
-          echo "Checking for downloaded .so files in jniLibs:"
-          find ${{ github.workspace }}/app/src/main/jniLibs -maxdepth 2 -type f -name "*.so" -print
-          if [ -z "$(find ${{ github.workspace }}/app/src/main/jniLibs -maxdepth 2 -type f -name "*.so")" ]; then
-            echo "ERROR: No .so files found in jniLibs!"
-            exit 1
-          fi
-          find ${{ github.workspace }}/app/src/main/jniLibs -path "*x86_64*letterbox_core*.so" | head -1 || (echo "ERROR: x86_64 letterbox_core not found!" && exit 1)
-          find ${{ github.workspace }}/app/src/main/jniLibs -path "*x86_64*letterbox_proxy*.so" | head -1 || (echo "ERROR: x86_64 letterbox_proxy not found!" && exit 1)
+          set -euo pipefail
+          missing=0
+          for lib in letterbox_core letterbox_proxy; do
+            path="app/src/main/jniLibs/x86_64/lib$lib.so"
+            if [[ -f "$path" ]]; then
+              printf '  ok  %s (%s bytes)\n' "$path" "$(stat -c%s "$path")"
+            else
+              echo "::error::missing $path"
+              missing=1
+            fi
+          done
+          exit "$missing"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
-
-      - name: Gradle permissions
-        run: chmod +x gradlew
+        with:
+          # Never written from here. This workflow runs in the default branch's
+          # context (`github.ref` is `refs/heads/main`) but checks out the
+          # triggering run's head, which may be a `copilot/**` branch — so a ref
+          # check would call it trusted when it is not. It only ever needs to
+          # consume what `build.yml` compiled.
+          cache-read-only: true
 
       - name: Run instrumented UI tests (Gradle Managed Devices)
         run: |

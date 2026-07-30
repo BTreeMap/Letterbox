@@ -1,9 +1,33 @@
 name: Sign Test APK
 
+# Signs the staging APK built from a pull request so testers can install it
+# without giving pull-request code access to the production signing key.
+#
+# This is the most dangerous job in the repository. It runs in the privileged
+# `workflow_run` context — the base repository's secrets, not the fork's — and
+# its input is an APK built from code nobody has reviewed. If the production
+# key ever signed that APK, the result would install over the real app on any
+# user's device.
+#
+# Two things keep that from happening, and the second is new:
+#
+# 1. No checkout of the built commit. Only the signing action, and only from
+#    the default branch. Nothing from the pull request executes here.
+# 2. The certificate is read back out of the signed APK and checked against
+#    the fingerprint `ci:test` declares. `environment:` selects which keystore
+#    a secret resolves to, but an environment that does not define
+#    `ANDROID_KEYSTORE_B64` falls back to the repository secret *silently* —
+#    so "the environment is configured correctly" was an assumption with
+#    nothing checking it. Now it is checked. See `.github/actions/sign-apk`.
+
 on:
   workflow_run:
     workflows: ["Build"]
     types: [completed]
+
+concurrency:
+  group: sign-test-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
 
 # Default deny at the workflow level; each job grants itself the minimum it
 # needs. A job added later then starts with no token scopes rather than
@@ -12,27 +36,33 @@ permissions: {}
 
 jobs:
   sign-test:
-    name: Sign Test APK
+    name: Sign test APK
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     environment: ci:test
     permissions:
       contents: read
       # Download artifacts from the triggering workflow run.
       actions: read
-    # Only run if build succeeded and is from a pull request
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' }}
     steps:
-      # NOTE: Intentionally NOT checking out PR code to prevent untrusted code execution
-      # This job operates on artifacts only
+      # Deliberately not the pull request's tree: only the signing action, and
+      # only from the default branch, which is the same trusted content that
+      # defines this workflow.
+      - name: Checkout signing action
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
       - name: Install Android build tools
-        run: |
-          sdkmanager "build-tools;36.0.0"
+        run: sdkmanager "build-tools;36.0.0"
 
-      - name: Download test APK from build workflow
+      - name: Download unsigned test APK
         uses: actions/download-artifact@v8
         with:
           name: letterbox-staging-apk
@@ -40,40 +70,27 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
 
-      - name: List downloaded artifacts
-        run: ls -la ./artifacts
+      # A different filename from the release builds, because it is a different
+      # app: the staging flavour carries the `.test` applicationId suffix and
+      # installs alongside the real one. The APK's own versionName additionally
+      # begins `ci-test-untrusted-`.
+      - name: Sign
+        id: sign
+        uses: ./.github/actions/sign-apk
+        with:
+          apk-directory: ./artifacts
+          output-name: letterbox-test.apk
+          keystore-base64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          keystore-password: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          key-alias: ${{ vars.ANDROID_KEY_ALIAS }}
+          expected-cert-sha256: ${{ vars.ANDROID_SIGNING_CERT_SHA256 }}
 
-      - name: Sign APK
-        run: |
-          set -euo pipefail
-          umask 077
-
-          # Rehydrate keystore
-          printf '%s' "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 --decode > signing.jks
-          chmod 600 signing.jks
-
-          # Select APK paths
-          UNSIGNED_APK="$(ls -1 ./artifacts/*.apk | head -n 1)"
-          SIGNED_APK="./artifacts/signed-$(basename "$UNSIGNED_APK")"
-
-          # Sign + verify
-          $ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner sign \
-            --ks signing.jks \
-            --ks-key-alias "${{ vars.ANDROID_KEY_ALIAS }}" \
-            --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            --key-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            --out "$SIGNED_APK" \
-            "$UNSIGNED_APK"
-
-          $ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner verify --verbose "$SIGNED_APK"
-
-          # Cleanup
-          rm -f signing.jks
-          rm -f "$UNSIGNED_APK"
-
-      - name: Upload signed test APK artifact
+      - name: Upload signed test APK
         uses: actions/upload-artifact@v7
         with:
           name: letterbox-staging-signed-apk
-          path: ./artifacts/*.apk
+          path: |
+            ${{ steps.sign.outputs.apk }}
+            ${{ steps.sign.outputs.metadata }}
           retention-days: 14
+          if-no-files-found: error

@@ -1,77 +1,247 @@
 name: Build
 
+# Every build output here is a pure function of its inputs. Naming those inputs
+# is what decides how many times the pipeline has to compute it:
+#
+#   rust output = f(source, crate set, cargo profile, target triple)
+#   apk         = g(source, variant, CI_BUILD_TYPE) + the .so files
+#
+# There are exactly three Rust identities in this repository:
+#
+#   host-dev        dev      x86_64-unknown-linux-gnu   fmt/clippy/test, bindgen
+#   host-release    release  x86_64-unknown-linux-gnu   Gradle unit tests (JNA)
+#   android-release release  3x *-linux-android         the .so files in the APKs
+#
+# Each is built by exactly one job below and named as its own cache key, so a
+# job that needs an identity another job already produced restores it instead
+# of recompiling it. The keys are the identities; they are not job names, and
+# they are not per-crate. Two jobs wanting the same identity must spell it the
+# same way or the memoisation silently misses — which is what used to happen
+# between the test job and the MASQUE smoke test.
+#
+# Note what is *not* an argument to `f`: `CI_BUILD_TYPE`. The native libraries
+# for a release tag are byte-identical to those for the commit it points at.
+# Only the APK differs, because versionName and versionCode are derived from
+# the build type. So `release.yml` calls this workflow to reassemble the APK
+# with `release` stamping, and the cross-compile behind it is a cache hit.
+#
+# The Android cross-compile and the Gradle assembly are separate jobs joined by
+# the `letterbox-jnilibs` artifact. That split is what lets `apks` run with no
+# Rust toolchain, no NDK and no cargo-ndk at all, and lets the UI-test workflow
+# consume the same libraries without rebuilding them.
+
 on:
   push:
+    # Tags deliberately absent. A tag push used to run this *and* then
+    # `release.yml` rebuilt the identical release APK from scratch. The release
+    # is now the single occasion on which a release-stamped APK is assembled.
     branches: ["main", "copilot/**"]
-    tags: ["v*"]
   pull_request:
     branches: ["main"]
   workflow_call:
     inputs:
       build_type:
-        description: "Build type override (release, prerelease, test)"
+        description: >-
+          Overrides the build type derived from the trigger. The APK's
+          versionName and versionCode are a function of it, so a caller that
+          needs release stamping must say so.
         required: false
         type: string
         default: ""
     outputs:
-      test-artifact-name:
-        description: "Name of the test APK artifact (unsigned)"
-        value: ${{ jobs.build.outputs.test-artifact-name }}
-      prod-release-artifact-name:
-        description: "Name of the prod release APK artifact (unsigned)"
-        value: ${{ jobs.build.outputs.prod-release-artifact-name }}
-      jnilibs-artifact-name:
-        description: "Name of the shared Android native-libraries artifact"
-        value: ${{ jobs.build.outputs.jnilibs-artifact-name }}
+      staging-debug-artifact:
+        description: Unsigned staging debug APK.
+        value: ${{ jobs.apks.outputs.staging-debug }}
+      prod-release-artifact:
+        description: Unsigned prod release APK.
+        value: ${{ jobs.apks.outputs.prod-release }}
+      jnilibs-artifact:
+        description: Android native libraries shared by every downstream job.
+        value: ${{ jobs.apks.outputs.jnilibs }}
+
+# Supersede a pull request's earlier runs; never cancel a run on a trusted ref,
+# because `pre-release.yml` and `release.yml` consume its artifacts.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Default deny at the workflow level; each job grants itself the minimum it
 # needs. A job added later then starts with no token scopes rather than
 # silently inheriting whatever the workflow happened to declare.
 permissions: {}
 
-# Restrict Rust compiler-cache *writes* to trusted refs (main + release tags).
-# Pull requests and feature branches still restore the cache read-only, so an
-# untrusted/unauthorized PR can never poison the shared cache.
 env:
-  RUST_CACHE_SAVE: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+  # Who may *write* to a shared cache. Restoring is unrestricted — GitHub
+  # already scopes reads to the current branch and the default branch — but a
+  # pull request runs untrusted code, so it must not be able to place an object
+  # that a later release build would link against.
+  #
+  # Derived from the ref rather than the event: pushing a tag or to `main`
+  # requires write access and is therefore already trusted, while a pull
+  # request's ref is `refs/pull/N/merge` and a feature branch is neither.
+  CACHE_WRITE: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+
+  NDK_VERSION: "26.1.10909125"
+  ANDROID_BUILD_TOOLS: "36.0.0"
+  ANDROID_PLATFORM: "android-36"
+
+  JNILIBS_ARTIFACT: letterbox-jnilibs
+  STAGING_DEBUG_ARTIFACT: letterbox-staging-apk
+  PROD_RELEASE_ARTIFACT: letterbox-prod-release-unsigned-apk
 
 jobs:
-  lint-and-test:
-    name: Lint and Test
+  # ---------------------------------------------------------------- host-dev
+  rust:
+    name: Rust checks
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0  # Full git history for version calculation
-          fetch-tags: true
-          submodules: recursive
-          # No step here talks to the remote, and every job runs project
-          # build code. The token is not left in `.git/config` for that
-          # code to find.
+          # No Gradle here, so no version resolution from git history, so no
+          # reason to pay for the full history.
+          # This job runs project build code (build.rs, proc macros). The token
+          # is not left in `.git/config` for that code to find.
           persist-credentials: false
 
-      - name: Determine Build Type
-        id: build-type
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust (host-dev)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: host-dev
+          save-if: ${{ env.CACHE_WRITE == 'true' }}
+
+      # One workspace invocation each. The three crates are members of the root
+      # workspace and share one `target/`, so per-crate invocations were three
+      # resolutions and three link passes over one dependency graph.
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      # Absent from CI until now, though it gates the code under review.
+      # `--all-targets` covers tests and benches, not just the libraries.
+      # Features are left at their defaults on purpose: `--all-features` would
+      # enable letterbox-proxy's `mock`, which is a different program.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+  # --------------------------------------------------------- android-release
+  native-libs:
+    name: Native libraries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The Android NDK ships only a linux-x86_64 host toolchain, so this
+      # cross-compile must run on an amd64 runner; an arm64 runner cannot
+      # execute the NDK clang.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache Rust (android-release)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android-release
+          save-if: ${{ env.CACHE_WRITE == 'true' }}
+
+      # No JDK step: `sdkmanager` runs on the runner image's preinstalled Java.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install NDK
         run: |
-          # Determine CI_BUILD_TYPE based on the event that triggered the workflow
-          # - release: tagged release (v*)
-          # - prerelease: main branch push
-          # - test: pull request
-          if [[ -n "${{ inputs.build_type }}" ]]; then
-            echo "CI_BUILD_TYPE=${{ inputs.build_type }}" >> $GITHUB_ENV
-          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "CI_BUILD_TYPE=release" >> $GITHUB_ENV
-          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
-            echo "CI_BUILD_TYPE=prerelease" >> $GITHUB_ENV
-          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            echo "CI_BUILD_TYPE=test" >> $GITHUB_ENV
-          else
-            echo "CI_BUILD_TYPE=local" >> $GITHUB_ENV
+          set -euo pipefail
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager --install "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install cargo-ndk
+        run: |
+          set -euo pipefail
+          # rust-cache restores ~/.cargo/bin, so this is usually a no-op. The
+          # previous form ended in `|| true`, which turned a failed install
+          # into a confusing failure two steps later.
+          if ! command -v cargo-ndk > /dev/null 2>&1; then
+            cargo install cargo-ndk --locked
           fi
-          echo "Build type: $CI_BUILD_TYPE"
+
+      # One workspace invocation builds letterbox-core, letterbox-proxy and
+      # usque-core for all three ABIs, reusing one compile of the shared
+      # dependency graph.
+      #
+      # `--lib` is load-bearing: without it this also cross-compiled the two
+      # `uniffi-bindgen` *binaries* for every ABI — six links of a host-only
+      # developer tool that never enters an APK.
+      #
+      # usque-core pulls in quiche with vendored BoringSSL, so this also
+      # cross-compiles C via cmake. A failure for one ABI only points at
+      # BoringSSL's toolchain detection rather than at the Rust.
+      - name: Cross-compile for Android
+        run: |
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
+            -o "${{ github.workspace }}/app/src/main/jniLibs" \
+            build --release --workspace --lib
+
+      # Exhaustive, unlike the `find ... | head -1 || (echo ERROR; exit 1)`
+      # this replaces: `find` exits 0 when it matches nothing, so that `||`
+      # never fired and a missing library passed the check.
+      - name: Verify every ABI carries every library
+        run: |
+          set -euo pipefail
+          missing=0
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            for lib in letterbox_core letterbox_proxy; do
+              path="app/src/main/jniLibs/$abi/lib$lib.so"
+              if [[ -f "$path" ]]; then
+                printf '  ok  %s (%s bytes)\n' "$path" "$(stat -c%s "$path")"
+              else
+                echo "::error::missing $path"
+                missing=1
+              fi
+            done
+          done
+          exit "$missing"
+
+      - name: Upload native libraries
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.JNILIBS_ARTIFACT }}
+          path: app/src/main/jniLibs
+          retention-days: 7
+          if-no-files-found: error
+
+  # ------------------------------------------------------------ host-release
+  android-checks:
+    name: Android lint and unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Gradle resolves the version from git during configuration.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -84,103 +254,222 @@ jobs:
 
       - name: Install Android components
         run: |
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          set -euo pipefail
+          sdkmanager "platform-tools" "platforms;${ANDROID_PLATFORM}" "build-tools;${ANDROID_BUILD_TOOLS}"
+          yes | sdkmanager --licenses > /dev/null
 
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses
-
-      # Host-only toolchain: lint + unit tests build the Rust libs for the host
-      # (via Gradle's cargoHostBuild), never the Android targets, so no NDK or
-      # cargo-ndk is needed in this job.
+      # Host toolchain only. Gradle's `cargoHostBuild` builds the libraries the
+      # JVM tests load through JNA; it needs no NDK and no Android targets.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust build (host)
+      # A distinct identity from host-dev — `cargoHostBuild` runs
+      # `cargo build --release`, which populates `target/release` rather than
+      # `target/debug`. Sharing one key between the two would make each job
+      # cache the other's outputs on every run.
+      - name: Cache Rust (host-release)
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: host
-          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
+          shared-key: host-release
+          save-if: ${{ env.CACHE_WRITE == 'true' }}
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ env.CACHE_WRITE != 'true' }}
 
-      - name: Rust format check
-        run: |
-          cargo fmt --all -- --check
-        working-directory: rust/letterbox-core
+      # `test` runs the suite once per variant: prodDebug, prodRelease,
+      # stagingDebug, stagingRelease — four Kotlin compiles and four JVM runs of
+      # assertions that are identical, because nothing under `app/src/test`
+      # references BuildConfig, applicationId, a flavour resource or FLAVOR.
+      # One variant is the whole suite.
+      #
+      # `--continue` so a lint failure still reports the test results, instead
+      # of hiding them behind the first failure.
+      - name: Lint and unit tests
+        run: ./gradlew lint testProdDebugUnitTest --continue --no-daemon
 
-      - name: Rust format check (proxy)
-        run: |
-          cargo fmt --all -- --check
-        working-directory: rust/letterbox-proxy
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-check-reports
+          path: app/build/reports
+          retention-days: 7
+          if-no-files-found: ignore
 
-      # Vendored from usque-rs. Its own suite is the inherited evidence that the
-      # protocol code still behaves, so it gates CI like any other crate.
-      - name: Rust format check (usque-core)
-        run: |
-          cargo fmt --all -- --check
-        working-directory: rust/usque-core
-
-      - name: Rust tests
-        run: cargo test
-        working-directory: rust/letterbox-core
-
-      - name: Rust tests (proxy)
-        run: cargo test
-        working-directory: rust/letterbox-proxy
-
-      - name: Rust tests (usque-core)
-        run: cargo test
-        working-directory: rust/usque-core
-
-      - name: Gradle permissions
-        run: chmod +x gradlew
-
-      - name: Android lint
-        run: ./gradlew lint --no-daemon
-
-      - name: Android unit tests (including FFI integration tests)
-        # Gradle's test task depends on cargoHostBuild which builds both letterbox-core
-        # and letterbox-proxy libraries to target/release/ before running tests
-        run: ./gradlew test --no-daemon
-
-  warp-smoke-test:
-    name: Real MASQUE smoke test
+  # -------------------------------------------------------------------- APKs
+  apks:
+    name: Assemble APKs
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # Only the native libraries. Assembly does not depend on lint or on the
+    # test suites, and gating it behind them would put their runtime on the
+    # critical path of every build for no added signal — each job already
+    # reports its own failure, and downstream signing keys off the whole
+    # workflow's conclusion.
+    needs: native-libs
     permissions:
       contents: read
-    # The full privacy path (provision a real WARP device -> MASQUE CONNECT-IP
-    # -> DoH -> TLS -> HTTP image fetch -> delete device) is exercised against
-    # live Cloudflare here. It is inherently flaky (network, rate limits, anycast
-    # routing), so a failure is surfaced as a warning and never gates the build.
-    timeout-minutes: 10
+    outputs:
+      staging-debug: ${{ steps.names.outputs.staging-debug }}
+      prod-release: ${{ steps.names.outputs.prod-release }}
+      jnilibs: ${{ steps.names.outputs.jnilibs }}
+    env:
+      # The one parameter that distinguishes otherwise identical APKs, and the
+      # only job that consumes it. It was previously recomputed by a nine-line
+      # shell conditional in two jobs, neither of which used the result; that
+      # shell also wrote to $GITHUB_ENV and then echoed the variable, which is
+      # empty in the step that set it.
+      CI_BUILD_TYPE: >-
+        ${{ inputs.build_type != '' && inputs.build_type
+         || startsWith(github.ref, 'refs/tags/v') && 'release'
+         || github.event_name == 'pull_request' && 'test'
+         || github.ref == 'refs/heads/main' && 'prerelease'
+         || 'local' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          submodules: recursive
-          # No step here talks to the remote, and every job runs project
-          # build code. The token is not left in `.git/config` for that
-          # code to find.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android components
+        run: |
+          set -euo pipefail
+          sdkmanager "platform-tools" "platforms;${ANDROID_PLATFORM}" "build-tools;${ANDROID_BUILD_TOOLS}"
+          yes | sdkmanager --licenses > /dev/null
+
+      # No Rust toolchain, no NDK, no cargo-ndk: `cargoNdkBuild` is gated on
+      # `-PrustBuild=true` and stays skipped, and `assemble` pulls in no task
+      # that shells out to cargo. The libraries arrive as an artifact instead.
+      - name: Download native libraries
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.JNILIBS_ARTIFACT }}
+          path: app/src/main/jniLibs
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ env.CACHE_WRITE != 'true' }}
+
+      # Both variants in one invocation. They share configuration, the
+      # dependency graph and every task whose inputs do not differ by variant.
+      #
+      # `assembleStagingDebugAndroidTest` is here to compile the instrumented
+      # sources, not to run them. Nothing in this workflow compiled
+      # `app/src/androidTest` before, so a change to an FFI record could delete a
+      # field an instrumented test still read and every job here would stay
+      # green: the break surfaced only in Android UI Tests, which runs on a
+      # separate trigger, minutes later — and never at all for a pull request,
+      # since that workflow filters to `main` and `copilot/**`. Compiling here
+      # costs one dex-less variant compile and moves the failure to the job that
+      # caused it. (This is what the old androidTest artifact upload appeared to
+      # cover; it had `if-no-files-found: ignore` and uploaded nothing, because
+      # `assembleStagingDebug` does not build androidTest.)
+      - name: Assemble
+        run: |
+          ./gradlew assembleStagingDebug assembleProdRelease \
+            assembleStagingDebugAndroidTest --no-daemon
+
+      - name: Verify the APKs carry every ABI
+        run: |
+          set -euo pipefail
+          missing=0
+          for apk in \
+            app/build/outputs/apk/staging/debug/*.apk \
+            app/build/outputs/apk/prod/release/*.apk
+          do
+            for abi in arm64-v8a armeabi-v7a x86_64; do
+              for lib in letterbox_core letterbox_proxy; do
+                if unzip -l "$apk" "lib/$abi/lib$lib.so" > /dev/null 2>&1; then
+                  printf '  ok  %s :: lib/%s/lib%s.so\n' "$(basename "$apk")" "$abi" "$lib"
+                else
+                  echo "::error::$apk is missing lib/$abi/lib$lib.so"
+                  missing=1
+                fi
+              done
+            done
+          done
+          exit "$missing"
+
+      - name: Publish artifact names
+        id: names
+        run: |
+          set -euo pipefail
+          {
+            echo "staging-debug=$STAGING_DEBUG_ARTIFACT"
+            echo "prod-release=$PROD_RELEASE_ARTIFACT"
+            echo "jnilibs=$JNILIBS_ARTIFACT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload staging debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.STAGING_DEBUG_ARTIFACT }}
+          path: app/build/outputs/apk/staging/debug/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload prod release APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PROD_RELEASE_ARTIFACT }}
+          path: app/build/outputs/apk/prod/release/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+  # --------------------------------------------------- host-dev, network-gated
+  warp-smoke-test:
+    name: Real MASQUE smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    # The full privacy path (provision a real WARP device -> MASQUE CONNECT-IP
+    # -> DoH -> TLS -> HTTP image fetch -> delete device) is exercised against
+    # live Cloudflare. It is inherently flaky (network, rate limits, anycast
+    # routing), so a failure is surfaced as a warning and never gates the build.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
           persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust build (proxy host)
+      # Same identity as the `rust` job: the same crates, the same dev profile,
+      # the same host triple. It used `shared-key: warp`, so it never saw what
+      # that job had already built — and it passed `workspaces:
+      # rust/letterbox-proxy`, which is a *member* of the root workspace, so
+      # cargo writes to `<repo>/target` and that path does not exist. The cache
+      # was empty on both ends, and every run recompiled quiche with vendored
+      # BoringSSL from scratch.
+      - name: Cache Rust (host-dev)
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust/letterbox-proxy
-          shared-key: warp
-          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
+          shared-key: host-dev
+          save-if: ${{ env.CACHE_WRITE == 'true' }}
 
-      # Non-blocking: the step may fail without failing the job; the outcome is
-      # turned into a warning below.
+      # Non-blocking: the step may fail without failing the job.
       #
       # The MASQUE path has one dependency nothing local can check: that
       # Cloudflare keeps accepting `api.cloudflare.com` as the tunnel SNI. That
-      # is a server-side policy we do not control and could lose without notice,
-      # so it is worth a standing check here rather than a user-reported outage.
+      # is a server-side policy we do not control and could lose without
+      # notice, so it is worth a standing check rather than a user-reported
+      # outage.
       - name: Run real Cloudflare MASQUE end-to-end test
         id: masque
         continue-on-error: true
@@ -189,170 +478,11 @@ jobs:
 
       - name: Report MASQUE test outcome
         if: always()
+        env:
+          OUTCOME: ${{ steps.masque.outcome }}
         run: |
-          if [[ "${{ steps.masque.outcome }}" == "success" ]]; then
+          if [[ "$OUTCOME" == "success" ]]; then
             echo "Real Cloudflare MASQUE end-to-end test passed (SNI api.cloudflare.com accepted)."
           else
-            echo "::warning title=Real MASQUE test failed::The live Cloudflare MASQUE end-to-end test did not pass (outcome: ${{ steps.masque.outcome }}). Non-blocking. If it fails repeatedly, check whether the substituted SNI (tunnel::masque::MASQUE_SNI) is still accepted before suspecting the tunnel; masque_real has a separate case that isolates exactly that."
+            echo "::warning title=Real MASQUE test failed::The live Cloudflare MASQUE end-to-end test did not pass (outcome: ${OUTCOME}). Non-blocking. If it fails repeatedly, check whether the substituted SNI (tunnel::masque::MASQUE_SNI) is still accepted before suspecting the tunnel; masque_real has a separate case that isolates exactly that."
           fi
-
-  build:
-    name: Build APKs
-    runs-on: ubuntu-24.04
-    needs: lint-and-test
-    outputs:
-      test-artifact-name: ${{ steps.artifact-names.outputs.test }}
-      prod-release-artifact-name: ${{ steps.artifact-names.outputs.prod-release }}
-      jnilibs-artifact-name: ${{ steps.artifact-names.outputs.jnilibs }}
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0  # Full git history for version calculation
-          fetch-tags: true
-          submodules: recursive
-          # No step here talks to the remote, and every job runs project
-          # build code. The token is not left in `.git/config` for that
-          # code to find.
-          persist-credentials: false
-
-      - name: Determine Build Type
-        id: build-type
-        run: |
-          # Determine CI_BUILD_TYPE based on the event that triggered the workflow
-          if [[ -n "${{ inputs.build_type }}" ]]; then
-            echo "CI_BUILD_TYPE=${{ inputs.build_type }}" >> $GITHUB_ENV
-          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "CI_BUILD_TYPE=release" >> $GITHUB_ENV
-          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
-            echo "CI_BUILD_TYPE=prerelease" >> $GITHUB_ENV
-          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            echo "CI_BUILD_TYPE=test" >> $GITHUB_ENV
-          else
-            echo "CI_BUILD_TYPE=local" >> $GITHUB_ENV
-          fi
-          echo "Build type: $CI_BUILD_TYPE"
-
-      - name: Set up JDK
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Install Android components
-        run: |
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
-
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses
-
-      # The Android NDK only ships a linux-x86_64 host toolchain, so this Android
-      # cross-compile must run on an amd64 runner (ubuntu-24.04); an arm64 runner
-      # cannot execute the NDK clang. The optimized release libraries are built
-      # once here and shared with downstream jobs via the jniLibs artifact.
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
-
-      - name: Cache Rust build (android)
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: android
-          save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked || true
-
-      - name: Install and pin NDK
-        run: |
-          sdkmanager --install "ndk;26.1.10909125"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
-
-      - name: Gradle permissions
-        run: chmod +x gradlew
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      # Single workspace invocation builds letterbox-core, letterbox-proxy and
-      # usque-core for all three ABIs in one pass, reusing the compiled
-      # dependency graph across crates (per-crate invocations recompiled the
-      # shared dependencies once each).
-      #
-      # usque-core pulls in quiche with vendored BoringSSL, so this step also
-      # cross-compiles C via cmake. If it fails for one ABI only, suspect
-      # BoringSSL's toolchain detection rather than the Rust code.
-      - name: Build Android native libraries (release, all ABIs)
-        run: |
-          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ${{ github.workspace }}/app/src/main/jniLibs build --manifest-path ${{ github.workspace }}/Cargo.toml --release
-        working-directory: rust
-
-      - name: Verify native libraries were generated
-        run: |
-          echo "Checking for generated .so files in jniLibs:"
-          find ${{ github.workspace }}/app/src/main/jniLibs -maxdepth 2 -type f -name "*.so" -print
-          if [ -z "$(find ${{ github.workspace }}/app/src/main/jniLibs -maxdepth 2 -type f -name "*.so")" ]; then
-            echo "ERROR: No .so files found in jniLibs!"
-            exit 1
-          fi
-          echo "Verifying both letterbox_core and letterbox_proxy libraries:"
-          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_core*.so" | head -1 || (echo "ERROR: letterbox_core not found!" && exit 1)
-          find ${{ github.workspace }}/app/src/main/jniLibs -type f -name "*letterbox_proxy*.so" | head -1 || (echo "ERROR: letterbox_proxy not found!" && exit 1)
-
-      # Share the freshly built native libraries so the instrumented UI test
-      # workflow downloads them instead of paying for a second Android cross-compile.
-      - name: Upload shared native libraries artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: letterbox-jnilibs
-          path: app/src/main/jniLibs
-          retention-days: 7
-          if-no-files-found: error
-
-      - name: Build test debug APK
-        run: ./gradlew assembleStagingDebug --no-daemon
-
-      - name: Build prod release APK
-        run: ./gradlew assembleProdRelease --no-daemon
-
-      - name: Verify native libraries in APKs
-        run: |
-          echo "Checking for .so files in test debug APK:"
-          unzip -l app/build/outputs/apk/staging/debug/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in test debug APK!" && exit 1)
-          echo "Checking for .so files in prod release APK:"
-          unzip -l app/build/outputs/apk/prod/release/*.apk "lib/*/*.so" || (echo "ERROR: No .so files found in prod release APK!" && exit 1)
-
-      - name: Set artifact names
-        id: artifact-names
-        run: |
-          echo "test=letterbox-staging-apk" >> $GITHUB_OUTPUT
-          echo "prod-release=letterbox-prod-release-unsigned-apk" >> $GITHUB_OUTPUT
-          echo "jnilibs=letterbox-jnilibs" >> $GITHUB_OUTPUT
-
-      - name: Upload test APK artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.artifact-names.outputs.test }}
-          path: app/build/outputs/apk/staging/debug/*.apk
-          retention-days: 30
-
-      - name: Upload prod release APK artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.artifact-names.outputs.prod-release }}
-          path: app/build/outputs/apk/prod/release/*.apk
-          retention-days: 30
-
-      - name: Upload test androidTest APK artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: letterbox-staging-androidTest-apk
-          path: app/build/outputs/apk/androidTest/staging/debug/*.apk
-          retention-days: 30
-          if-no-files-found: ignore

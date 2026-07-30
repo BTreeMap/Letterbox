@@ -95,7 +95,6 @@ jobs:
           # git during configuration.
           fetch-depth: 0
           fetch-tags: true
-          submodules: recursive
           # This job runs untrusted build code. Nothing here needs to talk to
           # the remote, so the token is not left on disk for that code to find.
           persist-credentials: false
@@ -118,17 +117,23 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Gradle permissions
-        run: chmod +x gradlew
-
       # Host toolchain only. UniFFI reads the exported metadata out of a
       # compiled library, and that metadata is target-independent, so the
       # bindings do not require the Android NDK or cargo-ndk.
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust
+      # `cargo build` with no profile flag is the same identity `build.yml`'s
+      # Rust job produces — dev profile, host triple, same workspace — so this
+      # names that key and restores it instead of compiling the graph again.
+      # It does not write: one identity, one producer. Both workflows run on a
+      # push to `main`, and two jobs racing to save the same key just means one
+      # of them uploads for nothing.
+      - name: Cache Rust (host-dev)
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: host-dev
+          save-if: false
 
       # KSP only needs to process annotations, so this builds no Rust and
       # assembles nothing. One variant is enough: the schema does not vary by
