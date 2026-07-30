@@ -23,70 +23,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * Public data class representing a history entry for the UI layer.
- * 
- * ## Extended Fields for Search/Filter/Sort
- * 
- * This class now includes email metadata extracted during ingestion:
- * - subject: Email subject for display and search
- * - senderEmail/senderName: For sender-based filtering and display
- * - emailDate: For date-based sorting and filtering
- * - hasAttachments: For attachment filter
- */
-data class HistoryEntry(
-    val id: Long,
-    val blobHash: String,
-    val displayName: String,
-    val originalUri: String?,
-    val lastAccessed: Long,
-    // Extended fields for search/filter/sort
-    val subject: String = "",
-    val senderEmail: String = "",
-    val senderName: String = "",
-    val emailDate: Long = 0,
-    val hasAttachments: Boolean = false,
-    /** First 500 characters of the email body for full-text search. */
-    val bodyPreview: String = ""
-) {
-    /**
-     * Get the display sender - name if available, otherwise email.
-     */
-    val displaySender: String
-        get() = senderName.ifBlank { senderEmail }
-    
-    /**
-     * Get the effective date for sorting/display.
-     * Falls back to lastAccessed if emailDate is 0 (unparseable).
-     */
-    val effectiveDate: Long
-        get() = if (emailDate > 0) emailDate else lastAccessed
-}
-
-/**
- * Data class representing cache storage statistics.
- */
-data class CacheStats(
-    /** Total number of cached email entries. */
-    val entryCount: Int,
-    /** Total size of cached blobs in bytes. */
-    val totalSizeBytes: Long
-)
-
-/**
- * Email metadata extracted from parsing for ingestion.
- * Used to populate the history item with searchable fields.
- */
-data class EmailMetadata(
-    val subject: String = "",
-    val senderEmail: String = "",
-    val senderName: String = "",
-    val recipientEmails: String = "",
-    val recipientNames: String = "",
-    val emailDate: Long = 0,
-    val hasAttachments: Boolean = false,
-    val bodyPreview: String = ""
-)
+// HistoryEntry, CacheStats and EmailMetadata live in HistoryModels.kt so the
+// domain values stay free of Room and coroutine dependencies.
 
 /**
  * Repository for managing email file history with Content-Addressable Storage (CAS).

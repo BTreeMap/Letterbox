@@ -20,7 +20,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import org.joefang.letterbox.data.SortField
 import org.joefang.letterbox.data.SortDirection
-import org.joefang.letterbox.data.EmailFilter
 
 /**
  * UI State for the main screen.
@@ -68,15 +67,34 @@ class EmailViewModel(
         // Observe history changes
         viewModelScope.launch {
             repository.items.collect { items ->
-                _uiState.update { state ->
-                    val filtered = applyFiltersAndSort(items, state)
-                    state.copy(history = items, filteredHistory = filtered)
-                }
+                _uiState.update { it.copy(history = items).refiltered() }
                 // Refresh cache stats whenever history changes
                 refreshCacheStats()
             }
         }
     }
+
+    /**
+     * The query described by this state's own search, filter and sort fields.
+     */
+    private fun EmailUiState.query(): HistoryQuery = HistoryQuery(
+        text = searchQuery,
+        onlyWithAttachments = filterHasAttachments,
+        sortField = sortField,
+        sortDirection = sortDirection
+    )
+
+    /**
+     * Re-derive [EmailUiState.filteredHistory] from this state's own inputs.
+     *
+     * `filteredHistory` is a cached function of `(history, query)`, so exactly
+     * one place recomputes it and every mutator ends with a call here. The
+     * previous code instead built a throwaway `state.copy(...)` to hand to the
+     * filter and then built the real copy again, restating each field twice —
+     * five times over, once per mutator.
+     */
+    private fun EmailUiState.refiltered(): EmailUiState =
+        copy(filteredHistory = query().applyTo(history))
     
     /**
      * Refresh cache statistics.
@@ -93,120 +111,41 @@ class EmailViewModel(
     // =========================================================================
     
     /**
-     * Update the search query and filter results.
+     * Update the search query and re-filter results.
      */
     fun setSearchQuery(query: String) {
-        _uiState.update { state ->
-            val filtered = applyFiltersAndSort(state.history, state.copy(searchQuery = query))
-            state.copy(searchQuery = query, filteredHistory = filtered)
-        }
+        _uiState.update { it.copy(searchQuery = query).refiltered() }
     }
-    
+
     /**
-     * Toggle search mode.
+     * Enter or leave search mode. Leaving clears the query.
      */
     fun setSearchActive(active: Boolean) {
-        _uiState.update { state ->
-            if (!active) {
-                // Clear search when deactivating
-                val filtered = applyFiltersAndSort(state.history, state.copy(searchQuery = "", isSearchActive = false))
-                state.copy(searchQuery = "", isSearchActive = false, filteredHistory = filtered)
+        _uiState.update {
+            if (active) {
+                it.copy(isSearchActive = true)
             } else {
-                state.copy(isSearchActive = true)
+                it.copy(isSearchActive = false, searchQuery = "").refiltered()
             }
         }
     }
-    
+
     /**
      * Update the sort field and direction.
      */
     fun setSortOrder(field: SortField, direction: SortDirection) {
-        _uiState.update { state ->
-            val filtered = applyFiltersAndSort(state.history, state.copy(sortField = field, sortDirection = direction))
-            state.copy(sortField = field, sortDirection = direction, filteredHistory = filtered)
+        _uiState.update {
+            it.copy(sortField = field, sortDirection = direction).refiltered()
         }
     }
-    
+
     /**
-     * Toggle the has attachments filter.
+     * Toggle the has-attachments filter.
      */
     fun toggleAttachmentsFilter() {
-        _uiState.update { state ->
-            val newValue = !state.filterHasAttachments
-            val filtered = applyFiltersAndSort(state.history, state.copy(filterHasAttachments = newValue))
-            state.copy(filterHasAttachments = newValue, filteredHistory = filtered)
+        _uiState.update {
+            it.copy(filterHasAttachments = !it.filterHasAttachments).refiltered()
         }
-    }
-    
-    /**
-     * Clear all filters.
-     */
-    fun clearFilters() {
-        _uiState.update { state ->
-            val filtered = applyFiltersAndSort(
-                state.history, 
-                state.copy(
-                    searchQuery = "",
-                    filterHasAttachments = false,
-                    isSearchActive = false
-                )
-            )
-            state.copy(
-                searchQuery = "",
-                filterHasAttachments = false,
-                isSearchActive = false,
-                filteredHistory = filtered
-            )
-        }
-    }
-    
-    /**
-     * Apply filters and sorting to the history list.
-     * Uses in-memory filtering for immediate responsiveness.
-     * 
-     * ## Full-Text Search
-     * 
-     * The search includes the following fields for a true full-text search:
-     * - subject: Email subject line
-     * - senderName: Sender's display name
-     * - senderEmail: Sender's email address
-     * - displayName: File display name (fallback)
-     * - bodyPreview: First 500 characters of email body content
-     */
-    private fun applyFiltersAndSort(items: List<HistoryEntry>, state: EmailUiState): List<HistoryEntry> {
-        var result = items
-        
-        // Apply search filter - true full-text search across all indexed fields
-        if (state.searchQuery.isNotBlank()) {
-            val query = state.searchQuery.lowercase()
-            result = result.filter { entry ->
-                entry.subject.lowercase().contains(query) ||
-                entry.senderName.lowercase().contains(query) ||
-                entry.senderEmail.lowercase().contains(query) ||
-                entry.displayName.lowercase().contains(query) ||
-                entry.bodyPreview.lowercase().contains(query)
-            }
-        }
-        
-        // Apply attachments filter
-        if (state.filterHasAttachments) {
-            result = result.filter { it.hasAttachments }
-        }
-        
-        // Apply sorting
-        val comparator: Comparator<HistoryEntry> = when (state.sortField) {
-            SortField.DATE -> compareBy { it.effectiveDate }
-            SortField.SUBJECT -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.subject }
-            SortField.SENDER -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.displaySender }
-        }
-        
-        result = result.sortedWith(comparator)
-        
-        if (state.sortDirection == SortDirection.DESCENDING) {
-            result = result.reversed()
-        }
-        
-        return result
     }
 
     /**

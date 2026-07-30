@@ -195,27 +195,8 @@ data class EmailFtsEntity(
     val bodyPreview: String
 )
 
-/**
- * Sort options for the email history list.
- */
-enum class SortField {
-    /** Sort by email date (from Date header, falling back to last accessed). */
-    DATE,
-    /** Sort by email subject alphabetically. */
-    SUBJECT,
-    /** Sort by sender name/email alphabetically. */
-    SENDER
-}
-
-/**
- * Sort direction for the email history list.
- */
-enum class SortDirection {
-    /** Ascending order (A-Z, oldest first). */
-    ASCENDING,
-    /** Descending order (Z-A, newest first). */
-    DESCENDING
-}
+// SortField and SortDirection live in HistoryOrder.kt: they are domain values
+// with no Room dependency, so they stay out of this entity-declaration file.
 
 /**
  * Filter criteria for the email history list.
