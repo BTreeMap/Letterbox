@@ -58,18 +58,22 @@ class RemoteImageWarpE2ETest {
             return@runBlocking
         }
 
-        assertEquals(
-            "WARP tunnel should be connected after diagnostics self-test",
-            "connected",
-            diagnostics.connectionState.lowercase()
-        )
-        // The point of the migration: a connected tunnel is not enough, it has to
-        // be the MASQUE one. Without this the suite would go green on a silent
-        // fallback to the transport we are trying to leave.
+        // Which transport was *selected* is asserted before whether it connected,
+        // and deliberately so. `Link` picks at construction, so `protocol` is
+        // meaningful even on a tunnel that never came up — whereas asserting
+        // connectivity first throws away the one fact that says whether MASQUE
+        // was even attempted. An earlier run failed on connectivity and told us
+        // nothing about the migration as a result.
         assertEquals(
             "tunnel should be carried by MASQUE on Android",
             "masque",
             diagnostics.protocol
+        )
+        assertEquals(
+            "WARP tunnel should be connected after diagnostics self-test " +
+                "(transport=${diagnostics.protocol}, endpoint=${diagnostics.endpointHost})",
+            "connected",
+            diagnostics.connectionState.lowercase()
         )
         assertTrue("WARP should be enabled", diagnostics.warpEnabled)
         assertNotNull(

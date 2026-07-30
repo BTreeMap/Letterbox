@@ -1062,12 +1062,16 @@ private fun SettingsContent(
                     text = "Use privacy proxy",
                     style = MaterialTheme.typography.titleSmall
                 )
+                // Deliberately short enough to render on one line. This sheet
+                // does not scroll, and its Storage section sits just above the
+                // fold, so a subtitle that wraps here puts "Clear cache" out of
+                // reach entirely. The full explanation lives in the disclosure
+                // at the foot of the sheet, which has room for it.
                 Text(
                     text = if (preferences.enablePrivacyProxy) {
-                        "Images are fetched through Cloudflare WARP, hiding your IP " +
-                            "from the sender"
+                        "Hides your IP using Cloudflare WARP"
                     } else {
-                        "Images are fetched directly, exposing your IP to the sender"
+                        "Loads images directly, exposing your IP"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
