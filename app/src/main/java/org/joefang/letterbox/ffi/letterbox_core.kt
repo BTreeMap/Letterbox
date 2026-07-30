@@ -877,7 +877,7 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_letterbox_core_checksum_func_extract_remote_images() != 33308.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_func_extract_remote_images() != 27542.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_core_checksum_func_parse_eml() != 48112.toShort()) {
@@ -946,10 +946,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_core_checksum_method_emailhandle_to() != 837.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_attachment_to_path() != 9686.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_attachment_to_path() != 37276.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_resource_to_path() != 46693.toShort()) {
+    if (lib.uniffi_letterbox_core_checksum_method_emailhandle_write_resource_to_path() != 7585.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1375,7 +1375,12 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
 
 /**
  * Holds parsed email content in Rust memory.
- * Kotlin code holds a reference to this object and calls methods to retrieve content.
+ *
+ * Kotlin holds an `Arc` of this and calls the accessors below. The parsed
+ * message is immutable for the handle's whole lifetime, which is why it sits
+ * behind no lock: an immutable value is already `Sync`, and a `Mutex` here
+ * would buy nothing but a poisoning case that every accessor would then have to
+ * invent an answer for.
  */
 public interface EmailHandleInterface {
     
@@ -1492,7 +1497,7 @@ public interface EmailHandleInterface {
     /**
      * Write an attachment directly to a file path.
      * This avoids copying large attachments across the FFI boundary.
-     * Returns true on success, false if attachment not found.
+     * Returns true on success, false if the index is out of range.
      *
      * # Security
      * The caller is responsible for validating that `path` is a safe, sandboxed location.
@@ -1505,7 +1510,7 @@ public interface EmailHandleInterface {
     /**
      * Write an inline resource directly to a file path.
      * This avoids copying large resources across the FFI boundary.
-     * Returns true on success.
+     * Returns true on success, false if the Content-ID is unknown.
      *
      * # Security
      * The caller is responsible for validating that `path` is a safe, sandboxed location.
@@ -1520,7 +1525,12 @@ public interface EmailHandleInterface {
 
 /**
  * Holds parsed email content in Rust memory.
- * Kotlin code holds a reference to this object and calls methods to retrieve content.
+ *
+ * Kotlin holds an `Arc` of this and calls the accessors below. The parsed
+ * message is immutable for the handle's whole lifetime, which is why it sits
+ * behind no lock: an immutable value is already `Sync`, and a `Mutex` here
+ * would buy nothing but a poisoning case that every accessor would then have to
+ * invent an answer for.
  */
 open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
 {
@@ -1952,7 +1962,7 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     /**
      * Write an attachment directly to a file path.
      * This avoids copying large attachments across the FFI boundary.
-     * Returns true on success, false if attachment not found.
+     * Returns true on success, false if the index is out of range.
      *
      * # Security
      * The caller is responsible for validating that `path` is a safe, sandboxed location.
@@ -1977,7 +1987,7 @@ open class EmailHandle: Disposable, AutoCloseable, EmailHandleInterface
     /**
      * Write an inline resource directly to a file path.
      * This avoids copying large resources across the FFI boundary.
-     * Returns true on success.
+     * Returns true on success, false if the Content-ID is unknown.
      *
      * # Security
      * The caller is responsible for validating that `path` is a safe, sandboxed location.
@@ -2560,7 +2570,7 @@ public object FfiConverterSequenceTypeResourceMeta: FfiConverterRustBuffer<List<
          * Extract all remote image URLs from HTML content.
          * Uses proper HTML parsing instead of regex to handle edge cases.
          *
-         * Returns a list of remote image URLs found in <img src="..."> tags.
+         * Returns a list of remote image URLs found in `<img src="...">` tags.
          * Only returns http:// and https:// URLs, excludes cid: URLs.
          */ fun `extractRemoteImages`(`html`: kotlin.String): List<RemoteImage> {
             return FfiConverterSequenceTypeRemoteImage.lift(

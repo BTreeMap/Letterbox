@@ -1,12 +1,27 @@
-use mail_parser::{MessageParser, MimeHeaders};
+//! EML parsing for Letterbox, exposed to Kotlin via UniFFI.
+//!
+//! Parsing happens once, in [`parse_eml`], and produces an immutable
+//! [`EmailHandle`]. Every accessor is therefore a pure read of already-decided
+//! data: there is no lock, no interior mutability, and no accessor that can fail
+//! for a reason unrelated to what the caller asked for.
+
+use mail_parser::{Addr, Address, MessageParser, MessagePart, MimeHeaders};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, LazyLock};
 
 uniffi::setup_scaffolding!();
+
+/// MIME type assumed for a part that declares none, per RFC 2045 §5.2.
+const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
+
+/// Subject used when the message carries no `Subject` header.
+const UNTITLED_SUBJECT: &str = "Untitled";
+
+/// How many characters of the plain-text body feed the search index.
+const PREVIEW_CHARS: usize = 500;
 
 /// Error type for email parsing operations.
 #[derive(Debug, thiserror::Error, PartialEq, Eq, uniffi::Error)]
@@ -21,11 +36,24 @@ pub enum ParseError {
     IoError { details: String },
 }
 
+impl From<std::io::Error> for ParseError {
+    fn from(err: std::io::Error) -> Self {
+        ParseError::IoError {
+            details: err.to_string(),
+        }
+    }
+}
+
 /// Holds parsed email content in Rust memory.
-/// Kotlin code holds a reference to this object and calls methods to retrieve content.
+///
+/// Kotlin holds an `Arc` of this and calls the accessors below. The parsed
+/// message is immutable for the handle's whole lifetime, which is why it sits
+/// behind no lock: an immutable value is already `Sync`, and a `Mutex` here
+/// would buy nothing but a poisoning case that every accessor would then have to
+/// invent an answer for.
 #[derive(uniffi::Object)]
 pub struct EmailHandle {
-    inner: Mutex<ParsedMessage>,
+    message: ParsedMessage,
 }
 
 /// Internal parsed message structure.
@@ -60,18 +88,18 @@ pub struct AddressInfo {
 }
 
 /// Internal representation of an inline asset with metadata.
-#[derive(Clone)]
 struct InlineAsset {
     content_type: String,
     content: Vec<u8>,
 }
 
 /// Represents an email attachment.
-#[derive(Clone)]
+///
+/// The byte count is not stored: it is `content.len()`, and a separately held
+/// `size` is a second source of truth that can only ever be wrong.
 struct Attachment {
     name: String,
     content_type: String,
-    size: u64,
     content: Vec<u8>,
 }
 
@@ -100,6 +128,91 @@ pub struct ResourceMeta {
     pub is_small: bool,
 }
 
+/// What role one MIME part plays in the message.
+///
+/// The three cases are exclusive and exhaustive. They replace four interacting
+/// booleans (`is_inline_cid`, `is_body_part`, `is_attachment_candidate`,
+/// `should_exclude`) whose sixteen combinations described only these three
+/// outcomes — the other thirteen were unreachable but nothing said so.
+enum PartRole {
+    /// Referenced from the body by a `cid:` URL.
+    Inline { cid: String },
+    /// A file the user can save, under the name the message gave it.
+    Attached { name: String },
+    /// A body part, a multipart container, or an empty part: carried by neither
+    /// collection.
+    Ignored,
+}
+
+/// Decide a part's role from its headers alone.
+///
+/// Pure and total: every part maps to exactly one [`PartRole`], so the caller
+/// needs no fallthrough case and no ordering between the two collections.
+fn classify_part(index: usize, part: &MessagePart) -> PartRole {
+    // An empty part carries nothing to show or save, whatever its headers claim.
+    if part.contents().is_empty() {
+        return PartRole::Ignored;
+    }
+
+    if let Some(content_id) = part.content_id() {
+        return PartRole::Inline {
+            cid: content_id
+                .trim_start_matches('<')
+                .trim_end_matches('>')
+                .to_string(),
+        };
+    }
+
+    // Part 0 is the message itself (usually the multipart container), never a
+    // file the user would save.
+    if index == 0 {
+        return PartRole::Ignored;
+    }
+
+    let name = part
+        .attachment_name()
+        .map(str::to_string)
+        .or_else(|| content_type_name(part));
+
+    match name {
+        Some(name) => PartRole::Attached { name },
+        // An unnamed part is a file only when it says so *and* is not the body.
+        None if is_marked_attachment(part) && !is_body_part(part) => PartRole::Attached {
+            name: format!("attachment_{index}"),
+        },
+        None => PartRole::Ignored,
+    }
+}
+
+/// Filename from the `Content-Type: name=` parameter, the legacy spelling of
+/// `Content-Disposition: filename=`.
+fn content_type_name(part: &MessagePart) -> Option<String> {
+    part.content_type()
+        .and_then(|ct| ct.attribute("name"))
+        .map(str::to_string)
+}
+
+/// Whether the part explicitly declares itself an attachment.
+fn is_marked_attachment(part: &MessagePart) -> bool {
+    part.content_disposition()
+        .is_some_and(|cd| cd.ctype() == "attachment")
+}
+
+/// Whether the part is displayable message body rather than a payload.
+fn is_body_part(part: &MessagePart) -> bool {
+    matches!(part_content_type(part).as_str(), "text/plain" | "text/html")
+}
+
+/// A part's `type/subtype`, or the generic binary type when it declares none.
+fn part_content_type(part: &MessagePart) -> String {
+    part.content_type()
+        .map(|ct| match ct.subtype() {
+            Some(subtype) => format!("{}/{}", ct.ctype(), subtype),
+            None => ct.ctype().to_string(),
+        })
+        .unwrap_or_else(|| DEFAULT_CONTENT_TYPE.to_string())
+}
+
 /// Parse an EML file from raw bytes.
 /// Returns an opaque handle that stays in Rust memory.
 #[uniffi::export]
@@ -108,168 +221,39 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
         return Err(ParseError::Empty);
     }
 
-    let parser = MessageParser::default();
-    let message = parser.parse(&data).ok_or(ParseError::Invalid)?;
+    let message = MessageParser::default()
+        .parse(&data)
+        .ok_or(ParseError::Invalid)?;
 
-    let subject = message
-        .subject()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "Untitled".to_string());
-
-    let from = message
-        .from()
-        .map(|addrs| format_addresses(addrs))
-        .unwrap_or_default();
-
-    let to = message
-        .to()
-        .map(|addrs| format_addresses(addrs))
-        .unwrap_or_default();
-
-    let cc = message
-        .cc()
-        .map(|addrs| format_addresses(addrs))
-        .unwrap_or_default();
-
-    let reply_to = message
-        .reply_to()
-        .map(|addrs| format_addresses(addrs))
-        .unwrap_or_default();
-
-    let message_id = message
-        .message_id()
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-
-    let date = message.date().map(|d| d.to_rfc3339()).unwrap_or_default();
-
-    // Parse date to epoch milliseconds for sorting
-    // Uses the mail-parser's DateTime which provides to_timestamp()
-    let date_timestamp = message
-        .date()
-        .map(|d| d.to_timestamp() * 1000) // Convert seconds to milliseconds
-        .unwrap_or(0);
-
-    // Extract structured sender info for search/filter
-    let sender_info = message
-        .from()
-        .map(|addrs| extract_first_address_info(addrs))
-        .unwrap_or_default();
-
-    // Extract structured recipient info (To + Cc) for search/filter
-    let mut recipient_info = Vec::new();
-    if let Some(addrs) = message.to() {
-        recipient_info.extend(extract_all_address_info(addrs));
-    }
-    if let Some(addrs) = message.cc() {
-        recipient_info.extend(extract_all_address_info(addrs));
-    }
-
-    // Get body HTML
-    let body_html = message.body_html(0).map(|s| s.to_string());
-
-    // Get body text
-    let body_text = message.body_text(0).map(|s| s.to_string());
-
-    // Extract inline assets
+    // One traversal classifies every part; the match is exhaustive, so a part
+    // can neither be counted twice nor silently fall through.
     let mut inline_assets = HashMap::new();
-    for part in message.parts.iter() {
-        if let Some(content_id) = part.content_id() {
-            // This is an inline attachment referenced by cid:
-            let cid = content_id
-                .trim_start_matches('<')
-                .trim_end_matches('>')
-                .to_string();
-            let bytes = part.contents();
-            if !bytes.is_empty() {
-                let content_type = part
-                    .content_type()
-                    .map(|ct| {
-                        if let Some(subtype) = ct.subtype() {
-                            format!("{}/{}", ct.ctype(), subtype)
-                        } else {
-                            ct.ctype().to_string()
-                        }
-                    })
-                    .unwrap_or_else(|| "application/octet-stream".to_string());
+    let mut attachments = Vec::new();
+    for (index, part) in message.parts.iter().enumerate() {
+        match classify_part(index, part) {
+            PartRole::Inline { cid } => {
                 inline_assets.insert(
                     cid,
                     InlineAsset {
-                        content_type,
-                        content: bytes.to_vec(),
+                        content_type: part_content_type(part),
+                        content: part.contents().to_vec(),
                     },
                 );
             }
+            PartRole::Attached { name } => attachments.push(Attachment {
+                name,
+                content_type: part_content_type(part),
+                content: part.contents().to_vec(),
+            }),
+            PartRole::Ignored => {}
         }
     }
 
-    // Extract attachments (files that are not inline CID references and not body parts)
-    let mut attachments = Vec::new();
-    for (part_idx, part) in message.parts.iter().enumerate() {
-        // Skip the root part (usually multipart container)
-        if part_idx == 0 {
-            continue;
-        }
-
-        // Check if this part is an attachment (has Content-Disposition: attachment)
-        // or has a filename and is not already an inline CID reference
-        let is_inline_cid = part.content_id().is_some();
-        let content_type = part
-            .content_type()
-            .map(|ct| {
-                if let Some(subtype) = ct.subtype() {
-                    format!("{}/{}", ct.ctype(), subtype)
-                } else {
-                    ct.ctype().to_string()
-                }
-            })
-            .unwrap_or_else(|| "application/octet-stream".to_string());
-
-        // Skip text/plain and text/html parts that are the main body
-        let is_body_part = content_type == "text/plain" || content_type == "text/html";
-
-        // Get the attachment name
-        let attachment_name = part.attachment_name().map(|s| s.to_string()).or_else(|| {
-            // Fallback to Content-Type name parameter
-            part.content_type()
-                .and_then(|ct| ct.attribute("name"))
-                .map(|s| s.to_string())
-        });
-
-        // Determine if this is an attachment:
-        // - Has a filename
-        // - Or is explicitly marked as attachment
-        // - And is not an inline CID or body part
-        let has_content_disposition_attachment = part
-            .content_disposition()
-            .map(|cd| cd.ctype() == "attachment")
-            .unwrap_or(false);
-
-        // Check if this part qualifies as an attachment:
-        // 1. Has a filename OR is explicitly marked as attachment
-        // 2. Is not an inline CID reference
-        // 3. Is not a body part without a filename
-        let is_attachment_candidate =
-            attachment_name.is_some() || has_content_disposition_attachment;
-        // Exclusion conditions: skip inline CID parts, or unnamed body parts (text/html, text/plain)
-        let should_exclude = is_inline_cid || (is_body_part && attachment_name.is_none());
-
-        if is_attachment_candidate && !should_exclude {
-            let bytes = part.contents();
-            if !bytes.is_empty() {
-                attachments.push(Attachment {
-                    name: attachment_name.unwrap_or_else(|| format!("attachment_{}", part_idx)),
-                    content_type: content_type.clone(),
-                    size: bytes.len() as u64,
-                    content: bytes.to_vec(),
-                });
-            }
-        }
-    }
-
-    // If no HTML body, convert text to basic HTML
-    let final_body_html = body_html.or_else(|| {
-        body_text.as_ref().map(|text| {
+    let body_text = message.body_text(0).map(|s| s.to_string());
+    // Without an HTML body, present the plain text as preformatted HTML so the
+    // WebView has something to render either way.
+    let body_html = message.body_html(0).map(|s| s.to_string()).or_else(|| {
+        body_text.as_deref().map(|text| {
             format!(
                 "<html><body><pre style=\"white-space: pre-wrap; font-family: sans-serif;\">{}</pre></body></html>",
                 html_escape(text)
@@ -277,25 +261,34 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
         })
     });
 
-    let parsed = ParsedMessage {
-        subject,
-        from,
-        to,
-        cc,
-        reply_to,
-        message_id,
-        date,
-        date_timestamp,
-        body_html: final_body_html,
-        body_text,
-        inline_assets,
-        attachments,
-        sender_info,
-        recipient_info,
-    };
+    let recipient_info = message
+        .to()
+        .into_iter()
+        .chain(message.cc())
+        .flat_map(addresses)
+        .map(address_info)
+        .collect();
 
     Ok(Arc::new(EmailHandle {
-        inner: Mutex::new(parsed),
+        message: ParsedMessage {
+            subject: message
+                .subject()
+                .map_or_else(|| UNTITLED_SUBJECT.to_string(), str::to_string),
+            from: message.from().map(format_addresses).unwrap_or_default(),
+            to: message.to().map(format_addresses).unwrap_or_default(),
+            cc: message.cc().map(format_addresses).unwrap_or_default(),
+            reply_to: message.reply_to().map(format_addresses).unwrap_or_default(),
+            message_id: message.message_id().map(str::to_string).unwrap_or_default(),
+            date: message.date().map(|d| d.to_rfc3339()).unwrap_or_default(),
+            // Milliseconds, matching the JVM epoch convention the Kotlin side sorts on.
+            date_timestamp: message.date().map_or(0, |d| d.to_timestamp() * 1000),
+            body_html,
+            body_text,
+            inline_assets,
+            attachments,
+            sender_info: message.from().map(first_address_info).unwrap_or_default(),
+            recipient_info,
+        },
     }))
 }
 
@@ -314,276 +307,221 @@ pub fn parse_eml_from_path(path: String) -> Result<Arc<EmailHandle>, ParseError>
     if !file_path.exists() {
         return Err(ParseError::FileNotFound { path });
     }
-
-    let data = fs::read(file_path).map_err(|e| ParseError::IoError {
-        details: e.to_string(),
-    })?;
-
-    parse_eml(data)
+    parse_eml(fs::read(file_path)?)
 }
 
-fn format_addresses(addresses: &mail_parser::Address) -> String {
-    match addresses {
-        mail_parser::Address::List(list) => list
-            .iter()
-            .map(|addr| {
-                if let Some(name) = &addr.name {
-                    format!("{} <{}>", name, addr.address.as_deref().unwrap_or(""))
-                } else {
-                    addr.address.as_deref().unwrap_or("").to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", "),
-        mail_parser::Address::Group(groups) => groups
-            .iter()
-            .flat_map(|g| g.addresses.iter())
-            .map(|addr| {
-                if let Some(name) = &addr.name {
-                    format!("{} <{}>", name, addr.address.as_deref().unwrap_or(""))
-                } else {
-                    addr.address.as_deref().unwrap_or("").to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", "),
+/// Every address in a header, flattening away the list/group distinction.
+///
+/// `Address::List` and `Address::Group` differ only in nesting depth, not in
+/// element type, so exactly one of the two slices below is non-empty and the
+/// chain yields the same `Addr` stream either way. This is what lets the three
+/// callers share one traversal instead of each matching both variants.
+fn addresses<'a, 'x>(header: &'a Address<'x>) -> impl Iterator<Item = &'a Addr<'x>> + 'a {
+    let (flat, grouped) = match header {
+        Address::List(list) => (list.as_slice(), [].as_slice()),
+        Address::Group(groups) => ([].as_slice(), groups.as_slice()),
+    };
+    flat.iter()
+        .chain(grouped.iter().flat_map(|group| group.addresses.iter()))
+}
+
+/// Render one address as `Name <email>`, or bare `email` when unnamed.
+fn format_address(addr: &Addr) -> String {
+    let email = addr.address.as_deref().unwrap_or_default();
+    match &addr.name {
+        Some(name) => format!("{name} <{email}>"),
+        None => email.to_string(),
     }
 }
 
-/// Extract the first address from an Address object as structured AddressInfo.
-/// Used for sender information where typically only the first address matters.
-fn extract_first_address_info(addresses: &mail_parser::Address) -> AddressInfo {
-    match addresses {
-        mail_parser::Address::List(list) => list
-            .first()
-            .map(|addr| AddressInfo {
-                email: addr.address.as_deref().unwrap_or("").to_string(),
-                name: addr
-                    .name
-                    .as_ref()
-                    .map(|n| n.to_string())
-                    .unwrap_or_default(),
-            })
-            .unwrap_or_default(),
-        mail_parser::Address::Group(groups) => groups
-            .first()
-            .and_then(|g| g.addresses.first())
-            .map(|addr| AddressInfo {
-                email: addr.address.as_deref().unwrap_or("").to_string(),
-                name: addr
-                    .name
-                    .as_ref()
-                    .map(|n| n.to_string())
-                    .unwrap_or_default(),
-            })
-            .unwrap_or_default(),
+/// Render a whole header as a comma-separated address list.
+fn format_addresses(header: &Address) -> String {
+    addresses(header)
+        .map(format_address)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Split one address into its separately indexable parts.
+fn address_info(addr: &Addr) -> AddressInfo {
+    AddressInfo {
+        email: addr.address.as_deref().unwrap_or_default().to_string(),
+        name: addr.name.as_deref().unwrap_or_default().to_string(),
     }
 }
 
-/// Extract all addresses from an Address object as structured AddressInfo.
-/// Used for recipient information where all addresses are relevant.
-fn extract_all_address_info(addresses: &mail_parser::Address) -> Vec<AddressInfo> {
-    match addresses {
-        mail_parser::Address::List(list) => list
-            .iter()
-            .map(|addr| AddressInfo {
-                email: addr.address.as_deref().unwrap_or("").to_string(),
-                name: addr
-                    .name
-                    .as_ref()
-                    .map(|n| n.to_string())
-                    .unwrap_or_default(),
-            })
-            .collect(),
-        mail_parser::Address::Group(groups) => groups
-            .iter()
-            .flat_map(|g| g.addresses.iter())
-            .map(|addr| AddressInfo {
-                email: addr.address.as_deref().unwrap_or("").to_string(),
-                name: addr
-                    .name
-                    .as_ref()
-                    .map(|n| n.to_string())
-                    .unwrap_or_default(),
-            })
-            .collect(),
-    }
+/// The first address in a header, for `From`, where later addresses are noise.
+///
+/// "First" means the first address that exists, so a header opening with an
+/// empty group (`undisclosed-recipients:;`) still yields the address after it
+/// rather than nothing.
+fn first_address_info(header: &Address) -> AddressInfo {
+    addresses(header)
+        .next()
+        .map(address_info)
+        .unwrap_or_default()
 }
 
+/// Escape the five HTML metacharacters in one pass.
+///
+/// Order matters only because `&` must be escaped before the escapes that
+/// introduce it; doing all five in a single traversal removes the question
+/// entirely, along with four intermediate `String`s.
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+    s.chars()
+        .fold(String::with_capacity(s.len()), |mut out, c| {
+            match c {
+                '&' => out.push_str("&amp;"),
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                '"' => out.push_str("&quot;"),
+                '\'' => out.push_str("&#39;"),
+                c => out.push(c),
+            }
+            out
+        })
+}
+
+/// The leading `PREVIEW_CHARS` characters with whitespace runs collapsed.
+fn preview(text: &str) -> String {
+    let end = text
+        .char_indices()
+        .nth(PREVIEW_CHARS)
+        .map_or(text.len(), |(offset, _)| offset);
+    text[..end].split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Write `bytes` to `path`, creating parent directories as needed.
+fn write_file(path: &str, bytes: &[u8]) -> Result<(), ParseError> {
+    let path = Path::new(path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::File::create(path)?.write_all(bytes)?;
+    Ok(())
 }
 
 #[uniffi::export]
 impl EmailHandle {
     /// Get the email subject.
     pub fn subject(&self) -> String {
-        self.inner
-            .lock()
-            .map(|msg| msg.subject.clone())
-            .unwrap_or_default()
+        self.message.subject.clone()
     }
 
     /// Get the "From" field formatted as a string.
     pub fn from(&self) -> String {
-        self.inner
-            .lock()
-            .map(|msg| msg.from.clone())
-            .unwrap_or_default()
+        self.message.from.clone()
     }
 
     /// Get the "To" field formatted as a string.
     pub fn to(&self) -> String {
-        self.inner
-            .lock()
-            .map(|msg| msg.to.clone())
-            .unwrap_or_default()
+        self.message.to.clone()
     }
 
     /// Get the "Cc" field formatted as a string.
     pub fn cc(&self) -> String {
-        self.inner
-            .lock()
-            .map(|msg| msg.cc.clone())
-            .unwrap_or_default()
+        self.message.cc.clone()
     }
 
     /// Get the "Reply-To" field formatted as a string.
     pub fn reply_to(&self) -> String {
-        self.inner
-            .lock()
-            .map(|msg| msg.reply_to.clone())
-            .unwrap_or_default()
+        self.message.reply_to.clone()
     }
 
     /// Get the "Message-ID" header.
     pub fn message_id(&self) -> String {
-        self.inner
-            .lock()
-            .map(|msg| msg.message_id.clone())
-            .unwrap_or_default()
+        self.message.message_id.clone()
     }
 
     /// Get the date as an RFC3339 string.
     pub fn date(&self) -> String {
-        self.inner
-            .lock()
-            .map(|msg| msg.date.clone())
-            .unwrap_or_default()
+        self.message.date.clone()
     }
 
     /// Get the date as epoch milliseconds.
     /// Returns 0 if the date is missing or unparseable.
     /// Used for sorting and filtering in the Kotlin layer.
     pub fn date_timestamp(&self) -> i64 {
-        self.inner.lock().map(|msg| msg.date_timestamp).unwrap_or(0)
+        self.message.date_timestamp
     }
 
     /// Get structured sender information.
     /// Returns AddressInfo with separate email and name fields for search indexing.
     pub fn sender_info(&self) -> AddressInfo {
-        self.inner
-            .lock()
-            .map(|msg| msg.sender_info.clone())
-            .unwrap_or_default()
+        self.message.sender_info.clone()
     }
 
     /// Get structured recipient information (To + Cc).
     /// Returns list of AddressInfo for all recipients for search indexing.
     pub fn recipient_info(&self) -> Vec<AddressInfo> {
-        self.inner
-            .lock()
-            .map(|msg| msg.recipient_info.clone())
-            .unwrap_or_default()
+        self.message.recipient_info.clone()
     }
 
     /// Get a preview of the body text for search indexing.
     /// Returns the first 500 characters of the plain text body.
     pub fn body_preview(&self) -> String {
-        self.inner
-            .lock()
-            .map(|msg| {
-                msg.body_text
-                    .as_ref()
-                    .map(|text| {
-                        // Take first 500 characters for search index
-                        let chars: String = text.chars().take(500).collect();
-                        // Clean up whitespace
-                        chars.split_whitespace().collect::<Vec<_>>().join(" ")
-                    })
-                    .unwrap_or_default()
-            })
+        self.message
+            .body_text
+            .as_deref()
+            .map(preview)
             .unwrap_or_default()
     }
 
     /// Get the HTML body content, if available.
     pub fn body_html(&self) -> Option<String> {
-        self.inner.lock().ok().and_then(|msg| msg.body_html.clone())
+        self.message.body_html.clone()
     }
 
     /// Get the plain text body content, if available.
     pub fn body_text(&self) -> Option<String> {
-        self.inner.lock().ok().and_then(|msg| msg.body_text.clone())
+        self.message.body_text.clone()
     }
 
     /// Get an inline resource by Content-ID for cid: URL resolution.
     /// Note: For large resources (>64KB), consider using write_resource_to_path instead.
     pub fn get_resource(&self, cid: String) -> Option<Vec<u8>> {
-        self.inner.lock().ok().and_then(|msg| {
-            msg.inline_assets
-                .get(&cid)
-                .map(|asset| asset.content.clone())
-        })
+        self.message
+            .inline_assets
+            .get(&cid)
+            .map(|asset| asset.content.clone())
     }
 
     /// Get the list of all inline asset Content-IDs.
     pub fn get_resource_ids(&self) -> Vec<String> {
-        self.inner
-            .lock()
-            .map(|msg| msg.inline_assets.keys().cloned().collect())
-            .unwrap_or_default()
+        self.message.inline_assets.keys().cloned().collect()
     }
 
     /// Get metadata for all inline resources in a single call.
     /// This allows Kotlin to efficiently map cid: URLs and decide the retrieval strategy
     /// (inline for small resources, file-based for large ones).
     pub fn get_resource_metadata(&self) -> Vec<ResourceMeta> {
-        self.inner
-            .lock()
-            .map(|msg| {
-                msg.inline_assets
-                    .iter()
-                    .map(|(cid, asset)| {
-                        let size = asset.content.len() as u64;
-                        ResourceMeta {
-                            cid: cid.clone(),
-                            content_type: asset.content_type.clone(),
-                            size,
-                            is_small: size <= SMALL_RESOURCE_THRESHOLD,
-                        }
-                    })
-                    .collect()
+        self.message
+            .inline_assets
+            .iter()
+            .map(|(cid, asset)| {
+                let size = asset.content.len() as u64;
+                ResourceMeta {
+                    cid: cid.clone(),
+                    content_type: asset.content_type.clone(),
+                    size,
+                    is_small: size <= SMALL_RESOURCE_THRESHOLD,
+                }
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     /// Get the content type of an inline resource without returning the bytes.
     /// Useful for setting MIME types in WebResourceResponse without loading content.
     pub fn get_resource_content_type(&self, cid: String) -> Option<String> {
-        self.inner.lock().ok().and_then(|msg| {
-            msg.inline_assets
-                .get(&cid)
-                .map(|asset| asset.content_type.clone())
-        })
+        self.message
+            .inline_assets
+            .get(&cid)
+            .map(|asset| asset.content_type.clone())
     }
 
     /// Write an inline resource directly to a file path.
     /// This avoids copying large resources across the FFI boundary.
-    /// Returns true on success.
+    /// Returns true on success, false if the Content-ID is unknown.
     ///
     /// # Security
     /// The caller is responsible for validating that `path` is a safe, sandboxed location.
@@ -591,71 +529,44 @@ impl EmailHandle {
     /// additional path validation. Use only with paths constructed from trusted sources
     /// (e.g., application cache directories).
     pub fn write_resource_to_path(&self, cid: String, path: String) -> Result<bool, ParseError> {
-        let content = self.inner.lock().ok().and_then(|msg| {
-            msg.inline_assets
-                .get(&cid)
-                .map(|asset| asset.content.clone())
-        });
-
-        match content {
-            Some(bytes) => {
-                let path = Path::new(&path);
-                // Create parent directories if needed
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).map_err(|e| ParseError::IoError {
-                        details: e.to_string(),
-                    })?;
-                }
-                let mut file = fs::File::create(path).map_err(|e| ParseError::IoError {
-                    details: e.to_string(),
-                })?;
-                file.write_all(&bytes).map_err(|e| ParseError::IoError {
-                    details: e.to_string(),
-                })?;
-                Ok(true)
-            }
+        // Borrowed straight to the writer: with no lock to release, the bytes
+        // never need a temporary copy, however large the resource is.
+        match self.message.inline_assets.get(&cid) {
+            Some(asset) => write_file(&path, &asset.content).map(|()| true),
             None => Ok(false),
         }
     }
 
     /// Get a list of all attachments with their metadata.
     pub fn get_attachments(&self) -> Vec<AttachmentInfo> {
-        self.inner
-            .lock()
-            .map(|msg| {
-                msg.attachments
-                    .iter()
-                    .map(|a| AttachmentInfo {
-                        name: a.name.clone(),
-                        content_type: a.content_type.clone(),
-                        size: a.size,
-                    })
-                    .collect()
+        self.message
+            .attachments
+            .iter()
+            .map(|a| AttachmentInfo {
+                name: a.name.clone(),
+                content_type: a.content_type.clone(),
+                size: a.content.len() as u64,
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     /// Get the number of attachments.
     pub fn attachment_count(&self) -> u32 {
-        self.inner
-            .lock()
-            .map(|msg| msg.attachments.len() as u32)
-            .unwrap_or(0)
+        self.message.attachments.len() as u32
     }
 
     /// Get attachment content by index.
     /// Note: For large attachments, consider using write_attachment_to_path instead.
     pub fn get_attachment_content(&self, index: u32) -> Option<Vec<u8>> {
-        self.inner.lock().ok().and_then(|msg| {
-            msg.attachments
-                .get(index as usize)
-                .map(|a| a.content.clone())
-        })
+        self.message
+            .attachments
+            .get(index as usize)
+            .map(|a| a.content.clone())
     }
 
     /// Write an attachment directly to a file path.
     /// This avoids copying large attachments across the FFI boundary.
-    /// Returns true on success, false if attachment not found.
+    /// Returns true on success, false if the index is out of range.
     ///
     /// # Security
     /// The caller is responsible for validating that `path` is a safe, sandboxed location.
@@ -663,29 +574,8 @@ impl EmailHandle {
     /// additional path validation. Use only with paths constructed from trusted sources
     /// (e.g., application cache directories).
     pub fn write_attachment_to_path(&self, index: u32, path: String) -> Result<bool, ParseError> {
-        let content = self.inner.lock().ok().and_then(|msg| {
-            msg.attachments
-                .get(index as usize)
-                .map(|a| a.content.clone())
-        });
-
-        match content {
-            Some(bytes) => {
-                let path = Path::new(&path);
-                // Create parent directories if needed
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).map_err(|e| ParseError::IoError {
-                        details: e.to_string(),
-                    })?;
-                }
-                let mut file = fs::File::create(path).map_err(|e| ParseError::IoError {
-                    details: e.to_string(),
-                })?;
-                file.write_all(&bytes).map_err(|e| ParseError::IoError {
-                    details: e.to_string(),
-                })?;
-                Ok(true)
-            }
+        match self.message.attachments.get(index as usize) {
+            Some(attachment) => write_file(&path, &attachment.content).map(|()| true),
             None => Ok(false),
         }
     }
@@ -700,60 +590,52 @@ pub struct RemoteImage {
     pub is_tracking_pixel: bool,
 }
 
+/// Compiled once: the selector is a constant, so parsing it per call was pure
+/// overhead on a path the message list hits for every rendered email.
+static IMG_SELECTOR: LazyLock<scraper::Selector> =
+    LazyLock::new(|| scraper::Selector::parse("img").expect("`img` is a valid CSS selector"));
+
 /// Extract all remote image URLs from HTML content.
 /// Uses proper HTML parsing instead of regex to handle edge cases.
 ///
-/// Returns a list of remote image URLs found in <img src="..."> tags.
+/// Returns a list of remote image URLs found in `<img src="...">` tags.
 /// Only returns http:// and https:// URLs, excludes cid: URLs.
 #[uniffi::export]
 pub fn extract_remote_images(html: String) -> Vec<RemoteImage> {
-    use scraper::{Html, Selector};
+    let document = scraper::Html::parse_document(&html);
+    document
+        .select(&IMG_SELECTOR)
+        .map(|element| element.value())
+        .filter_map(|img| {
+            let src = img.attr("src")?;
+            let remote = src.starts_with("http://") || src.starts_with("https://");
+            remote.then(|| RemoteImage {
+                url: src.to_string(),
+                is_tracking_pixel: is_tracking_pixel(img),
+            })
+        })
+        .collect()
+}
 
-    let document = Html::parse_document(&html);
-    let img_selector = Selector::parse("img").unwrap();
-
-    let mut images = Vec::new();
-
-    for element in document.select(&img_selector) {
-        if let Some(src) = element.value().attr("src") {
-            // Only include http:// and https:// URLs
-            if src.starts_with("http://") || src.starts_with("https://") {
-                // Check if it's a tracking pixel (1x1 image)
-                let is_tracking = element
-                    .value()
-                    .attr("width")
-                    .and_then(|w| w.parse::<u32>().ok())
-                    .map(|w| w <= 1)
-                    .unwrap_or(false)
-                    && element
-                        .value()
-                        .attr("height")
-                        .and_then(|h| h.parse::<u32>().ok())
-                        .map(|h| h <= 1)
-                        .unwrap_or(false);
-
-                images.push(RemoteImage {
-                    url: src.to_string(),
-                    is_tracking_pixel: is_tracking,
-                });
-            }
-        }
-    }
-
-    images
+/// Whether an `<img>` declares itself 1×1 or smaller — the shape of a beacon
+/// whose only purpose is to report that the mail was opened.
+fn is_tracking_pixel(img: &scraper::node::Element) -> bool {
+    let is_pinpoint = |attribute| {
+        img.attr(attribute)
+            .and_then(|value| value.parse::<u32>().ok())
+            .is_some_and(|pixels| pixels <= 1)
+    };
+    is_pinpoint("width") && is_pinpoint("height")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
 
-    static SIMPLE_EMAIL: Lazy<&'static str> = Lazy::new(|| {
-        "Subject: Hello\r\nFrom: sender@example.com\r\nTo: recipient@example.com\r\n\r\n<p>Body</p>"
-    });
+    const SIMPLE_EMAIL: &str =
+        "Subject: Hello\r\nFrom: sender@example.com\r\nTo: recipient@example.com\r\n\r\n<p>Body</p>";
 
-    static MULTIPART_EMAIL: Lazy<&'static str> = Lazy::new(|| {
-        r#"Subject: Test Multipart
+    const MULTIPART_EMAIL: &str = r#"Subject: Test Multipart
 From: sender@example.com
 To: recipient@example.com
 MIME-Version: 1.0
@@ -768,8 +650,7 @@ Content-Type: text/html
 
 <html><body><p>HTML body</p></body></html>
 --boundary--
-"#
-    });
+"#;
 
     #[test]
     fn parses_simple_email() {
@@ -797,12 +678,7 @@ Content-Type: text/html
 
     #[test]
     fn rejects_empty_payload() {
-        let result = parse_eml(vec![]);
-        assert!(result.is_err());
-        match result {
-            Err(ParseError::Empty) => (),
-            _ => panic!("Expected ParseError::Empty"),
-        }
+        assert_eq!(parse_eml(vec![]).err(), Some(ParseError::Empty));
     }
 
     #[test]
@@ -813,21 +689,19 @@ Content-Type: text/html
 
     #[test]
     fn handles_malformed_input_gracefully() {
-        let result = parse_eml(b"not a valid email".to_vec());
-        // mail-parser is lenient, so this might parse but with empty fields
-        // The important thing is it doesn't crash
-        assert!(result.is_ok() || result.is_err());
+        // mail-parser is lenient, so this parses with empty fields rather than
+        // failing; the contract is that it does not panic.
+        let handle = parse_eml(b"not a valid email".to_vec()).expect("lenient parse");
+        assert_eq!(handle.attachment_count(), 0);
     }
 
-    static EMAIL_WITH_HEADERS: Lazy<&'static str> = Lazy::new(|| {
-        "Subject: Full Headers\r\n\
+    const EMAIL_WITH_HEADERS: &str = "Subject: Full Headers\r\n\
          From: sender@example.com\r\n\
          To: recipient@example.com\r\n\
          Cc: cc@example.com\r\n\
          Reply-To: reply@example.com\r\n\
          Message-ID: <msg123@example.com>\r\n\r\n\
-         Body"
-    });
+         Body";
 
     #[test]
     fn parses_extended_headers() {
@@ -837,8 +711,7 @@ Content-Type: text/html
         assert_eq!(handle.message_id(), "msg123@example.com");
     }
 
-    static EMAIL_WITH_ATTACHMENT: Lazy<&'static str> = Lazy::new(|| {
-        "Subject: With Attachment\r\n\
+    const EMAIL_WITH_ATTACHMENT: &str = "Subject: With Attachment\r\n\
          From: sender@example.com\r\n\
          To: recipient@example.com\r\n\
          MIME-Version: 1.0\r\n\
@@ -854,8 +727,7 @@ Content-Type: text/html
          Content-Transfer-Encoding: base64\r\n\
          \r\n\
          SGVsbG8gV29ybGQh\r\n\
-         --mixed-boundary--\r\n"
-    });
+         --mixed-boundary--\r\n";
 
     #[test]
     fn parses_attachment() {
@@ -870,10 +742,19 @@ Content-Type: text/html
         assert!(content.is_some());
     }
 
+    /// The reported size must be the byte count actually held, not a separately
+    /// stored number that could drift from it.
+    #[test]
+    fn attachment_size_matches_its_content() {
+        let handle = parse_eml(EMAIL_WITH_ATTACHMENT.as_bytes().to_vec()).expect("should parse");
+        let content = handle.get_attachment_content(0).expect("content");
+        assert_eq!(handle.get_attachments()[0].size, content.len() as u64);
+        assert_eq!(content, b"Hello World!");
+    }
+
     // Tests for new optimized FFI functions
 
-    static EMAIL_WITH_INLINE_IMAGE: Lazy<&'static str> = Lazy::new(|| {
-        "Subject: Email with Inline Image\r\n\
+    const EMAIL_WITH_INLINE_IMAGE: &str = "Subject: Email with Inline Image\r\n\
          From: sender@example.com\r\n\
          To: recipient@example.com\r\n\
          MIME-Version: 1.0\r\n\
@@ -889,8 +770,7 @@ Content-Type: text/html
          Content-Transfer-Encoding: base64\r\n\
          \r\n\
          iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\n\
-         --related-boundary--\r\n"
-    });
+         --related-boundary--\r\n";
 
     #[test]
     fn get_resource_metadata_returns_inline_assets_info() {
@@ -904,6 +784,15 @@ Content-Type: text/html
         assert_eq!(meta.content_type, "image/png");
         assert!(meta.size > 0);
         assert!(meta.is_small); // Small test image should be under 64KB threshold
+    }
+
+    /// An inline `cid:` part is a resource and *not* an attachment; the two
+    /// collections must stay disjoint.
+    #[test]
+    fn inline_parts_are_not_also_attachments() {
+        let handle = parse_eml(EMAIL_WITH_INLINE_IMAGE.as_bytes().to_vec()).expect("should parse");
+        assert_eq!(handle.get_resource_ids(), vec!["image001".to_string()]);
+        assert_eq!(handle.attachment_count(), 0);
     }
 
     #[test]
@@ -959,7 +848,7 @@ Content-Type: text/html
         // Verify file exists and has content
         assert!(output_path.exists());
         let written = fs::read(&output_path).expect("read written file");
-        assert!(!written.is_empty());
+        assert_eq!(written, b"Hello World!");
 
         // Cleanup
         let _ = fs::remove_file(output_path);
@@ -976,6 +865,22 @@ Content-Type: text/html
         let result = handle.write_attachment_to_path(99, output_path.to_str().unwrap().to_string());
         assert!(result.is_ok());
         assert!(!result.unwrap()); // Should return false for missing attachment
+    }
+
+    /// A missing target must not leave a stray empty file behind: the absent
+    /// case returns before any I/O happens.
+    #[test]
+    fn missing_target_writes_nothing() {
+        let handle = parse_eml(SIMPLE_EMAIL.as_bytes().to_vec()).expect("should parse");
+        let path = std::env::temp_dir().join("letterbox_no_such_write.bin");
+        let _ = fs::remove_file(&path);
+
+        let written = handle
+            .write_attachment_to_path(0, path.to_str().unwrap().to_string())
+            .expect("must not error");
+
+        assert!(!written);
+        assert!(!path.exists(), "no file may be created for a missing index");
     }
 
     #[test]
@@ -1018,6 +923,22 @@ Content-Type: text/html
         assert!(!result.unwrap()); // Should return false for missing CID
     }
 
+    /// An unwritable destination must surface as an error, not a silent `false`:
+    /// "no such resource" and "could not write it" are different facts.
+    #[test]
+    fn unwritable_path_is_an_error_not_a_false() {
+        let handle = parse_eml(EMAIL_WITH_ATTACHMENT.as_bytes().to_vec()).expect("should parse");
+        // A path whose parent is an existing *file* cannot be created.
+        let blocker = std::env::temp_dir().join("letterbox_blocker_file");
+        fs::write(&blocker, b"x").expect("create blocker");
+        let target = blocker.join("child.bin");
+
+        let result = handle.write_attachment_to_path(0, target.to_str().unwrap().to_string());
+
+        assert!(matches!(result, Err(ParseError::IoError { .. })));
+        let _ = fs::remove_file(blocker);
+    }
+
     #[test]
     fn small_resource_threshold_is_64kb() {
         assert_eq!(SMALL_RESOURCE_THRESHOLD, 64 * 1024);
@@ -1029,18 +950,13 @@ Content-Type: text/html
     fn parses_email_with_unicode_subject() {
         let email = "Subject: こんにちは 🌍 Émoji\r\nFrom: test@test.com\r\n\r\nBody";
         let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
-        let subject = handle.subject();
-        // Verify Unicode characters are preserved
-        assert!(subject.contains("こんにちは") || subject.contains("🌍") || !subject.is_empty());
+        assert_eq!(handle.subject(), "こんにちは 🌍 Émoji");
     }
 
     #[test]
     fn parses_email_with_very_long_subject() {
         let long_subject = "X".repeat(1000);
-        let email = format!(
-            "Subject: {}\r\nFrom: test@test.com\r\n\r\nBody",
-            long_subject
-        );
+        let email = format!("Subject: {long_subject}\r\nFrom: test@test.com\r\n\r\nBody");
         let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
         assert_eq!(handle.subject(), long_subject);
     }
@@ -1050,29 +966,33 @@ Content-Type: text/html
         let email = "From: test@test.com\r\nTo: recipient@test.com\r\n\r\nBody";
         let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
         // Should fall back to "Untitled" for missing subject
-        assert_eq!(handle.subject(), "Untitled");
+        assert_eq!(handle.subject(), UNTITLED_SUBJECT);
     }
 
     #[test]
     fn parses_email_with_empty_fields() {
         let email = "Subject: Test\r\n\r\nBody";
         let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
-        // Empty fields should return empty strings, not panic
-        assert!(handle.from().is_empty() || handle.from() == "");
-        assert!(handle.to().is_empty() || handle.to() == "");
-        assert!(handle.cc().is_empty() || handle.cc() == "");
+        // Absent headers are empty strings, never a panic.
+        assert!(handle.from().is_empty());
+        assert!(handle.to().is_empty());
+        assert!(handle.cc().is_empty());
     }
 
     #[test]
     fn html_escape_handles_all_special_chars() {
-        // Test that html_escape handles all 5 required entities
-        let input = "Test & <script>alert('xss')</script> \"quotes\"";
-        let escaped = html_escape(input);
-        assert!(!escaped.contains('&') || escaped.contains("&amp;"));
-        assert!(!escaped.contains('<') || escaped.contains("&lt;"));
-        assert!(!escaped.contains('>') || escaped.contains("&gt;"));
-        assert!(!escaped.contains('"') || escaped.contains("&quot;"));
-        assert!(!escaped.contains('\'') || escaped.contains("&#39;"));
+        assert_eq!(
+            html_escape(r#"a & b < c > d " e ' f"#),
+            "a &amp; b &lt; c &gt; d &quot; e &#39; f"
+        );
+    }
+
+    /// The escapes must not compound: an escape's own `&` is already output and
+    /// must not be escaped a second time.
+    #[test]
+    fn html_escape_does_not_double_escape() {
+        assert_eq!(html_escape("&amp;"), "&amp;amp;");
+        assert_eq!(html_escape("<b>"), "&lt;b&gt;");
     }
 
     #[test]
@@ -1083,9 +1003,7 @@ Content-Type: text/html
                      Cc: carol@example.com\r\n\
                      \r\nBody";
         let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
-        let to = handle.to();
-        // Should contain both recipients
-        assert!(to.contains("alice") || to.contains("bob"));
+        assert_eq!(handle.to(), "alice@example.com, bob@example.com");
     }
 
     #[test]
@@ -1095,9 +1013,7 @@ Content-Type: text/html
                      Date: Mon, 11 Dec 2025 10:00:00 +0000\r\n\
                      \r\nBody";
         let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
-        let date = handle.date();
-        // Date should be extracted in some format
-        assert!(!date.is_empty());
+        assert!(!handle.date().is_empty());
     }
 
     #[test]
@@ -1128,8 +1044,7 @@ Content-Type: text/html
         assert_eq!(handle.subject(), "Hello");
     }
 
-    static EMAIL_WITH_MULTIPLE_ATTACHMENTS: Lazy<&'static str> = Lazy::new(|| {
-        "Subject: Multiple Attachments\r\n\
+    const EMAIL_WITH_MULTIPLE_ATTACHMENTS: &str = "Subject: Multiple Attachments\r\n\
          From: sender@example.com\r\n\
          To: recipient@example.com\r\n\
          MIME-Version: 1.0\r\n\
@@ -1151,8 +1066,7 @@ Content-Type: text/html
          Content-Transfer-Encoding: base64\r\n\
          \r\n\
          iVBORw0K\r\n\
-         --mixed-boundary--\r\n"
-    });
+         --mixed-boundary--\r\n";
 
     #[test]
     fn parses_multiple_attachments() {
@@ -1208,6 +1122,23 @@ Content-Type: text/html
         assert_eq!(sender.name, "");
     }
 
+    /// A grouped header (`Team: a@x, b@x;`) must flatten to the same address
+    /// stream a flat header produces — the list/group distinction is syntax.
+    #[test]
+    fn grouped_recipients_flatten_like_a_list() {
+        let email = "Subject: Test\r\n\
+                     From: sender@example.com\r\n\
+                     To: Team: alice@example.com, bob@example.com;\r\n\r\n\
+                     Body";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let emails: Vec<String> = handle
+            .recipient_info()
+            .into_iter()
+            .map(|r| r.email)
+            .collect();
+        assert_eq!(emails, vec!["alice@example.com", "bob@example.com"]);
+    }
+
     #[test]
     fn recipient_info_extracts_to_and_cc() {
         let email = "Subject: Test\r\n\
@@ -1235,6 +1166,24 @@ Content-Type: text/html
         assert!(carol.is_some());
     }
 
+    /// `To` precedes `Cc`: the search index is order-sensitive, so the
+    /// concatenation must not be reordered.
+    #[test]
+    fn recipient_info_keeps_to_before_cc() {
+        let email = "Subject: Test\r\n\
+                     From: sender@example.com\r\n\
+                     To: alice@example.com\r\n\
+                     Cc: carol@example.com\r\n\r\n\
+                     Body";
+        let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
+        let emails: Vec<String> = handle
+            .recipient_info()
+            .into_iter()
+            .map(|r| r.email)
+            .collect();
+        assert_eq!(emails, vec!["alice@example.com", "carol@example.com"]);
+    }
+
     #[test]
     fn date_timestamp_parses_valid_date() {
         let email = "Subject: Test\r\n\
@@ -1255,8 +1204,7 @@ Content-Type: text/html
                      From: sender@example.com\r\n\r\n\
                      Body";
         let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
-        let ts = handle.date_timestamp();
-        assert_eq!(ts, 0);
+        assert_eq!(handle.date_timestamp(), 0);
     }
 
     #[test]
@@ -1266,8 +1214,7 @@ Content-Type: text/html
         let email = format!(
             "Subject: Test\r\n\
              From: sender@example.com\r\n\r\n\
-             {}",
-            long_body
+             {long_body}"
         );
         let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
         let preview = handle.body_preview();
@@ -1275,6 +1222,15 @@ Content-Type: text/html
         assert!(preview.len() <= 500);
         // Should contain 'a' from the body
         assert!(preview.contains('a'));
+    }
+
+    /// The cut is by character, not by byte: a multi-byte body must not be
+    /// sliced mid-character (which would panic) nor truncated early.
+    #[test]
+    fn preview_cuts_on_character_boundaries() {
+        let text = "é".repeat(600);
+        let cut = preview(&text);
+        assert_eq!(cut.chars().count(), PREVIEW_CHARS);
     }
 
     #[test]
@@ -1296,8 +1252,31 @@ Content-Type: text/html
                      From: sender@example.com\r\n\r\n\
                      Hello    World\n\nThis is   a test";
         let handle = parse_eml(email.as_bytes().to_vec()).expect("should parse");
-        let preview = handle.body_preview();
-        // Should collapse whitespace
-        assert!(!preview.contains("    "));
+        assert_eq!(handle.body_preview(), "Hello World This is a test");
+    }
+
+    // ---- remote image extraction ----
+
+    #[test]
+    fn extracts_only_remote_images() {
+        let images = extract_remote_images(
+            r#"<img src="https://a/1.png"><img src="cid:x"><img src="http://b/2.gif"><img>"#
+                .to_string(),
+        );
+        let urls: Vec<String> = images.iter().map(|i| i.url.clone()).collect();
+        assert_eq!(urls, vec!["https://a/1.png", "http://b/2.gif"]);
+    }
+
+    #[test]
+    fn flags_one_by_one_images_as_tracking_pixels() {
+        let images = extract_remote_images(
+            r#"<img src="https://a/p.gif" width="1" height="1">
+               <img src="https://a/w.png" width="1">
+               <img src="https://a/b.png" width="600" height="400">"#
+                .to_string(),
+        );
+        assert!(images[0].is_tracking_pixel, "1x1 is a beacon");
+        assert!(!images[1].is_tracking_pixel, "height unstated is unknown");
+        assert!(!images[2].is_tracking_pixel);
     }
 }
