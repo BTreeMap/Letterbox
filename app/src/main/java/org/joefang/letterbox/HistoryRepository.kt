@@ -1,11 +1,13 @@
 package org.joefang.letterbox
 
+import android.util.Log
 import org.joefang.letterbox.data.BlobDao
 import org.joefang.letterbox.data.BlobEntity
 import org.joefang.letterbox.data.HistoryItemDao
 import org.joefang.letterbox.data.HistoryItemEntity
 import java.io.File
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -13,7 +15,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+
+private const val TAG = "HistoryRepository"
 
 // HistoryEntry, CacheStats and EmailMetadata live in HistoryModels.kt so the
 // domain values stay free of Room and coroutine dependencies.
@@ -44,6 +50,15 @@ class HistoryRepository(
     private val _items = MutableStateFlow<List<HistoryEntry>>(emptyList())
     val items: StateFlow<List<HistoryEntry>> = _items.asStateFlow()
 
+    /**
+     * Serialises writing a blob file against registering its row, and both
+     * against [reclaimOrphanedBlobs].
+     *
+     * Without it the sweep could observe a freshly written file in the window
+     * before its `blobs` row exists and delete content that is about to be read.
+     */
+    private val blobMutex = Mutex()
+
     init {
         // Load initial items from database
         scope.launch {
@@ -51,8 +66,24 @@ class HistoryRepository(
                 historyItemDao.getAllOrderedByAccess().collect { entities ->
                     _items.value = entities.map { it.toHistoryEntry() }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                android.util.Log.e("HistoryRepository", "Error loading items", e)
+                Log.e(TAG, "Error loading items", e)
+            }
+        }
+
+        // Reconcile cas/ against the database once, off the UI path.
+        scope.launch {
+            try {
+                val reclaimed = reclaimOrphanedBlobs()
+                if (reclaimed > 0) {
+                    Log.i(TAG, "Reclaimed $reclaimed bytes of orphaned blobs")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Orphan reclamation failed", e)
             }
         }
     }
@@ -96,12 +127,14 @@ class HistoryRepository(
                 return@withContext existingItem.copy(lastAccessed = now).toHistoryEntry()
             }
             
-            // New content - check if blob exists and create if needed
-            val blobFile = File(casDir, hash)
-            val existingBlob = blobDao.getByHash(hash)
-            if (existingBlob == null) {
-                blobFile.writeBytes(bytes)
-                blobDao.insert(BlobEntity(hash, bytes.size.toLong(), 1))
+            // New content: write the file and register its row as one unit, so a
+            // concurrent sweep can never see the file without its row. A crash
+            // between the two leaves an orphan the next sweep reclaims.
+            blobMutex.withLock {
+                if (blobDao.getByHash(hash) == null) {
+                    File(casDir, hash).writeBytes(bytes)
+                    blobDao.insert(BlobEntity(hash, bytes.size.toLong(), 1))
+                }
             }
 
             // Create new history entry with metadata
@@ -172,46 +205,63 @@ class HistoryRepository(
     }
     
     /**
-     * Clear all history entries.
+     * Clear all history entries and their blobs.
+     *
+     * Two `DELETE` statements and one directory sweep, rather than loading every
+     * row and issuing one statement per entry. Any file left behind by a partial
+     * failure is an orphan the next [reclaimOrphanedBlobs] reclaims.
      */
     suspend fun clearAll() {
         withContext(Dispatchers.IO) {
-            // Get all blobs before clearing
-            val allItems = historyItemDao.getRecentItems(Int.MAX_VALUE)
-            val blobHashes = allItems.map { it.blobHash }.distinct()
-            
-            // Clear database
-            allItems.forEach { historyItemDao.deleteById(it.id) }
-            
-            // Delete all blob files
-            blobHashes.forEach { hash ->
-                blobDao.deleteByHash(hash)
-                File(casDir, hash).delete()
+            blobMutex.withLock {
+                historyItemDao.deleteAll()
+                blobDao.deleteAll()
+                casDir.listFiles()?.forEach { it.delete() }
             }
         }
     }
 
     /**
-     * Get cache statistics including total size and entry count.
-     * Calculates actual size by summing blob file sizes.
+     * Entry count and total cached bytes.
+     *
+     * Two aggregate queries returning one row each. This runs on every history
+     * change, so it must not scale with the cache: the previous implementation
+     * loaded every row and then called `File.length()` once per blob, which is
+     * one filesystem syscall per cached email.
+     *
+     * Sizes come from `blobs.size_bytes`, recorded from the content length at
+     * ingestion, rather than from the file system. The two agree because the
+     * file is written with exactly those bytes.
      */
     suspend fun getCacheStats(): CacheStats {
         return withContext(Dispatchers.IO) {
-            val entryCount = historyItemDao.count()
-            
-            // Calculate total size by summing unique blob sizes
-            val allItems = historyItemDao.getRecentItems(Int.MAX_VALUE)
-            val uniqueHashes = allItems.map { it.blobHash }.distinct()
-            var totalSize = 0L
-            
-            for (hash in uniqueHashes) {
-                val blobFile = File(casDir, hash)
-                if (blobFile.exists()) {
-                    totalSize += blobFile.length()
-                }
+            CacheStats(
+                entryCount = historyItemDao.count(),
+                totalSizeBytes = blobDao.totalSizeBytes() ?: 0L
+            )
+        }
+    }
+
+    /**
+     * Delete `cas/` files the database does not know about, returning the number
+     * of bytes reclaimed.
+     *
+     * The database and the blob directory are two stores that can disagree.
+     * `fallbackToDestructiveMigration()` drops both tables on a schema change but
+     * cannot touch the file system, so every schema bump strands the entire
+     * previous cache on disk — invisible to [getCacheStats], unreachable from
+     * "Clear cache", and never reclaimed. A crash between writing a blob and
+     * inserting its row leaves the same kind of orphan.
+     *
+     * Only files with no `blobs` row are removed, so nothing still reachable from
+     * a user's history is ever deleted. Holding [blobMutex] excludes a concurrent
+     * [ingest] whose file exists but whose row does not yet.
+     */
+    suspend fun reclaimOrphanedBlobs(): Long {
+        return withContext(Dispatchers.IO) {
+            blobMutex.withLock {
+                reclaimUnknownFiles(casDir, blobDao.allHashes().toHashSet())
             }
-            
-            CacheStats(entryCount, totalSize)
         }
     }
 

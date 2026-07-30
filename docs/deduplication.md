@@ -69,17 +69,65 @@ CREATE TABLE history_items (
 CREATE UNIQUE INDEX index_history_items_blob_hash ON history_items (blob_hash);
 ```
 
-## Performance Considerations
+## Two stores that can disagree
+
+The cache spans a database table (`blobs`) and a directory (`cas/`). Nothing
+keeps them in step automatically, and they drift in one specific direction —
+files without rows:
+
+- **Schema changes.** The database is built with `fallbackToDestructiveMigration()`.
+  A schema bump drops `blobs` and `history_items` but cannot touch the file
+  system, so the entire previous cache is stranded on disk: not counted by
+  `getCacheStats`, not reachable from "Clear cache", never reclaimed.
+- **Interrupted ingestion.** A crash between writing a blob file and inserting
+  its row leaves the same kind of orphan.
+
+`HistoryRepository.reclaimOrphanedBlobs()` reconciles them. Because a blob's hash
+*is* its filename, the rule is set membership: delete any file in `cas/` with no
+`blobs` row. It runs once at startup, off the UI path, and returns the bytes
+freed.
+
+Only files with **no** row are removed, so nothing still visible in a user's
+history is ever deleted. Emails remain cached indefinitely until the user clears
+them — reclamation removes unreachable content, never content the user can see.
+
+A `blobMutex` serialises writing a blob against registering its row, and both
+against the sweep, so a reclamation can never observe a freshly written file in
+the window before its row exists.
+
+### Vestigial reference counting
+
+`blobs.ref_count` is initialised to `1` and never incremented — `incrementRefCount`
+had no callers and has been removed. With the unique index on
+`history_items.blob_hash`, at most one history entry can reference a blob, so the
+real reference count is always `countByBlobHash(hash)`, which is what `delete`
+checks. The column and the `decrementRefCount` branch are therefore unreachable
+in practice; they are retained because dropping a column requires a schema
+migration.
+
+## Performance considerations
 
 - SHA-256 computation is fast for typical email sizes
-- Single database lookup to check for duplicates
-- No additional storage for duplicate files
-- Efficient cache usage
+- One indexed lookup to detect a duplicate
+- Duplicate content costs no additional storage
+- `getCacheStats` is two aggregate queries — `COUNT(*)` over `history_items` and
+  `SUM(size_bytes)` over `blobs` — so it does not scale with the cache. It runs on
+  every history change, and previously loaded every row and then called
+  `File.length()` once per blob.
+- `clearAll` is two `DELETE` statements and one directory sweep, rather than one
+  statement per entry.
 
 ## Testing
 
-The deduplication behavior is tested in `HistoryRepositoryTest.kt`:
+Deduplication and the blob lifecycle are tested in `HistoryRepositoryTest.kt`:
 
 - `deduplicates emails with same content - returns existing entry`
 - `deduplication updates lastAccessed timestamp`
+- `delete removes single entry and cleans up orphan blob`
+- `getCacheStats returns correct entry count and size`
 - `getCacheStats with full deduplication`
+
+Reconciliation is tested in `BlobFilesTest.kt`, against a real temporary
+directory with no database: retention of known files, reclamation of unknown
+ones, the empty-known-set case a destructive migration produces, missing
+directories, sub-directories, idempotence, and zero-length orphans.

@@ -26,6 +26,26 @@ interface BlobDao {
     @Query("DELETE FROM blobs WHERE hash = :hash")
     suspend fun deleteByHash(hash: String)
 
+    /**
+     * Total bytes recorded across all stored blobs, or `null` when none exist.
+     *
+     * `size_bytes` is written from the actual content length at ingestion, so
+     * this replaces summing `File.length()` per blob: one row instead of one
+     * filesystem syscall per cached email.
+     */
+    @Query("SELECT SUM(size_bytes) FROM blobs")
+    suspend fun totalSizeBytes(): Long?
+
+    /**
+     * Every known blob hash, for reconciling the `cas/` directory against the
+     * database. Bounded by the number of cached emails, and only read during a
+     * reclamation sweep — never on a UI path.
+     */
+    @Query("SELECT hash FROM blobs")
+    suspend fun allHashes(): List<String>
+
+    @Query("DELETE FROM blobs")
+    suspend fun deleteAll()
 }
 
 /**
@@ -50,13 +70,9 @@ interface HistoryItemDao {
     @Query("SELECT * FROM history_items ORDER BY last_accessed DESC")
     fun getAllOrderedByAccess(): Flow<List<HistoryItemEntity>>
 
-    @Query("SELECT * FROM history_items ORDER BY last_accessed DESC LIMIT :limit")
-    suspend fun getRecentItems(limit: Int): List<HistoryItemEntity>
-
     @Query("SELECT * FROM history_items WHERE id = :id")
     suspend fun getById(id: Long): HistoryItemEntity?
 
-    
     /**
      * Get a single history entry by blob hash.
      * With the unique constraint on blob_hash, at most one entry exists per hash.
