@@ -24,10 +24,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod checksum;
 pub mod icmp;
 pub mod packet;
 pub mod tls;
 pub mod tunnel;
+pub mod wire;
 
 pub use portable_atomic::{AtomicBool, Ordering};
 pub use tunnel::{run_tunnel_session, Stats, StatsSnapshot, TunnelConfig};

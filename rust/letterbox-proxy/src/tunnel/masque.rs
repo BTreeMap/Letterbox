@@ -151,7 +151,7 @@ impl MasqueTransport {
             endpoint,
             outbound: out_tx,
             inbound: in_rx,
-            stats: Stats::new(),
+            stats: Arc::new(Stats::default()),
             established: Arc::new(AtomicBool::new(false)),
             finished: Arc::new(StdAtomicBool::new(false)),
             connected_at: OnceLock::new(),
@@ -356,14 +356,12 @@ fn run_session(
     // `run_tunnel_session` borrows reader and writer separately; the duplex is
     // both, so it is split rather than borrowed twice.
     let (mut reader, mut writer) = tokio::io::split(duplex);
-    let mut pending = None;
 
     let outcome = runtime.block_on(usque_core::run_tunnel_session(
         identity,
         &tunnel_cfg,
         &mut reader,
         &mut writer,
-        &mut pending,
         stats,
         established,
     ));

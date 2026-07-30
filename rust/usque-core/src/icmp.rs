@@ -1,22 +1,50 @@
-const IPV4_HEADER_LEN: usize = 20;
-const IPV6_HEADER_LEN: usize = 40;
-const ICMP_HEADER_LEN: usize = 8;
+//! Synthesis of ICMP "Packet Too Big" replies, so PMTU discovery works.
+//!
+//! When a packet will not fit in a QUIC datagram, the sender above the tunnel
+//! has to learn the smaller MTU from somewhere. Nothing on the path will tell
+//! it — the tunnel *is* the constriction — so the reply is manufactured here
+//! and injected back towards the source.
+
+use crate::checksum::{self, Checksum};
+use crate::wire::{
+    ip_version, IpVersion, ICMP_HEADER_LEN, IPV4_CHECKSUM_OFFSET, IPV4_DST, IPV4_HEADER_LEN,
+    IPV4_SRC, IPV4_TTL_OFFSET, IPV6_DST, IPV6_HEADER_LEN, IPV6_HOP_LIMIT_OFFSET,
+    IPV6_NEXT_HEADER_OFFSET, IPV6_PAYLOAD_LEN, IPV6_SRC,
+};
 
 const ICMP_TYPE_DEST_UNREACHABLE: u8 = 3;
 const ICMP_CODE_FRAG_NEEDED: u8 = 4;
 const ICMPV6_TYPE_PACKET_TOO_BIG: u8 = 2;
 
+/// IPv4 protocol number for ICMP.
+const IPV4_PROTO_ICMP: u8 = 1;
+
+/// IPv6 next-header value for ICMPv6, also used in its pseudo-header.
+const IPV6_NEXT_HEADER_ICMPV6: u8 = 58;
+
+/// TTL/hop limit on the replies this module mints.
+const REPLY_HOP_LIMIT: u8 = 64;
+
+/// Byte offset of the checksum field within an ICMP header.
+const ICMP_CHECKSUM_OFFSET: usize = 2;
+
+/// How much of the offending packet an ICMPv4 error quotes: RFC 792 asks for
+/// the header plus the first 8 payload bytes, enough to identify the flow.
+const ICMPV4_QUOTE_LEN: usize = IPV4_HEADER_LEN + 8;
+
+/// How much an ICMPv6 error quotes: as much as fits without the reply itself
+/// exceeding the IPv6 minimum MTU (RFC 4443 §2.4).
+const ICMPV6_QUOTE_LEN: usize = 1232;
+
 /// Compose an ICMP "Packet Too Big" / "Fragmentation Needed" response
 /// for an IP packet that was too large to send as a QUIC datagram.
+///
+/// `None` when `original` is not a packet this can answer — too short to hold
+/// the addresses the reply must be sent back to, or not IP at all.
 pub fn compose_icmp_too_large(original: &[u8], mtu: u16) -> Option<Vec<u8>> {
-    if original.is_empty() {
-        return None;
-    }
-
-    match original[0] >> 4 {
-        4 => compose_icmpv4_too_large(original, mtu),
-        6 => compose_icmpv6_too_large(original, mtu),
-        _ => None,
+    match ip_version(original)? {
+        IpVersion::V4 => compose_icmpv4_too_large(original, mtu),
+        IpVersion::V6 => compose_icmpv6_too_large(original, mtu),
     }
 }
 
@@ -24,32 +52,33 @@ fn compose_icmpv4_too_large(original: &[u8], mtu: u16) -> Option<Vec<u8>> {
     if original.len() < IPV4_HEADER_LEN {
         return None;
     }
+    let quote = &original[..ICMPV4_QUOTE_LEN.min(original.len())];
 
-    // ICMP payload: original IP header + first 8 bytes of original payload
-    let icmp_payload_len = (IPV4_HEADER_LEN + 8).min(original.len());
-    let icmp_data = &original[..icmp_payload_len];
-
-    let total_len = IPV4_HEADER_LEN + ICMP_HEADER_LEN + icmp_data.len();
+    let total_len = IPV4_HEADER_LEN + ICMP_HEADER_LEN + quote.len();
     let mut pkt = vec![0u8; total_len];
 
     pkt[0] = 0x45;
     pkt[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
-    pkt[8] = 64;
-    pkt[9] = 1; // ICMP
-    pkt[12..16].copy_from_slice(&original[16..20]); // swap src/dst
-    pkt[16..20].copy_from_slice(&original[12..16]);
+    pkt[IPV4_TTL_OFFSET] = REPLY_HOP_LIMIT;
+    pkt[9] = IPV4_PROTO_ICMP;
+    // The reply travels back the way the packet came, so the addresses swap.
+    pkt[IPV4_SRC].copy_from_slice(&original[IPV4_DST]);
+    pkt[IPV4_DST].copy_from_slice(&original[IPV4_SRC]);
 
-    let ip_checksum = ipv4_checksum(&pkt[..IPV4_HEADER_LEN]);
-    pkt[10..12].copy_from_slice(&ip_checksum.to_be_bytes());
+    let ip_checksum = checksum::of_header(&pkt[..IPV4_HEADER_LEN], IPV4_CHECKSUM_OFFSET);
+    pkt[IPV4_CHECKSUM_OFFSET..IPV4_CHECKSUM_OFFSET + 2].copy_from_slice(&ip_checksum.to_be_bytes());
 
-    let icmp_start = IPV4_HEADER_LEN;
-    pkt[icmp_start] = ICMP_TYPE_DEST_UNREACHABLE;
-    pkt[icmp_start + 1] = ICMP_CODE_FRAG_NEEDED;
-    pkt[icmp_start + 6..icmp_start + 8].copy_from_slice(&mtu.to_be_bytes()); // next-hop MTU
-    pkt[icmp_start + ICMP_HEADER_LEN..].copy_from_slice(icmp_data);
+    let icmp = &mut pkt[IPV4_HEADER_LEN..];
+    icmp[0] = ICMP_TYPE_DEST_UNREACHABLE;
+    icmp[1] = ICMP_CODE_FRAG_NEEDED;
+    // Next-hop MTU occupies the second half of the unused word.
+    icmp[6..8].copy_from_slice(&mtu.to_be_bytes());
+    icmp[ICMP_HEADER_LEN..].copy_from_slice(quote);
 
-    let icmp_cksum = internet_checksum(&pkt[icmp_start..]);
-    pkt[icmp_start + 2..icmp_start + 4].copy_from_slice(&icmp_cksum.to_be_bytes());
+    // ICMPv4 checksums the message alone — no pseudo-header, unlike ICMPv6.
+    let icmp_checksum = checksum::of_header(icmp, ICMP_CHECKSUM_OFFSET);
+    icmp[ICMP_CHECKSUM_OFFSET..ICMP_CHECKSUM_OFFSET + 2]
+        .copy_from_slice(&icmp_checksum.to_be_bytes());
 
     Some(pkt)
 }
@@ -58,111 +87,49 @@ fn compose_icmpv6_too_large(original: &[u8], mtu: u16) -> Option<Vec<u8>> {
     if original.len() < IPV6_HEADER_LEN {
         return None;
     }
+    let quote = &original[..ICMPV6_QUOTE_LEN.min(original.len())];
 
-    // ICMPv6 payload: as much of the original as will fit (max ~1232 bytes)
-    let max_icmp_payload = 1232;
-    let icmp_payload_len = original.len().min(max_icmp_payload);
-    let icmp_data = &original[..icmp_payload_len];
-
-    let payload_len = ICMP_HEADER_LEN + icmp_data.len();
-    let total_len = IPV6_HEADER_LEN + payload_len;
-    let mut pkt = vec![0u8; total_len];
+    let payload_len = ICMP_HEADER_LEN + quote.len();
+    let mut pkt = vec![0u8; IPV6_HEADER_LEN + payload_len];
 
     pkt[0] = 0x60;
-    pkt[4..6].copy_from_slice(&(payload_len as u16).to_be_bytes());
-    pkt[6] = 58; // ICMPv6
-    pkt[7] = 64;
-    pkt[8..24].copy_from_slice(&original[24..40]); // swap src/dst
-    pkt[24..40].copy_from_slice(&original[8..24]);
+    pkt[IPV6_PAYLOAD_LEN].copy_from_slice(&(payload_len as u16).to_be_bytes());
+    pkt[IPV6_NEXT_HEADER_OFFSET] = IPV6_NEXT_HEADER_ICMPV6;
+    pkt[IPV6_HOP_LIMIT_OFFSET] = REPLY_HOP_LIMIT;
+    pkt[IPV6_SRC].copy_from_slice(&original[IPV6_DST]);
+    pkt[IPV6_DST].copy_from_slice(&original[IPV6_SRC]);
 
-    let icmp_start = IPV6_HEADER_LEN;
-    pkt[icmp_start] = ICMPV6_TYPE_PACKET_TOO_BIG;
-    pkt[icmp_start + 1] = 0;
-    pkt[icmp_start + 4..icmp_start + 8].copy_from_slice(&u32::from(mtu).to_be_bytes());
-    pkt[icmp_start + ICMP_HEADER_LEN..].copy_from_slice(icmp_data);
-    let cksum = icmpv6_checksum(
-        &pkt[8..24],  // src
-        &pkt[24..40], // dst
-        &pkt[icmp_start..],
-    );
-    pkt[icmp_start + 2..icmp_start + 4].copy_from_slice(&cksum.to_be_bytes());
+    let icmp = &mut pkt[IPV6_HEADER_LEN..];
+    icmp[0] = ICMPV6_TYPE_PACKET_TOO_BIG;
+    icmp[1] = 0;
+    // ICMPv6 carries the MTU as a full 32-bit field, where ICMPv4 has 16 bits.
+    icmp[4..8].copy_from_slice(&u32::from(mtu).to_be_bytes());
+    icmp[ICMP_HEADER_LEN..].copy_from_slice(quote);
+
+    let icmp_checksum = icmpv6_checksum(&pkt[IPV6_SRC], &pkt[IPV6_DST], &pkt[IPV6_HEADER_LEN..]);
+    pkt[IPV6_HEADER_LEN + ICMP_CHECKSUM_OFFSET..IPV6_HEADER_LEN + ICMP_CHECKSUM_OFFSET + 2]
+        .copy_from_slice(&icmp_checksum.to_be_bytes());
 
     Some(pkt)
 }
 
-fn ipv4_checksum(header: &[u8]) -> u16 {
-    let mut sum: u32 = 0;
-    let mut i = 0;
-    while i < header.len() {
-        if i == 10 {
-            i += 2;
-            continue;
-        }
-        let word = if i + 1 < header.len() {
-            u16::from_be_bytes([header[i], header[i + 1]])
-        } else {
-            u16::from_be_bytes([header[i], 0])
-        };
-        sum += u32::from(word);
-        i += 2;
-    }
-    while sum >> 16 != 0 {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-    !(sum as u16)
-}
-
-fn internet_checksum(data: &[u8]) -> u16 {
-    let mut sum: u32 = 0;
-    let mut i = 0;
-    while i < data.len() {
-        let word = if i + 1 < data.len() {
-            u16::from_be_bytes([data[i], data[i + 1]])
-        } else {
-            u16::from_be_bytes([data[i], 0])
-        };
-        sum += u32::from(word);
-        i += 2;
-    }
-    while sum >> 16 != 0 {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-    !(sum as u16)
-}
-
-fn icmpv6_checksum(src: &[u8], dst: &[u8], icmpv6_data: &[u8]) -> u16 {
-    let mut sum: u32 = 0;
-
-    for i in (0..16).step_by(2) {
-        sum += u32::from(u16::from_be_bytes([src[i], src[i + 1]]));
-    }
-    for i in (0..16).step_by(2) {
-        sum += u32::from(u16::from_be_bytes([dst[i], dst[i + 1]]));
-    }
-    let len = icmpv6_data.len() as u32;
-    sum += len >> 16;
-    sum += len & 0xFFFF;
-    sum += 58u32; // next header
-
-    let mut i = 0;
-    while i < icmpv6_data.len() {
-        if i == 2 {
-            i += 2; // skip checksum field
-            continue;
-        }
-        let word = if i + 1 < icmpv6_data.len() {
-            u16::from_be_bytes([icmpv6_data[i], icmpv6_data[i + 1]])
-        } else {
-            u16::from_be_bytes([icmpv6_data[i], 0])
-        };
-        sum += u32::from(word);
-        i += 2;
-    }
-
-    while sum >> 16 != 0 {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-    !(sum as u16)
+/// ICMPv6 checksum: the message *plus* the IPv6 pseudo-header (RFC 4443 §2.3).
+///
+/// Unlike ICMPv4 this covers addresses from the enclosing header, which is what
+/// stops an ICMPv6 message being replayed onto a different pair of hosts. The
+/// pseudo-header is never assembled in memory — ones'-complement addition is
+/// associative, so its parts are simply added to the same accumulator.
+fn icmpv6_checksum(src: &[u8], dst: &[u8], message: &[u8]) -> u16 {
+    let mut sum = Checksum::default();
+    sum.add_bytes(src);
+    sum.add_bytes(dst);
+    // Upper-layer packet length, as a 32-bit field split across two words.
+    let length = message.len() as u32;
+    sum.add_word((length >> 16) as u16);
+    sum.add_word(length as u16);
+    sum.add_word(u16::from(IPV6_NEXT_HEADER_ICMPV6));
+    sum.add_bytes_zeroing(message, ICMP_CHECKSUM_OFFSET);
+    sum.finish()
 }
 
 #[cfg(test)]
@@ -215,8 +182,8 @@ mod tests {
         assert_eq!(mtu_val, 512);
 
         // Verify ICMP checksum
-        let cksum = internet_checksum(icmp);
-        assert_eq!(cksum, 0, "ICMP checksum should verify to 0");
+        // A message carrying its own checksum sums to zero at the receiver.
+        assert_eq!(checksum::of(icmp), 0, "ICMP checksum should verify to 0");
     }
 
     #[test]

@@ -9,21 +9,54 @@ use tempfile::NamedTempFile;
 use crate::TunnelIdentity;
 
 /// Holds temporary PEM files for quiche TLS config and the pinned endpoint key.
+///
+/// The files exist because quiche loads certificates by path only. They live as
+/// long as this value: dropping it removes them, so it must outlive the
+/// `quiche::Config` that reads them.
 pub struct TlsMaterial {
     pub cert_pem_file: NamedTempFile,
     pub key_pem_file: NamedTempFile,
     pub endpoint_pub_key_spki_der: Vec<u8>,
 }
 
+impl TlsMaterial {
+    /// Path to the certificate PEM, as the `&str` quiche wants.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the temporary directory is not valid UTF-8. Vanishingly
+    /// unlikely, and reported rather than asserted: a panic deep in session
+    /// setup is far harder to diagnose than a named error.
+    pub fn cert_path(&self) -> Result<&str> {
+        path_str(&self.cert_pem_file, "certificate")
+    }
+
+    /// Path to the private key PEM.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::cert_path`].
+    pub fn key_path(&self) -> Result<&str> {
+        path_str(&self.key_pem_file, "private key")
+    }
+}
+
+/// Render a temp file's path as UTF-8, naming which file failed.
+fn path_str<'a>(file: &'a NamedTempFile, what: &str) -> Result<&'a str> {
+    file.path()
+        .to_str()
+        .with_context(|| format!("temporary {what} path is not valid UTF-8"))
+}
+
 /// Generate self-signed client cert from the enrolled private key and prepare
 /// temp PEM files that quiche can load.
 ///
-/// MODIFIED FROM UPSTREAM: takes a [`TunnelIdentity`] instead of usque-rs's
-/// file-backed `Config`, so the caller decides where the key material lives.
-/// The certificate generation and pinning logic below is unchanged.
+/// The certificate is what identifies the device to Cloudflare, so it must wrap
+/// the key that was enrolled — not the throwaway key from registration. Taking
+/// a [`TunnelIdentity`] rather than a path is what keeps that choice at the
+/// caller, where the two keys are told apart by name.
 pub fn prepare_tls_material(identity: &TunnelIdentity) -> Result<TlsMaterial> {
-    let priv_key_der = identity.ec_private_key_der.clone();
-    let signing_key = SigningKey::from_pkcs8_der(&priv_key_der)
+    let signing_key = SigningKey::from_pkcs8_der(&identity.ec_private_key_der)
         .context("failed to parse ECDSA private key from config")?;
 
     let key_pair_pem =
@@ -52,12 +85,10 @@ pub fn prepare_tls_material(identity: &TunnelIdentity) -> Result<TlsMaterial> {
     key_file.write_all(key_pair_pem.as_bytes())?;
     key_file.flush()?;
 
-    let endpoint_pub_key_spki_der = identity.endpoint_pub_key_spki_der.clone();
-
     Ok(TlsMaterial {
         cert_pem_file: cert_file,
         key_pem_file: key_file,
-        endpoint_pub_key_spki_der,
+        endpoint_pub_key_spki_der: identity.endpoint_pub_key_spki_der.clone(),
     })
 }
 

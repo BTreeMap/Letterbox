@@ -1,9 +1,13 @@
+//! IP packet validation and TTL handling for the tunnel's two directions.
+
+use crate::checksum;
+use crate::wire::{
+    ip_version, IpVersion, IPV4_CHECKSUM_OFFSET, IPV4_HEADER_LEN, IPV4_TTL_OFFSET, IPV6_HEADER_LEN,
+    IPV6_HOP_LIMIT_OFFSET,
+};
 use thiserror::Error;
 
-const IPV4_HEADER_LEN: usize = 20;
-const IPV6_HEADER_LEN: usize = 40;
-
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PacketError {
     #[error("empty packet")]
     Empty,
@@ -15,109 +19,68 @@ pub enum PacketError {
     TtlExpired(u8),
 }
 
-#[inline]
-pub fn ip_version(buf: &[u8]) -> u8 {
-    buf[0] >> 4
+/// Recognise the version and confirm the buffer holds a whole fixed header.
+///
+/// The one gate through which a byte buffer becomes a packet this module will
+/// touch. Both directions run it first, so neither indexes a header field it
+/// has not established is present — the offsets below are total *because* this
+/// returned `Ok`.
+fn parse_version(buf: &[u8]) -> Result<IpVersion, PacketError> {
+    // "Nothing arrived" and "something arrived that is not IP" are different
+    // faults with different causes, so they stay different errors.
+    let first = *buf.first().ok_or(PacketError::Empty)?;
+    let version = ip_version(buf).ok_or(PacketError::UnknownVersion(first >> 4))?;
+    let required = match version {
+        IpVersion::V4 => IPV4_HEADER_LEN,
+        IpVersion::V6 => IPV6_HEADER_LEN,
+    };
+    if buf.len() < required {
+        return Err(PacketError::TooShort {
+            version: version.number(),
+            len: buf.len(),
+        });
+    }
+    Ok(version)
 }
 
 /// Validate an IP packet and decrement TTL/Hop Limit in-place.
 /// Returns the IP version (4 or 6) on success.
 pub fn prepare_outgoing(buf: &mut [u8]) -> Result<u8, PacketError> {
-    if buf.is_empty() {
-        return Err(PacketError::Empty);
+    let version = parse_version(buf)?;
+    let hop_offset = match version {
+        IpVersion::V4 => IPV4_TTL_OFFSET,
+        IpVersion::V6 => IPV6_HOP_LIMIT_OFFSET,
+    };
+
+    let hops = buf[hop_offset];
+    if hops <= 1 {
+        return Err(PacketError::TtlExpired(hops));
+    }
+    buf[hop_offset] = hops - 1;
+
+    // Only IPv4 checksums its header, and only the header — so decrementing the
+    // TTL means recomputing it. IPv6 dropped the field precisely to avoid this.
+    if version == IpVersion::V4 {
+        let checksum = ipv4_header_checksum(&buf[..IPV4_HEADER_LEN]);
+        buf[IPV4_CHECKSUM_OFFSET..IPV4_CHECKSUM_OFFSET + 2]
+            .copy_from_slice(&checksum.to_be_bytes());
     }
 
-    match ip_version(buf) {
-        4 => {
-            if buf.len() < IPV4_HEADER_LEN {
-                return Err(PacketError::TooShort {
-                    version: 4,
-                    len: buf.len(),
-                });
-            }
-            let ttl = buf[8];
-            if ttl <= 1 {
-                return Err(PacketError::TtlExpired(ttl));
-            }
-            buf[8] -= 1;
-            let checksum = calculate_ipv4_checksum(&buf[..IPV4_HEADER_LEN]);
-            buf[10..12].copy_from_slice(&checksum.to_be_bytes());
-            Ok(4)
-        }
-        6 => {
-            if buf.len() < IPV6_HEADER_LEN {
-                return Err(PacketError::TooShort {
-                    version: 6,
-                    len: buf.len(),
-                });
-            }
-            let hop_limit = buf[7];
-            if hop_limit <= 1 {
-                return Err(PacketError::TtlExpired(hop_limit));
-            }
-            buf[7] -= 1;
-            Ok(6)
-        }
-        v => Err(PacketError::UnknownVersion(v)),
-    }
+    Ok(version.number())
 }
 
 /// Validate an incoming IP packet (basic checks only).
 pub fn validate_incoming(buf: &[u8]) -> Result<u8, PacketError> {
-    if buf.is_empty() {
-        return Err(PacketError::Empty);
-    }
-    match ip_version(buf) {
-        4 => {
-            if buf.len() < IPV4_HEADER_LEN {
-                return Err(PacketError::TooShort {
-                    version: 4,
-                    len: buf.len(),
-                });
-            }
-            Ok(4)
-        }
-        6 => {
-            if buf.len() < IPV6_HEADER_LEN {
-                return Err(PacketError::TooShort {
-                    version: 6,
-                    len: buf.len(),
-                });
-            }
-            Ok(6)
-        }
-        v => Err(PacketError::UnknownVersion(v)),
-    }
+    parse_version(buf).map(IpVersion::number)
 }
 
-/// Calculate IPv4 header checksum (RFC 791).
-/// The header slice must be exactly 20 bytes (no options) or at least
-/// the IHL-indicated length. We compute over the full IHL length.
-fn calculate_ipv4_checksum(header: &[u8]) -> u16 {
-    let ihl = ((header[0] & 0x0F) as usize) * 4;
-    let len = ihl.min(header.len());
-    let mut sum: u32 = 0;
-
-    let mut i = 0;
-    while i < len {
-        if i == 10 {
-            i += 2; // skip checksum field
-            continue;
-        }
-        let word = if i + 1 < len {
-            u16::from_be_bytes([header[i], header[i + 1]])
-        } else {
-            u16::from_be_bytes([header[i], 0])
-        };
-        sum += u32::from(word);
-        i += 2;
-    }
-
-    while sum >> 16 != 0 {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-
-    !(sum as u16)
+/// IPv4 header checksum (RFC 791), computed over the IHL-declared length.
+///
+/// Capped at the slice: a header claiming options that the caller did not hand
+/// over is summed over what is actually present rather than read past.
+fn ipv4_header_checksum(header: &[u8]) -> u16 {
+    let ihl = usize::from(header[0] & 0x0F) * 4;
+    checksum::of_header(&header[..ihl.min(header.len())], IPV4_CHECKSUM_OFFSET)
 }
 
 #[cfg(test)]
@@ -133,7 +96,7 @@ mod tests {
         hdr[12..16].copy_from_slice(&[10, 0, 0, 1]);
         hdr[16..20].copy_from_slice(&[10, 0, 0, 2]);
 
-        let cksum = calculate_ipv4_checksum(&hdr);
+        let cksum = ipv4_header_checksum(&hdr);
         hdr[10..12].copy_from_slice(&cksum.to_be_bytes());
 
         let mut v: u32 = (0..20)

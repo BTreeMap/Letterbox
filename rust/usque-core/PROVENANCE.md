@@ -34,22 +34,45 @@ carry one.
 
 | File | Lines | State |
 |---|---|---|
-| `src/packet.rs` | 358 | **verbatim** — IPv4/IPv6 validation, TTL decrement, checksum |
-| `src/icmp.rs` | 352 | **verbatim** — "Packet Too Big" synthesis for PMTU |
-| `src/tls.rs` | 68 | one signature changed (below) |
-| `src/tunnel.rs` | 663 | patched (below) |
+| `src/packet.rs` | 358 | IPv4/IPv6 validation, TTL decrement, checksum |
+| `src/icmp.rs` | 352 | "Packet Too Big" synthesis for PMTU |
+| `src/tls.rs` | 68 | certificate generation and SPKI pinning |
+| `src/tunnel.rs` | 663 | QUIC handshake, CONNECT-IP, datagram loop |
 
 `src/config.rs` (file-backed JSON config), `src/register.rs` (registration
 API), `src/tun_device.rs` and `src/main.rs` (CLI) were not taken: Letterbox
 already has its own configuration, provisioning and entry point.
 
 `tests/tunnel_mtu.rs` was not taken. It requires root or `CAP_NET_ADMIN` and
-creates real TUN devices, so it cannot run in CI or on Android. The 31 unit
-tests inside `packet.rs` and `icmp.rs` came across unchanged and do run.
+creates real TUN devices, so it cannot run in CI or on Android. The unit tests
+inside `packet.rs` and `icmp.rs` came across and do run.
 
-## Modifications
+## Status: forked, not vendored
 
-Every change is marked in the source with `MODIFIED FROM UPSTREAM` or `ADDED`.
+**This is Letterbox's code now.** It is not synced with upstream in either
+direction: no changes are contributed back, and no upstream changes are pulled
+in. The table above records where the code came from and the licence it arrived
+under — obligations that do not expire — and nothing more.
+
+That distinction decides how the code is maintained. While a rebase was on the
+table, staying close to upstream had real value: every divergence was a merge
+conflict deferred, so "verbatim" was worth protecting even where the code fell
+short of the standards applied elsewhere in this repository. With no rebase to
+protect, that value is zero, and the cost of holding the line — code held to a
+weaker standard than the modules that call it — is all that remains.
+
+So this crate is held to the same standard as the rest of the repository:
+clippy-clean, no `unwrap` outside tests, invariants in types rather than in
+comments, and duplication removed rather than preserved out of deference. The
+per-change `MODIFIED FROM UPSTREAM` markers that used to annotate the source
+have been dropped for the same reason: they tracked a diff nobody will ever
+apply, and they were already drifting out of date.
+
+The behavioural decisions that were made *for Letterbox specifically* are
+recorded below, because those are design choices a future reader needs, not
+bookkeeping against a diff.
+
+## Deliberate divergences from upstream behaviour
 
 **`src/tls.rs`**
 1. `prepare_tls_material` takes `&TunnelIdentity` instead of usque-rs's
@@ -77,27 +100,59 @@ Every change is marked in the source with `MODIFIED FROM UPSTREAM` or `ADDED`.
    with it. On Android that is an ANR. `TunnelConfig::new` rejects an idle
    timeout that does not exceed the keepalive period, which would otherwise
    disconnect a healthy tunnel between its own keepalives.
+7. **A failed UDP send ends the session** instead of being retried on the next
+   iteration of the forwarding loop. Retrying read as the forgiving option but
+   left the tunnel reporting itself connected while nothing flowed, for as long
+   as the idle timeout allowed. Failing surfaces the fault at once and lets the
+   manager rebuild — the same reasoning as the finite idle timeout above.
 
-Not modified: the QUIC handshake, endpoint pinning, extended-CONNECT exchange,
-datagram framing (`parse_datagram`), PMTU handling, or the forwarding loop.
+The protocol itself is unchanged: the QUIC handshake, endpoint pinning,
+extended-CONNECT exchange, datagram framing (`parse_datagram`) and PMTU
+handling all behave as upstream does.
 
-**Letterbox additions** (not derived from upstream): `src/lib.rs`, and the
-`TunnelIdentity` / `IdentityError` types.
+**Letterbox additions** (not derived from upstream): `src/lib.rs`,
+`src/checksum.rs`, `src/wire.rs`, and the `TunnelIdentity` / `IdentityError`
+types.
 
-## Checking against upstream
+## Structural changes
+
+These preserve behaviour and exist to hold the crate to the repository's
+standard. They are listed because they move code between files, which a reader
+comparing against upstream will notice.
+
+- **`src/checksum.rs`** replaces four separate transcriptions of the internet
+  checksum (two in `packet.rs`, three in `icmp.rs`, overlapping). Ones'-
+  complement addition is a commutative monoid, so one accumulator serves the
+  IPv4 header, the ICMP message and the ICMPv6 pseudo-header alike — the last
+  of which no longer has to be assembled in memory to be summed.
+- **`src/wire.rs`** holds the IP header offsets and an `IpVersion` sum that
+  `packet.rs` and `icmp.rs` previously each declared for themselves. Two
+  transcriptions of the same RFC are two chances to mistype an offset, and the
+  mistake shows up as a checksum that fails on a real network rather than as
+  anything a test catches.
+- **`src/tunnel.rs`** is split into named phases (`complete_handshake`,
+  `open_connect_ip_flow`, `forward_packets`) with one `flush_egress` where
+  there were five copies of the same drain loop. `ip_version` returns
+  `Option<IpVersion>` rather than indexing byte 0 of a possibly-empty buffer,
+  and the `pending_pkt` in/out parameter is gone: it existed for
+  `maintain_tunnel`'s reconnect path and has been dead since that was removed.
+
+## Consulting upstream
+
+Upstream remains useful as a reference when reading the protocol code — it is
+the implementation this was checked against on a live Cloudflare endpoint — and
+it can be fetched for that:
 
 ```sh
 git clone https://github.com/BTreeMap/usque-rs /tmp/usque-rs
 git -C /tmp/usque-rs checkout 1b808bb
-diff -u /tmp/usque-rs/src/packet.rs rust/usque-core/src/packet.rs   # expect no output
-diff -u /tmp/usque-rs/src/icmp.rs   rust/usque-core/src/icmp.rs     # expect no output
-diff -u /tmp/usque-rs/src/tunnel.rs rust/usque-core/src/tunnel.rs   # expect only the above
 ```
 
-`packet.rs` and `icmp.rs` must diff empty — verified at the time of writing. If
-they ever do not, this file is out of date and the discrepancy should be
-resolved before shipping.
+Do **not** expect the files to correspond. There is no diff to keep small and
+no expectation that any file matches; a divergence is not a discrepancy to
+resolve. Consult upstream to understand *why* the protocol does something, and
+change this crate on its own merits.
 
-`tunnel.rs` and `tls.rs` will show more changed lines than the list above
-implies, because the repository's `cargo fmt` runs over them and reflows
-untouched code. Read the diff for the marked edits, not for its size.
+Should upstream ever fix a protocol bug worth having, port the fix
+deliberately — read it, decide it applies, write it in this crate's idiom, and
+add a test. Do not merge.
