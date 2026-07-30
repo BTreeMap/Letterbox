@@ -125,9 +125,7 @@ jobs:
       # compiled library, and that metadata is target-independent, so the
       # bindings do not require the Android NDK or cargo-ndk.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2

@@ -172,16 +172,26 @@ Every `uses:` names the action's **current major-version tag**:
 | `gradle/actions/setup-gradle` | `@v6` | v6.2.0 |
 | `Swatinem/rust-cache` | `@v2` | v2.9.1 |
 | `softprops/action-gh-release` | `@v3` | v3.0.2 |
-| `dtolnay/rust-toolchain` | `@v1` | v1 |
+| `dtolnay/rust-toolchain` | `@stable` | see below |
 
 This is a deliberate trade. Pinning to a commit SHA removes the publisher's ability to substitute code, but every action then needs a manual bump to receive a fix, and pins that nobody updates end up worse than a moving tag: they silently retain known-vulnerable versions. Tracking the major tag means security fixes and runtime-deprecation updates (Node version bumps, for instance) arrive without intervention, at the cost of trusting the publisher not to move the tag maliciously. For the accounts above — GitHub's own org, Gradle's, and three widely-used community actions — that trust is already implied by using them at all.
 
 Two rules make the trade smaller:
 
-1. **Major tags only, never patch tags or branches.** A patch pin such as `@v6.2.0` gets the mutability without the updates, which is the worst of both. A branch (`dtolnay/rust-toolchain@stable` was one) moves on *every* upstream push, not just releases — which is why that one is now `@v1` with `toolchain: stable` passed as an input.
+1. **Follow the channel the action actually maintains, never a patch tag.** A patch pin such as `@v6.2.0` gets the mutability without the updates, which is the worst of both. For most actions the maintained channel is the major tag; see the exception below for when it is not.
 2. **Least privilege is what actually bounds the damage.** No job holds more than it needs, and the job that can push to `main` runs no third-party action beyond `checkout` and `download-artifact`. A compromised build action therefore lands in a job with `contents: read` and no persisted credentials.
 
 When a major version is superseded, bump it here and update the table.
+
+#### Exception: `dtolnay/rust-toolchain@stable`
+
+This one is pinned to a **branch**, which the rule above would normally forbid. It is correct here, and the reasoning generalises: *find the ref the maintainer actually keeps current*, rather than assuming it is the one shaped like a version.
+
+That action's ref namespace does not describe the action's own versions — it describes **Rust toolchain versions**. Its branches are `1.0`, `1.1`, … `1.14`, alongside the channel branches `stable`, `beta` and `nightly`; `@1.14` means "install Rust 1.14". A ref named `v1` therefore reads as a Rust version in this namespace, not an action version.
+
+It is also stale. `v1` is the repository's only release, its tag commit dates from 2025-08 and its release metadata is backdated to 2022, whereas the `stable` branch tracks the action's development and moved as recently as 2026-07. Pinning `@v1` would buy the ambiguity *and* the frozen-pin failure mode this policy exists to avoid.
+
+`@stable` additionally defaults the `toolchain` input, which `v1` marks required — so the branch is the documented usage, not merely the current one.
 
 ## Runners and native-library build constraint
 
