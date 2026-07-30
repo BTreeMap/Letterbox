@@ -19,17 +19,24 @@ is what makes it testable.
 ## Changing an `@Entity`
 
 1. Confirm the JSON for the current version is already committed here.
-2. Bump `version` on `LetterboxDatabase` and write the `Migration`.
-3. Add a case to `LetterboxDatabaseMigrationTest` covering it.
-4. Build, then commit the newly generated JSON together with the change.
+2. Bump `version` on `LetterboxDatabase` and add the `Migration` to
+   `data/Migrations.kt`. Push; CI commits the new JSON.
+3. Once that JSON has landed, add a case to `LetterboxDatabaseMigrationTest`.
 
 ## Regenerating
 
-Generation needs Room's annotation processor, so it requires a real Android SDK:
+Normally you do not: the `Export Room Schemas` workflow runs on every push to
+`main`, generates the JSON, and commits it back. Because that commit arrives
+*after* yours, a migration test for the new version can only be added in a
+follow-up change — `MigrationTestHelper` reads these files from the instrumented
+APK's assets, so the JSON has to be committed before the test can load it.
+
+To generate locally you need a real Android SDK, since this runs Room's
+annotation processor:
 
 ```sh
 ./gradlew :app:kspProdDebugKotlin --no-daemon
 ```
 
-`./gradlew :app:test` and `:app:assembleProdDebug` also produce it as a
-side effect.
+`./gradlew :app:test` and `:app:assembleProdDebug` also produce it as a side
+effect.

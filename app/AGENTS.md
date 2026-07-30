@@ -18,13 +18,14 @@ Room. Root rules apply; this file adds module-local ones.
   and regenerate.
 * Persist blobs through `HistoryRepository`, never with direct file writes
   (`docs/deduplication.md`).
-* Schema changes: bump `LetterboxDatabase.version`, write and test a `Migration`,
-  and commit the regenerated `schemas/` JSON alongside it. The JSON for version N
-  must be committed *before* N+1 exists or the migration becomes untestable
-  (`schemas/README.md`).
+* Schema changes: bump `LetterboxDatabase.version` and add a `Migration` to
+  `data/Migrations.kt`. CI commits the regenerated `schemas/` JSON; add the
+  migration test case once it lands, because `MigrationTestHelper` loads it from
+  the test APK assets (`schemas/README.md`).
 * Search/filter/sort has one definition: `HistoryQuery`, a pure function tested
-  in `HistoryQueryTest`. Extend it rather than adding queries elsewhere; the
-  `email_fts` FTS4 table is intentionally unused (`docs/full-text-search.md`).
+  in `HistoryQueryTest`. Extend it rather than adding queries elsewhere. Text
+  matching goes through the folded `search_text` column, never SQL `lower()` or
+  `NOCASE`, both of which fold ASCII only (`docs/full-text-search.md`).
 * For host-side FFI tests, override the native library path with
   `LETTERBOX_CORE_LIB_PATH` (or the `uniffi.component.letterbox_core.libraryOverride`
   system property) when the default `target/release/` artifact is missing.

@@ -86,6 +86,15 @@ interface HistoryItemDao {
     @Query("UPDATE history_items SET last_accessed = :timestamp WHERE id = :id")
     suspend fun updateLastAccessed(id: Long, timestamp: Long)
 
+    /**
+     * Rewrite a row's folded search text.
+     *
+     * Used to repair rows backfilled by the 3-to-4 migration, whose SQL `lower()`
+     * could only fold ASCII. See `Migrations.kt`.
+     */
+    @Query("UPDATE history_items SET search_text = :searchText WHERE id = :id")
+    suspend fun updateSearchText(id: Long, searchText: String)
+
     @Query("DELETE FROM history_items WHERE id = :id")
     suspend fun deleteById(id: Long)
 

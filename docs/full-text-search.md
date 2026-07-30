@@ -1,12 +1,9 @@
 # Search, Filter and Sort
 
-## Overview
+## One specification, two interpreters
 
-Letterbox searches, filters and sorts the email history entirely in memory, in
-one place: `HistoryQuery` (`app/src/main/java/org/joefang/letterbox/HistoryQuery.kt`).
-
-A `HistoryQuery` is a plain value describing *which* entries to show and *in what
-order*. `applyTo` is a pure total function:
+`HistoryQuery` (`app/src/main/java/org/joefang/letterbox/HistoryQuery.kt`) is a
+plain value describing *which* history entries to show and *in what order*:
 
 ```kotlin
 HistoryQuery(
@@ -14,191 +11,197 @@ HistoryQuery(
     onlyWithAttachments = true,
     sortField = SortField.DATE,
     sortDirection = SortDirection.DESCENDING,
-).applyTo(entries)   // List<HistoryEntry> -> List<HistoryEntry>
+)
 ```
 
-Because it is pure and free of Android, Room and coroutine dependencies, it is
-tested directly in `HistoryQueryTest.kt` with no runner — and it is the same code
-path the UI runs, not a parallel one.
+It has two interpreters, and both are pure:
+
+| Interpreter | Result | Role |
+|---|---|---|
+| `applyTo(entries)` | `List<HistoryEntry>` | The **executable specification**, and what the UI runs today |
+| `toSqlSelect()` | `SqlSelect` (SQL + bound args) | The paged path: filtering and ordering done by SQLite |
+
+Keeping the specification executable is deliberate. These semantics previously
+existed in three implementations that disagreed about which fields were
+searchable, precisely because none of them was defined as the reference. `applyTo`
+is now that reference: the SQL interpreter is asserted to agree with it rather
+than assumed to.
+
+`SqlSelect` is intentionally not a `SupportSQLiteQuery` — that type is
+Android-only, and keeping it out means query construction is unit-tested off
+device.
 
 ## Searchable fields
 
 `text` matches as a **case-insensitive substring** across:
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| `subject` | Email subject line | "Meeting Tomorrow at 3pm" |
-| `senderName` | Sender's display name | "John Doe" |
-| `senderEmail` | Sender's email address | "john@example.com" |
-| `displayName` | File display name | "message.eml" |
-| `bodyPreview` | First 500 characters of the body | "Hi team, please review..." |
+| Field | Example |
+|-------|---------|
+| `subject` | "Meeting Tomorrow at 3pm" |
+| `senderName` | "John Doe" |
+| `senderEmail` | "john@example.com" |
+| `displayName` | "message.eml" |
+| `bodyPreview` | First 500 characters of the body |
 
-Blank or whitespace-only text matches everything. Surrounding whitespace in the
-query is trimmed. Punctuation is matched literally and never interpreted as
-syntax.
+Blank or whitespace-only text matches everything; surrounding whitespace is
+trimmed; punctuation is matched literally and never interpreted as syntax.
 
-Matching uses `contains(ignoreCase = true)` rather than lowercasing both sides,
-which avoids allocating a case-folded copy of five fields per entry per
-keystroke, and sidesteps length-changing case mappings such as `ß`/`SS`.
+## Case folding, and why `search_text` exists
 
-## Why in memory and not SQLite FTS4
+**SQLite's `LIKE`, `lower()` and `NOCASE` collation fold ASCII only**, and
+Android's SQLite ships without ICU. Translating `contains(ignoreCase = true)`
+straight into `LIKE '%q%'` would therefore stop "müller" from finding "Müller" —
+breaking search for every cased non-ASCII script: accented Latin, Cyrillic, Greek,
+Turkish.
 
-The database *does* contain an FTS4 virtual table, `email_fts`, declared by
-`EmailFtsEntity`. **Nothing queries it.** That is deliberate.
+So case is folded **once at each boundary, in Kotlin**, where `lowercase()` is
+Unicode-aware and locale-independent:
 
-### The decisive reason: FTS4 cannot fix the binding constraint
+- **Write side.** `searchTextOf` concatenates the five searchable fields, folded,
+  into the `search_text` column. Applied by `withSearchText()` at ingestion.
+- **Query side.** `toSqlSelect()` folds the needle before binding it.
 
-Search is not what limits this app's scale — the eager full-history load is.
-`HistoryRepository` collects `getAllOrderedByAccess()`, so `_items` holds *every*
-entry, each carrying up to 500 characters of `bodyPreview`, because the list UI
-renders from it.
+SQL then only ever performs a plain substring match over already-folded text,
+which is correct in every script. The two sides live in one file so they cannot
+drift.
 
-| Entries | In-memory search per keystroke | Heap held by the list |
+Fields are joined with `\n`. A single-line search field cannot produce a newline
+and the needle is trimmed, so a needle can never bridge two fields and create a
+false match.
+
+### `LIKE`, not `MATCH`
+
+`LIKE '%needle%'` reproduces substring semantics exactly, which is what keeps
+`applyTo` a valid oracle. `LIKE` metacharacters are escaped with `ESCAPE '\'`, so
+a needle of `%` matches a literal percent instead of every row; the backslash is
+escaped first so it cannot escape itself.
+
+`LIKE` with a leading wildcard cannot use an index, but it scans one narrow
+pre-folded column instead of materialising every row as a Kotlin object — and
+under paging only the requested window is read.
+
+### Injection safety is structural
+
+The needle is a **bound parameter**. Every interpolated fragment comes from
+eliminating a closed enum (`SortField`, `SortDirection`) through a total `when`, so
+the set of statements the query can produce is finite and enumerable. A test
+enumerates all twelve and asserts none contains caller text.
+
+## Ordering
+
+| `SortField` | Key |
+|-------------|-----|
+| `DATE` | `emailDate`, falling back to `lastAccessed` when the Date header was unparsable |
+| `SUBJECT` | `subject`, case-insensitive |
+| `SENDER` | `senderName`, falling back to `senderEmail`, case-insensitive |
+
+`DESCENDING` reverses the *comparator*, not the sorted list. Both agree on
+distinct keys; among ties, reversing the comparator preserves incoming order where
+reversing the result flipped it, and it avoids a full list copy.
+
+Every SQL ordering appends `id`. Under paging a total order is not cosmetic: with
+ties, rows have no stable sequence between separately loaded pages, so an entry
+could appear twice or not at all while scrolling. `id` is unique, which makes the
+order total.
+
+## Why not SQLite FTS4
+
+An FTS4 virtual table, `email_fts`, existed until schema version 4 and **nothing
+ever queried it**. `MIGRATION_3_4` dropped it. Recorded here so it is not
+reintroduced:
+
+1. **Wrong semantics.** `MATCH` matches whole tokens, and `term*` matches token
+   prefixes; neither matches infixes. "port" finds "airport" today and would not
+   through FTS4. Incremental typing ("bud" → "budget") is covered by prefix
+   matching, so the loss is narrow — but it is a loss, not a gain.
+2. **`MATCH` turns input into a query language.** Substring matching treats input
+   as data and cannot fail on any string. The retired `sanitizeFtsQuery` proved the
+   hazard: it doubled `"` without ever wrapping tokens in quotes — so the escaping
+   did nothing — then appended `*` to every token. A query of `-` became `-*`, `(`
+   became `(*`; both are FTS4 syntax errors surfacing as `SQLiteException`.
+   Ordinary punctuation would have thrown. Doing it safely requires *constructing*
+   a provably valid MATCH expression, not escaping characters one at a time.
+3. **It could not search more text than the alternative.** `email_fts` indexed
+   `body_preview` — the same truncated 500 characters `search_text` holds. FTS4's
+   real advantage is searching text too large to keep resident, and this table did
+   not do that. Full-body search would require indexing full bodies at ingestion,
+   which nothing has asked for.
+4. **No relevance ranking is used.** The app orders by date, subject or sender and
+   never by `matchinfo`.
+
+### How it was retired
+
+Removing the entity changes Room's schema identity, and the database falls back to
+`fallbackToDestructiveMigration()`, so dropping it without a migration would have
+erased every user's cached email.
+
+`MIGRATION_3_4` drops the virtual table — which also drops its shadow tables
+`email_fts_segments`, `_segdir`, `_docsize` and `_stat` — plus the four
+`room_fts_content_sync_email_fts_*` triggers. The triggers are separate objects
+and go first, because they fire on writes to `history_items` and the migration
+writes to that table when backfilling. Their names were taken verbatim from the
+exported version 3 schema rather than reconstructed from Room's naming convention.
+
+The backfill uses SQL `lower()`, which folds ASCII only, so a pre-existing
+"MÜLLER" is stored as "mÜller" and will not match "müller". This is deliberate: it
+keeps the migration trivially correct instead of iterating every row through
+Kotlin. The gap is self-healing — `HistoryRepository.ingest` re-folds `search_text`
+whenever an email is opened again, and writes nothing when the value is already
+correct.
+
+## Why the query is moving into SQL
+
+Search was never the constraint; the eager full-history load is.
+`HistoryRepository` collects every row into memory because the list UI renders
+from it, at roughly 1–1.5 KB per entry dominated by `bodyPreview`, held twice as
+`history` and `filteredHistory`:
+
+| Entries | In-memory match per keystroke | Heap held by the list |
 |---------|-------------------------------|-----------------------|
 | 10² | microseconds | negligible |
 | 10³ | well under a frame | a few MB |
 | 10⁴ | ~5–15 ms, borderline at 60 fps | tens of MB |
 | 10⁵ | ~100 ms, janky | 100–200 MB — likely OOM first |
 
-Moving the predicate into SQL speeds up the row *scan*, but the list is already
-resident, so the memory ceiling arrives before the search ceiling. At 10⁵ entries
-the app dies of the full-list load whether or not search uses an index. FTS4
-would be optimising the part that is not the bottleneck.
-
-Making the app scale means *not* holding everything: a `PagingSource`, a windowed
-list, and filtering **and** ordering pushed into SQL. FTS4 belongs to that
-change, not before it.
-
-### Supporting reasons
-
-1. **Totality.** In-memory search treats input as data and cannot fail on any
-   string. `MATCH` treats input as a *query language*, so it can throw. The
-   retired `sanitizeFtsQuery` proved the point: it doubled `"` without ever
-   wrapping tokens in quotes — so the escaping did nothing — then appended `*` to
-   every token. A query of `-` became `-*`, `(` became `(*`; both are FTS4 syntax
-   errors surfacing as `SQLiteException`. Ordinary punctuation would have thrown.
-   Doing it safely means *constructing* a provably valid MATCH expression, not
-   escaping characters one at a time.
-2. **Complexity.** In-memory search is a synchronous pure function over state
-   already held. Through FTS4, every keystroke becomes a new `Flow` needing
-   `flatMapLatest` to cancel the previous query, plus debounce tuning, plus one
-   query variant per sort order — which is exactly why the retired layer had six
-   `getAllBy*` methods and a hand-built `searchWithFilters` string builder to
-   combine text, filter and order.
-3. **Infix matching.** `MATCH` matches whole tokens, and `term*` matches token
-   prefixes, but neither matches infixes. Typing "port" finds "airport" today;
-   through FTS4 it would not. This is a real but narrow loss — incremental typing
-   ("bud" → "budget") is covered by prefix matching.
-
-### What FTS4 would genuinely buy — and why it does not apply yet
-
-Being fair to the other side: FTS4 offers relevance ranking via `matchinfo`, and
-it can search text too large to keep in memory.
-
-Neither helps here. The app orders by date, subject or sender and never ranks by
-relevance. And `email_fts` indexes `body_preview` — the same truncated 500
-characters already in memory — so it could not search more text than the
-in-memory path can. Full-body search would require indexing full bodies at
-ingestion, a feature nothing has asked for.
-
-### When to revisit
-
-Move search into SQL when **all** of these hold, because they arrive together:
-
-- history routinely exceeds ~10⁴ entries, **and**
-- the list is paginated so the full history is no longer resident, **and**
-- ordering has moved into SQL alongside filtering.
-
-If full-body search is ever wanted, that is an independent trigger: it requires
-indexing bodies at ingestion and forces the query into the database regardless of
-entry count.
-
-### Retiring the table
-
-`email_fts` still costs index maintenance on every insert, update and delete of
-`history_items`. It has not been dropped yet because removing the entity changes
-Room's schema identity, and the database is built with
-`fallbackToDestructiveMigration()` — so dropping it without a hand-written
-migration would erase every user's cached email.
-
-Retiring it needs a `Migration(3, 4)` that drops `email_fts` **and** the
-`room_fts_content_sync_email_fts_*` triggers Room generates, verified against a
-real database. Until that lands, the entity stays registered.
-
-## Body preview extraction
-
-The preview is extracted during ingestion by the Rust parser:
-
-1. `mail-parser` extracts the plain-text body
-2. `body_preview()` returns the first 500 characters
-3. Whitespace is collapsed to single spaces
-4. The result is stored in the `body_preview` column
-
-```rust
-pub fn body_preview(&self) -> String {
-    self.inner
-        .lock()
-        .map(|msg| {
-            msg.body_text
-                .as_ref()
-                .map(|text| {
-                    let chars: String = text.chars().take(500).collect();
-                    chars.split_whitespace().collect::<Vec<_>>().join(" ")
-                })
-                .unwrap_or_default()
-        })
-        .unwrap_or_default()
-}
-```
-
-## Ordering
-
-| `SortField` | Key | Notes |
-|-------------|-----|-------|
-| `DATE` | `effectiveDate` | `emailDate`, falling back to `lastAccessed` when the Date header was unparsable |
-| `SUBJECT` | `subject` | `String.CASE_INSENSITIVE_ORDER` |
-| `SENDER` | `displaySender` | `senderName`, falling back to `senderEmail` |
-
-`DESCENDING` reverses the *comparator*, not the sorted list. Both agree on
-distinct keys; among ties, reversing the comparator preserves incoming order
-where reversing the result flipped it. It also avoids a full list copy.
+The cache never evicts, so entry count only grows. An index would speed the row
+scan, but the memory ceiling arrives first — at 10⁵ the app dies of the full-list
+load regardless. Bounding it means *not* holding everything: a `PagingSource`, a
+windowed list, and both filtering and ordering pushed into SQL. `toSqlSelect()` is
+that path.
 
 ## Data flow
 
+Today, in memory:
+
 ```
 user types
-    ↓
-EmailViewModel.setSearchQuery(text)
-    ↓
+    ↓  EmailViewModel.setSearchQuery(text)
 state.copy(searchQuery = text).refiltered()
-    ↓
-HistoryQuery(...).applyTo(state.history)
-    ↓
-EmailUiState.filteredHistory
-    ↓
-UI recomposes
+    ↓  HistoryQuery(...).applyTo(state.history)
+EmailUiState.filteredHistory  →  UI recomposes
 ```
 
-`filteredHistory` is a cached function of `(history, query)`. Exactly one place
-recomputes it — `refiltered()` — so the derived value cannot drift from its
-inputs.
+`filteredHistory` is a cached function of `(history, query)`, and exactly one place
+recomputes it — `refiltered()` — so the derived value cannot drift from its inputs.
 
 ## Testing
 
-`HistoryQueryTest.kt` covers text matching per field, case-insensitivity, infix
-matching, whitespace trimming, literal punctuation, the attachment filter, filter
-conjunction, every sort field and direction, the `effectiveDate` and
-`displaySender` fallbacks, tie ordering, empty input, and the algebraic
-properties (filtering only shrinks; sorting preserves cardinality and elements;
-`applyTo` does not mutate its input).
+- `HistoryQueryTest` — the specification: per-field matching, case-insensitivity,
+  infix matching, whitespace trimming, literal punctuation, the attachment filter,
+  filter conjunction, every sort field and direction, `effectiveDate` and
+  `displaySender` fallbacks, tie ordering, empty input, and the algebraic
+  properties (filtering only shrinks; sorting preserves cardinality and elements;
+  `applyTo` does not mutate its input).
+- `HistoryQuerySqlTest` — the SQL interpreter: Unicode folding, `search_text`
+  composition, `LIKE` escaping, clause construction, argument binding, every
+  ordering, total-order guarantee, and the finite-statement-set property.
 
 ### History
 
-These semantics previously existed in three implementations that disagreed about
-which fields were searchable: the unused FTS4/SQL layer (subject, sender,
-recipients, body), `EmailViewModel` (subject, sender, display name, body), and
-`InMemoryHistoryRepository` (subject, sender, body). Only the view model's copy
-ran in the app, and it had no tests — while the search, sort and filter tests in
-`HistoryRepositoryTest` asserted against `InMemoryHistoryRepository`, a class
-production never instantiated. Those tests could stay green while real search
-misbehaved. They have been retired in favour of `HistoryQueryTest`.
+These semantics once existed in three divergent implementations: the unused
+FTS4/SQL layer (subject, sender, recipients, body), `EmailViewModel` (subject,
+sender, display name, body), and `InMemoryHistoryRepository` (subject, sender,
+body). Only the view model's copy ran, and it had no tests — while the search
+tests in `HistoryRepositoryTest` asserted against `InMemoryHistoryRepository`, a
+class production never instantiated. They could stay green while real search
+misbehaved.

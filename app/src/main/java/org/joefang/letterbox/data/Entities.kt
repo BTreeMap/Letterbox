@@ -3,7 +3,6 @@ package org.joefang.letterbox.data
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
-import androidx.room.Fts4
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
@@ -65,9 +64,9 @@ data class BlobEntity(
  * 2. Better performance - single table scan for list display
  * 3. Pre-beta status - schema simplicity is more valuable than normalization
  * 
- * For full-text search, we use a separate FTS4 virtual table (email_fts) that
- * mirrors the searchable text content. Room's FTS4 support is used for better
- * compatibility across Android versions (API 26+).
+ * Search matches against the denormalized `search_text` column rather than a
+ * separate index. An FTS4 virtual table (`email_fts`) existed until version 4 and
+ * was never queried; see `docs/full-text-search.md`.
  */
 @Entity(
     tableName = "history_items",
@@ -138,57 +137,20 @@ data class HistoryItemEntity(
     
     /** First 500 characters of the email body for search purposes. */
     @ColumnInfo(name = "body_preview", defaultValue = "")
-    val bodyPreview: String = ""
-)
+    val bodyPreview: String = "",
 
-/**
- * FTS4 virtual table over the searchable columns of [HistoryItemEntity].
- *
- * ## Unused, and pending removal
- *
- * Nothing queries this table. Search is [org.joefang.letterbox.HistoryQuery], a
- * pure in-memory function over the entry list the UI already holds, which gives
- * case-insensitive **substring** matching. FTS4 `MATCH` only offers token and
- * token-prefix matching, so routing search through here would stop "port" from
- * finding "airport" — a regression, not an optimisation. See
- * `docs/full-text-search.md` for the full rationale.
- *
- * The entity is still registered because removing it changes Room's schema
- * identity, and this database is built with `fallbackToDestructiveMigration()`:
- * dropping the entity without a hand-written migration would delete every
- * user's cached email. Retiring it needs a `Migration(3, 4)` that drops
- * `email_fts` **and** the `room_fts_content_sync_email_fts_*` triggers Room
- * generates to keep it in sync, verified against a real database.
- *
- * Until then it costs index maintenance on every insert, update and delete of
- * `history_items`, and nothing else.
- */
-@Fts4(contentEntity = HistoryItemEntity::class)
-@Entity(tableName = "email_fts")
-data class EmailFtsEntity(
-    /** Email subject line. */
-    @ColumnInfo(name = "subject")
-    val subject: String,
-    
-    /** Sender's email address. */
-    @ColumnInfo(name = "sender_email")
-    val senderEmail: String,
-    
-    /** Sender's display name. */
-    @ColumnInfo(name = "sender_name")
-    val senderName: String,
-    
-    /** Comma-separated recipient email addresses. */
-    @ColumnInfo(name = "recipient_emails")
-    val recipientEmails: String,
-    
-    /** Comma-separated recipient display names. */
-    @ColumnInfo(name = "recipient_names")
-    val recipientNames: String,
-    
-    /** First 500 characters of email body. */
-    @ColumnInfo(name = "body_preview")
-    val bodyPreview: String
+    /**
+     * Case-folded concatenation of every searchable field, maintained at write
+     * time by `searchTextOf`.
+     *
+     * Exists because SQLite's `LIKE`, `lower()` and `NOCASE` collation fold ASCII
+     * only, and Android's SQLite ships without ICU. Folding both the stored text
+     * and the needle in Kotlin, where case mapping is Unicode-aware, lets SQL
+     * perform a plain substring match that is correct in every script — so
+     * "müller" finds "Müller".
+     */
+    @ColumnInfo(name = "search_text", defaultValue = "")
+    val searchText: String = ""
 )
 
 // SortField and SortDirection live in HistoryOrder.kt: they are domain values

@@ -11,8 +11,8 @@ import androidx.room.RoomDatabase
  * ## Tables
  * 
  * - **blobs**: Content-Addressable Storage (CAS) for email file data
- * - **history_items**: Email history entries with metadata for search/filter/sort
- * - **email_fts**: FTS4 virtual table for full-text search (auto-synced with history_items)
+ * - **history_items**: Email history entries, including the folded `search_text`
+ *   column that search matches against
  * 
  * ## Version History
  * 
@@ -22,6 +22,10 @@ import androidx.room.RoomDatabase
  *                  database is dropped and recreated since the app is pre-beta.
  * - **Version 3**: Added unique constraint on blob_hash to enforce deduplication.
  *                  Each unique EML file (by SHA-256 checksum) now has exactly one history entry.
+ * - **Version 4**: Dropped the never-queried `email_fts` FTS4 table and its
+ *                  content-sync triggers; added the `search_text` column that
+ *                  search matches against. Migrated by `MIGRATION_3_4`, so no
+ *                  cached email is lost.
  * 
  * ## Migration Strategy
  *
@@ -44,8 +48,8 @@ import androidx.room.RoomDatabase
  * alongside the change.
  */
 @Database(
-    entities = [BlobEntity::class, HistoryItemEntity::class, EmailFtsEntity::class],
-    version = 3,
+    entities = [BlobEntity::class, HistoryItemEntity::class],
+    version = 4,
     exportSchema = true
 )
 abstract class LetterboxDatabase : RoomDatabase() {
@@ -63,7 +67,10 @@ abstract class LetterboxDatabase : RoomDatabase() {
                     LetterboxDatabase::class.java,
                     "letterbox.db"
                 )
-                    // Pre-beta: destructive migration is acceptable
+                    .addMigrations(MIGRATION_3_4)
+                    // Only reached for version steps with no migration above.
+                    // It deletes the user's cached email, so every schema change
+                    // must add a migration rather than rely on this.
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

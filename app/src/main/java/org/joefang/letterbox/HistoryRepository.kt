@@ -21,6 +21,23 @@ import kotlinx.coroutines.withContext
 
 private const val TAG = "HistoryRepository"
 
+/**
+ * This row with `search_text` derived from its own searchable fields.
+ *
+ * The single write-side application of the folding rule, so the stored haystack
+ * and the needle built by [HistoryQuery] can never fold differently. Lives here
+ * rather than beside [searchTextOf] to keep that file free of Room types.
+ */
+private fun HistoryItemEntity.withSearchText(): HistoryItemEntity = copy(
+    searchText = searchTextOf(
+        subject = subject,
+        senderName = senderName,
+        senderEmail = senderEmail,
+        displayName = displayName,
+        bodyPreview = bodyPreview
+    )
+)
+
 // HistoryEntry, CacheStats and EmailMetadata live in HistoryModels.kt so the
 // domain values stay free of Room and coroutine dependencies.
 
@@ -124,6 +141,7 @@ class HistoryRepository(
             if (existingItem != null) {
                 // Email already in history - update last accessed timestamp and return
                 historyItemDao.updateLastAccessed(existingItem.id, now)
+                repairSearchText(existingItem)
                 return@withContext existingItem.copy(lastAccessed = now).toHistoryEntry()
             }
             
@@ -155,7 +173,7 @@ class HistoryRepository(
                 emailDate = metadata.emailDate,
                 hasAttachments = metadata.hasAttachments,
                 bodyPreview = metadata.bodyPreview.take(500)
-            )
+            ).withSearchText()
             val id = historyItemDao.insert(entity)
 
             entity.copy(id = id).toHistoryEntry()
@@ -262,6 +280,23 @@ class HistoryRepository(
             blobMutex.withLock {
                 reclaimUnknownFiles(casDir, blobDao.allHashes().toHashSet())
             }
+        }
+    }
+
+    /**
+     * Re-fold a row's `search_text` if the stored value disagrees with what
+     * Kotlin's Unicode-aware folding produces.
+     *
+     * The 3-to-4 migration backfilled the column with SQLite's `lower()`, which
+     * folds ASCII only, so a pre-existing "MÜLLER" was stored as "mÜller" and
+     * would not match the needle "müller". Re-opening the email repairs it. A
+     * no-op — and no write — for every row already correct, which is all of them
+     * after the first repair.
+     */
+    private suspend fun repairSearchText(item: HistoryItemEntity) {
+        val folded = item.withSearchText().searchText
+        if (folded != item.searchText) {
+            historyItemDao.updateSearchText(item.id, folded)
         }
     }
 
