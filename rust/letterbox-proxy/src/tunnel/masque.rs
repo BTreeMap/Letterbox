@@ -24,9 +24,9 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use usque_core::tunnel::{Stats, TunnelConfig};
 use usque_core::{AtomicBool, TunnelIdentity};
@@ -89,6 +89,9 @@ pub struct MasqueTransport {
     /// Set when the session ends, so `is_connected` cannot report a live tunnel
     /// after the thread has exited.
     finished: Arc<StdAtomicBool>,
+    /// When the tunnel was first seen connected. `OnceLock` because it is
+    /// written once, lazily, from `&self` in [`MasqueTransport::stats`].
+    connected_at: OnceLock<Instant>,
     session: Option<JoinHandle<()>>,
 }
 
@@ -163,6 +166,7 @@ impl MasqueTransport {
             stats,
             established,
             finished,
+            connected_at: OnceLock::new(),
             session: Some(session),
         })
     }
@@ -191,7 +195,13 @@ impl MasqueTransport {
     pub fn stats(&self) -> TunnelStats {
         let snapshot = self.stats.snapshot();
         TunnelStats {
-            since_handshake: self.is_connected().then(|| Duration::from_secs(0)),
+            // Measured from the first *observation* of the connected state, not
+            // from the CONNECT response itself, so it can under-report by up to
+            // one poll interval. A stopped clock reading zero would have looked
+            // more precise and been less true.
+            since_handshake: self
+                .is_connected()
+                .then(|| self.connected_at.get_or_init(Instant::now).elapsed()),
             tx_bytes: snapshot.tx_bytes,
             rx_bytes: snapshot.rx_bytes,
             estimated_loss: 0.0,
