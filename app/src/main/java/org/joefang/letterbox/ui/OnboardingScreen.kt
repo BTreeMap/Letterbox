@@ -25,16 +25,17 @@ import androidx.compose.ui.unit.dp
 private const val CLOUDFLARE_TERMS_URL = "https://www.cloudflare.com/application/terms/"
 
 /**
- * First-launch onboarding that establishes network consent.
+ * First-launch introduction. Informational only — it gates nothing.
  *
- * Remote images and update checks are tunnelled through Cloudflare WARP so the
- * user's real IP is never exposed. Continuing into the app constitutes agreement
- * to Cloudflare's Terms of Service; declining keeps all network features off.
+ * Remote images are off until the user asks for them, per message or via the
+ * setting, and that request is the opt-in. This screen exists so the tunnel is
+ * disclosed before it is ever used, not to collect an acceptance: a separate
+ * consent flag previously had to agree with the "Show images" tap for anything
+ * to load, and when the two disagreed the failure was silent.
  */
 @Composable
 fun OnboardingScreen(
-    onAccept: () -> Unit,
-    onDecline: () -> Unit
+    onContinue: () -> Unit
 ) {
     val context = LocalContext.current
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -69,8 +70,10 @@ fun OnboardingScreen(
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
-                text = "By continuing to use the app you agree to Cloudflare's Terms of Service. " +
-                    "If you prefer, you can continue without enabling any network features.",
+                text = "Nothing is fetched until you ask for it. Remote images stay blocked " +
+                    "until you tap \"Show images\" on a message, or turn them on in Settings. " +
+                    "Traffic that does leave the device goes through the tunnel and is " +
+                    "subject to Cloudflare's Terms of Service.",
                 style = MaterialTheme.typography.bodyMedium
             )
             TextButton(onClick = {
@@ -79,20 +82,12 @@ fun OnboardingScreen(
                 Text("View Cloudflare Terms of Service")
             }
             Button(
-                onClick = onAccept,
+                onClick = onContinue,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("onboardingAcceptButton")
             ) {
-                Text("Agree & continue")
-            }
-            TextButton(
-                onClick = onDecline,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("onboardingDeclineButton")
-            ) {
-                Text("Continue without network features")
+                Text("Continue")
             }
         }
     }

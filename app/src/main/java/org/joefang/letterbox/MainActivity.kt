@@ -163,8 +163,10 @@ private fun Intent?.isExternalEmailLaunch(): Boolean = this?.action in EXTERNAL_
 private data class AppPreferences(
     val alwaysLoadRemoteImages: Boolean,
     val enablePrivacyProxy: Boolean,
-    val cloudflareTermsAccepted: Boolean,
 )
+
+/** Cloudflare's terms, linked from the standing disclosure in Settings. */
+private const val CLOUDFLARE_TERMS_URL = "https://www.cloudflare.com/application/terms/"
 
 /**
  * State of the "Check for updates" flow.
@@ -252,22 +254,24 @@ class MainActivity : ComponentActivity() {
         val snackbarHostState = remember { SnackbarHostState() }
         val scope = rememberCoroutineScope()
 
-        // One collection site per preference. Each `initial` matches the default
-        // the repository itself falls back to, so the pre-emission frame agrees
-        // with the persisted value.
-        val onboardingCompleted by preferencesRepository.onboardingCompleted
-            .collectAsState(initial = true)
+        // One collection site per preference. For the two settings below, `initial`
+        // matches the default the repository itself falls back to, so the
+        // pre-emission frame agrees with the persisted value.
+        //
+        // Onboarding cannot use that trick, because neither default is safe to
+        // assume: `true` skips a screen that may never have been shown, `false`
+        // flashes one that has. `null` names the third state — DataStore has not
+        // answered yet — and the caller renders it rather than guessing.
+        val onboardingCompleted: Boolean? by preferencesRepository.onboardingCompleted
+            .collectAsState(initial = null)
         val alwaysLoadRemoteImages by preferencesRepository.alwaysLoadRemoteImages
             .collectAsState(initial = false)
         val enablePrivacyProxy by preferencesRepository.enablePrivacyProxy
             .collectAsState(initial = true)
-        val cloudflareTermsAccepted by preferencesRepository.cloudflareTermsAccepted
-            .collectAsState(initial = false)
 
         val preferences = AppPreferences(
             alwaysLoadRemoteImages = alwaysLoadRemoteImages,
-            enablePrivacyProxy = enablePrivacyProxy,
-            cloudflareTermsAccepted = cloudflareTermsAccepted
+            enablePrivacyProxy = enablePrivacyProxy
         )
 
         var updateCheckState by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
@@ -292,25 +296,28 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // First-launch onboarding establishes network consent.
-        if (!onboardingCompleted) {
-            OnboardingScreen(
-                onAccept = {
-                    scope.launch { preferencesRepository.completeOnboarding(acceptedTerms = true) }
-                },
-                onDecline = {
-                    scope.launch { preferencesRepository.completeOnboarding(acceptedTerms = false) }
-                }
-            )
-            return
+        // First-launch introduction. Each branch is a distinct screen, and the
+        // unknown case is a screen too rather than a guess at one of the others.
+        when (onboardingCompleted) {
+            null -> {
+                LoadingScreen()
+                return
+            }
+            false -> {
+                OnboardingScreen(
+                    onContinue = {
+                        scope.launch { preferencesRepository.completeOnboarding() }
+                    }
+                )
+                return
+            }
+            true -> Unit
         }
 
-        // Throttled, silent update check on launch (once per day), only when the
-        // user has consented to tunnelled networking.
-        if (cloudflareTermsAccepted) {
-            LaunchedEffect(Unit) {
-                maybeAutoCheckForUpdate(snackbarHostState)
-            }
+        // Throttled, silent update check on launch (once per day). It is tunnelled
+        // like every other request; the introduction above discloses that.
+        LaunchedEffect(Unit) {
+            maybeAutoCheckForUpdate(snackbarHostState)
         }
 
         LaunchedEffect(uiState.errorMessage) {
@@ -362,8 +369,7 @@ class MainActivity : ComponentActivity() {
                 hasRemoteImages = uiState.hasRemoteImages,
                 sessionLoadImages = preferences.alwaysLoadRemoteImages || uiState.sessionLoadImages,
                 onShowImages = { viewModel.enableSessionImageLoading() },
-                useProxy = preferences.enablePrivacyProxy,
-                cloudflareTermsAccepted = preferences.cloudflareTermsAccepted
+                useProxy = preferences.enablePrivacyProxy
             )
 
             else -> LetterboxScaffold(
@@ -391,9 +397,6 @@ class MainActivity : ComponentActivity() {
                 },
                 onEnablePrivacyProxyChange = { enabled ->
                     scope.launch { preferencesRepository.setEnablePrivacyProxy(enabled) }
-                },
-                onAcceptCloudflareTerms = {
-                    scope.launch { preferencesRepository.acceptCloudflareTermsAndEnableProxy() }
                 },
                 updateCheckState = updateCheckState,
                 onCheckForUpdate = {
@@ -635,7 +638,6 @@ private fun LetterboxScaffold(
     preferences: AppPreferences,
     onAlwaysLoadRemoteImagesChange: (Boolean) -> Unit,
     onEnablePrivacyProxyChange: (Boolean) -> Unit,
-    onAcceptCloudflareTerms: () -> Unit,
     updateCheckState: UpdateCheckState,
     onCheckForUpdate: () -> Unit,
     onDismissUpdateDialog: () -> Unit,
@@ -646,7 +648,6 @@ private fun LetterboxScaffold(
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
-    var showCloudflareTermsDialog by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val settingsSheetState = rememberModalBottomSheetState()
@@ -848,15 +849,7 @@ private fun LetterboxScaffold(
                 cacheStats = cacheStats,
                 preferences = preferences,
                 onAlwaysLoadRemoteImagesChange = onAlwaysLoadRemoteImagesChange,
-                onEnablePrivacyProxyChange = { enabled ->
-                    // The consent gate is a decision over values; only the write
-                    // is an effect, and it is delegated upward.
-                    if (enabled && !preferences.cloudflareTermsAccepted) {
-                        showCloudflareTermsDialog = true
-                    } else {
-                        onEnablePrivacyProxyChange(enabled)
-                    }
-                },
+                onEnablePrivacyProxyChange = onEnablePrivacyProxyChange,
                 onClearCache = {
                     showSettingsSheet = false
                     showClearCacheDialog = true
@@ -899,19 +892,6 @@ private fun LetterboxScaffold(
             }
         )
         UpdateCheckState.Checking, UpdateCheckState.Idle -> Unit
-    }
-
-    // Cloudflare WARP Terms of Service dialog
-    if (showCloudflareTermsDialog) {
-        CloudflareTermsDialog(
-            onAccept = {
-                showCloudflareTermsDialog = false
-                onAcceptCloudflareTerms()
-            },
-            onDecline = {
-                showCloudflareTermsDialog = false
-            }
-        )
     }
 
     // About dialog
@@ -1000,55 +980,6 @@ private fun sortChipLabel(field: SortField, direction: SortDirection): String {
     return name + arrow
 }
 
-/**
- * Dialog for Cloudflare WARP Terms of Service consent.
- *
- * This dialog is shown when the user enables the privacy proxy for the first time.
- * Images are fetched through Cloudflare WARP infrastructure, which requires users
- * to accept Cloudflare's Terms of Service.
- */
-@Composable
-private fun CloudflareTermsDialog(
-    onAccept: () -> Unit,
-    onDecline: () -> Unit
-) {
-    val context = LocalContext.current
-
-    AlertDialog(
-        onDismissRequest = onDecline,
-        title = { Text("Cloudflare WARP Terms") },
-        text = {
-            Column {
-                Text(
-                    "The privacy proxy uses Cloudflare WARP to hide your IP address when loading remote images.\n\n" +
-                    "By enabling this feature, you agree to Cloudflare's Terms of Service and Privacy Policy.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                TextButton(
-                    onClick = {
-                        // Open Cloudflare Terms of Service in browser
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.cloudflare.com/application/terms/"))
-                        context.startActivity(intent)
-                    }
-                ) {
-                    Text("View Cloudflare Terms of Service")
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onAccept) {
-                Text("Accept & Enable")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDecline) {
-                Text("Cancel")
-            }
-        }
-    )
-}
-
 @Composable
 private fun SettingsContent(
     cacheStats: CacheStats,
@@ -1061,6 +992,7 @@ private fun SettingsContent(
     onOpenDiagnostics: () -> Unit,
     onCheckForUpdate: () -> Unit
 ) {
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1121,13 +1053,11 @@ private fun SettingsContent(
                     style = MaterialTheme.typography.titleSmall
                 )
                 Text(
-                    text = when {
-                        preferences.enablePrivacyProxy && preferences.cloudflareTermsAccepted ->
-                            "Images loaded through Cloudflare WARP to hide your IP"
-                        preferences.enablePrivacyProxy ->
-                            "Cloudflare terms acceptance required"
-                        else ->
-                            "Load images through a privacy proxy to hide your IP address"
+                    text = if (preferences.enablePrivacyProxy) {
+                        "Images are fetched through Cloudflare WARP, hiding your IP " +
+                            "from the sender"
+                    } else {
+                        "Images are fetched directly, exposing your IP to the sender"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1138,6 +1068,28 @@ private fun SettingsContent(
                 onCheckedChange = onEnablePrivacyProxyChange,
                 modifier = Modifier.testTag("privacyProxySwitch")
             )
+        }
+
+        // Standing disclosure, in place of a blocking consent dialog: loading an
+        // image is the opt-in, so the terms belong next to the switch that
+        // describes what loading one does.
+        Text(
+            text = "By loading remote images you accept that the request is " +
+                "processed through the Cloudflare WARP tunnel, subject to " +
+                "Cloudflare's Terms of Service.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("warpDisclosure")
+        )
+        TextButton(
+            onClick = {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(CLOUDFLARE_TERMS_URL))
+                )
+            },
+            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
+        ) {
+            Text("View Cloudflare Terms of Service")
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))

@@ -38,7 +38,13 @@ enum class ProxyMode {
  * - ALWAYS_LOAD_REMOTE_IMAGES: Whether to automatically load remote images (default: false)
  * - ENABLE_PRIVACY_PROXY: Whether to use privacy proxy for remote images (default: true)
  * - PROXY_MODE: Which proxy to use (default: WARP)
- * - CLOUDFLARE_TERMS_ACCEPTED: Whether user has accepted Cloudflare terms (default: false)
+ *
+ * There is deliberately no "terms accepted" preference. Loading remote images is
+ * itself the opt-in — it is off by default and requires a per-message tap or an
+ * explicit setting — and the tunnel is disclosed in Settings. A separate consent
+ * flag added a second condition that the "Show images" affordance did not check,
+ * so tapping it silently loaded nothing; it also stranded every user who had
+ * onboarded before the flag existed.
  */
 class UserPreferencesRepository(private val context: Context) {
     
@@ -46,7 +52,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val KEY_ALWAYS_LOAD_REMOTE_IMAGES = booleanPreferencesKey("always_load_remote_images")
         private val KEY_ENABLE_PRIVACY_PROXY = booleanPreferencesKey("enable_privacy_proxy")
         private val KEY_PROXY_MODE = stringPreferencesKey("proxy_mode")
-        private val KEY_CLOUDFLARE_TERMS_ACCEPTED = booleanPreferencesKey("cloudflare_terms_accepted")
         private val KEY_ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
         private val KEY_LAST_UPDATE_CHECK = longPreferencesKey("last_update_check_epoch_millis")
     }
@@ -79,18 +84,10 @@ class UserPreferencesRepository(private val context: Context) {
         }
     
     /**
-     * Flow of whether user has accepted Cloudflare terms of service.
-     */
-    val cloudflareTermsAccepted: Flow<Boolean> = context.dataStore.data
-        .map { preferences ->
-            preferences[KEY_CLOUDFLARE_TERMS_ACCEPTED] ?: false
-        }
-
-    /**
      * Flow of whether the first-launch onboarding has been completed.
      *
-     * Completing onboarding implies the user has agreed to the Cloudflare WARP
-     * terms, since continuing past the onboarding screen constitutes acceptance.
+     * Onboarding is purely informational: it explains that remote images and
+     * update checks travel through a WARP tunnel. It gates nothing.
      */
     val onboardingCompleted: Flow<Boolean> = context.dataStore.data
         .map { preferences ->
@@ -134,36 +131,15 @@ class UserPreferencesRepository(private val context: Context) {
     }
     
     /**
-     * Set whether user has accepted Cloudflare terms of service.
-     */
-    suspend fun setCloudflareTermsAccepted(value: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[KEY_CLOUDFLARE_TERMS_ACCEPTED] = value
-        }
-    }
-
-    /**
-     * Atomically accept Cloudflare terms and enable privacy proxy in a single
-     * DataStore transaction. This ensures both values are persisted together,
-     * preventing partial writes where consent is saved but the proxy is not enabled.
-     */
-    suspend fun acceptCloudflareTermsAndEnableProxy() {
-        context.dataStore.edit { preferences ->
-            preferences[KEY_CLOUDFLARE_TERMS_ACCEPTED] = true
-            preferences[KEY_ENABLE_PRIVACY_PROXY] = true
-        }
-    }
-
-    /**
      * Complete first-launch onboarding.
      *
-     * @param acceptedTerms whether the user agreed to the Cloudflare WARP terms
-     * (true when they continue into the app, false if they opt out of network features).
+     * Records only that the introduction has been seen. Nothing downstream reads
+     * it, so a user who onboarded under any previous build is in the same state
+     * as one who onboards today.
      */
-    suspend fun completeOnboarding(acceptedTerms: Boolean) {
+    suspend fun completeOnboarding() {
         context.dataStore.edit { preferences ->
             preferences[KEY_ONBOARDING_COMPLETED] = true
-            preferences[KEY_CLOUDFLARE_TERMS_ACCEPTED] = acceptedTerms
         }
     }
 

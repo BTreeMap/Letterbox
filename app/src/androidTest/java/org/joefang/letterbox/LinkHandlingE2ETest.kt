@@ -84,10 +84,9 @@ Content-Type: text/html; charset=UTF-8
         
         // Reset preferences
         runBlocking {
-            preferencesRepository.completeOnboarding(acceptedTerms = true)
+            preferencesRepository.completeOnboarding()
             preferencesRepository.setAlwaysLoadRemoteImages(false)
             preferencesRepository.setEnablePrivacyProxy(true)
-            preferencesRepository.setCloudflareTermsAccepted(true)
         }
         
         // Create test file in the "shared" subdirectory of cache

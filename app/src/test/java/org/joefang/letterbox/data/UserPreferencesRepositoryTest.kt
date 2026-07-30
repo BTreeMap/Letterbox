@@ -152,23 +152,30 @@ class UserPreferencesRepositoryTest {
     }
 
     @Test
-    fun `cloudflareTermsAccepted defaults to false`() = runBlocking {
+    fun `onboardingCompleted defaults to false`() = runBlocking {
         val repository = UserPreferencesRepository(context)
-        
-        val accepted = repository.cloudflareTermsAccepted.first()
-        
-        assertFalse(accepted)
+
+        assertFalse(repository.onboardingCompleted.first())
     }
 
     @Test
-    fun `can set and get cloudflareTermsAccepted`() = runBlocking {
+    fun `completeOnboarding persists and leaves image settings untouched`() = runBlocking {
         val repository = UserPreferencesRepository(context)
-        
-        repository.setCloudflareTermsAccepted(true)
-        assertTrue(repository.cloudflareTermsAccepted.first())
-        
-        repository.setCloudflareTermsAccepted(false)
-        assertFalse(repository.cloudflareTermsAccepted.first())
+
+        repository.completeOnboarding()
+
+        assertTrue(repository.onboardingCompleted.first())
+        // Onboarding grants nothing. Remote images stay off until asked for, and
+        // the proxy keeps its default — the screen is disclosure, not a switch.
+        assertFalse(repository.alwaysLoadRemoteImages.first())
+        assertTrue(repository.enablePrivacyProxy.first())
+    }
+
+    @Test
+    fun `onboarding survives a fresh repository instance`() = runBlocking {
+        UserPreferencesRepository(context).completeOnboarding()
+
+        assertTrue(UserPreferencesRepository(context).onboardingCompleted.first())
     }
 
     @Test

@@ -57,10 +57,9 @@ class ImageProxyIntegrationTest {
         
         // Reset preferences to defaults before each test
         runBlocking {
-            preferencesRepository.completeOnboarding(acceptedTerms = true)
+            preferencesRepository.completeOnboarding()
             preferencesRepository.setAlwaysLoadRemoteImages(false)
             preferencesRepository.setEnablePrivacyProxy(true)
-            preferencesRepository.setCloudflareTermsAccepted(true)
         }
         
         // Copy test EML with remote images from test APK assets
@@ -242,10 +241,9 @@ class ImageProxyIntegrationTest {
 
     @Test
     fun privacyProxyEnabled_settingIsPersisted() {
-        // Ensure privacy proxy is enabled and ToS accepted
+        // Ensure privacy proxy is enabled
         runBlocking {
             preferencesRepository.setEnablePrivacyProxy(true)
-            preferencesRepository.setCloudflareTermsAccepted(true)
         }
         
         // Verify the setting is persisted correctly

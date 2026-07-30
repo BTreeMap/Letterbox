@@ -113,9 +113,12 @@ fun EmailDetailScreen(
     hasRemoteImages: Boolean = false,
     sessionLoadImages: Boolean = false,
     onShowImages: (() -> Unit)? = null,
-    useProxy: Boolean = true,
-    cloudflareTermsAccepted: Boolean = false
+    useProxy: Boolean = true
 ) {
+    // Derived once; the banner and the network gate below must not re-derive it
+    // independently, which is exactly how they came to disagree before.
+    val remoteImagePolicy = RemoteImagePolicy.of(hasRemoteImages, sessionLoadImages)
+
     var showMenu by remember { mutableStateOf(false) }
     var showDetailsDialog by remember { mutableStateOf(false) }
     var showAttachments by remember { mutableStateOf(email.attachments.isNotEmpty()) }
@@ -195,7 +198,7 @@ fun EmailDetailScreen(
                 .fillMaxSize()
         ) {
             // Remote images banner
-            if (hasRemoteImages && !sessionLoadImages && onShowImages != null) {
+            if (remoteImagePolicy.showsBanner && onShowImages != null) {
                 RemoteImagesBanner(
                     onShowImages = onShowImages,
                     modifier = Modifier.fillMaxWidth()
@@ -226,16 +229,14 @@ fun EmailDetailScreen(
                 )
             }
 
-            // WebView for HTML content
-            // Remote images only load over the network once the user has accepted
-            // the Cloudflare WARP terms (network consent) AND opted to show images;
-            // they are then fetched through the WARP privacy proxy.
+            // WebView for HTML content. The gate and the banner above read the
+            // same [RemoteImagePolicy]; see that type for why they must.
             val processedHtml = email.bodyHtml ?: "<p>No content available</p>"
 
             EmailWebView(
                 html = processedHtml,
                 getResource = email.getResource,
-                allowNetworkLoads = sessionLoadImages && cloudflareTermsAccepted,
+                allowNetworkLoads = remoteImagePolicy.allowsNetworkLoads,
                 useProxy = useProxy,
                 onLinkLongPress = { rawUrl ->
                     val trimmedRaw = rawUrl.trim()

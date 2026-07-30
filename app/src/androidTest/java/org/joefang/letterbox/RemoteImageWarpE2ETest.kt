@@ -42,8 +42,9 @@ class RemoteImageWarpE2ETest {
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
-        // The user has accepted the Cloudflare WARP terms; network features are on.
-        runBlocking { TestPreferences.seedOnboarded(context, acceptedTerms = true) }
+        // Past the introduction. Nothing else needs granting: the proxy is usable
+        // as soon as something asks it to fetch.
+        runBlocking { TestPreferences.seedOnboarded(context) }
         proxy = ImageProxyService.getInstance(context)
     }
 

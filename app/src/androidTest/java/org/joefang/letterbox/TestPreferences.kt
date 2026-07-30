@@ -11,20 +11,17 @@ import org.junit.runners.model.Statement
 /**
  * Shared instrumented-test helpers for seeding user preferences.
  *
- * First-launch onboarding gates the main UI behind a network-consent screen, so
- * tests that exercise the main flow must mark onboarding complete before
- * launching [MainActivity]. This keeps the production first-run experience intact
- * while letting tests reach the screen under test deterministically.
+ * First-launch onboarding shows an introduction ahead of the main UI, so tests
+ * that exercise the main flow must mark it complete before launching
+ * [MainActivity]. Onboarding grants no capability — it records only that the
+ * introduction has been seen — so seeding it cannot change what a test observes
+ * about image loading.
  */
 object TestPreferences {
 
-    /**
-     * Mark onboarding complete so [MainActivity] shows the main UI immediately.
-     *
-     * @param acceptedTerms whether to also grant Cloudflare WARP network consent.
-     */
-    suspend fun seedOnboarded(context: Context, acceptedTerms: Boolean = false) {
-        UserPreferencesRepository(context).completeOnboarding(acceptedTerms)
+    /** Mark onboarding complete so [MainActivity] shows the main UI immediately. */
+    suspend fun seedOnboarded(context: Context) {
+        UserPreferencesRepository(context).completeOnboarding()
     }
 }
 
@@ -37,12 +34,12 @@ object TestPreferences {
  * @get:Rule val rules = RuleChain.outerRule(OnboardingRule()).around(composeTestRule)
  * ```
  */
-class OnboardingRule(private val acceptedTerms: Boolean = false) : TestRule {
+class OnboardingRule : TestRule {
     override fun apply(base: Statement, description: Description): Statement =
         object : Statement() {
             override fun evaluate() {
                 val context = ApplicationProvider.getApplicationContext<Context>()
-                runBlocking { TestPreferences.seedOnboarded(context, acceptedTerms) }
+                runBlocking { TestPreferences.seedOnboarded(context) }
                 base.evaluate()
             }
         }
