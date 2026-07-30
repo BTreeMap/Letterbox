@@ -38,7 +38,17 @@ closed enum over the two, so everything above it (`stack`, `tls`, `http1`,
 MASQUE is preferred wherever the account has enrolled credentials. WireGuard is
 the fallback for accounts provisioned before MASQUE support existed and for
 enrolments that fail — a blocked-but-configured tunnel beats no tunnel, and the
-alternative is a proxy that refuses to start.
+alternative is a proxy that refuses to start. Existing accounts enrol a MASQUE
+key on their next connect, so no install is stranded on WireGuard.
+
+**Known limitation.** The choice is made once, from stored credentials, before
+either transport has tried to connect. An account with MASQUE credentials on a
+network that blocks UDP/443 therefore fails rather than retrying over WireGuard.
+This is deliberate for now — QUIC on 443 is far less likely to be blocked than
+WireGuard on 500, which is the whole reason for the migration — but it does mean
+the fallback is a provisioning-time fallback, not a connectivity-time one. A
+failed MASQUE session surfaces as an error from `poll_incoming` rather than
+hanging, so the failure is at least prompt.
 
 The reason for the migration is firewall compatibility: WireGuard's handshake is
 trivially fingerprinted and widely blocked, while MASQUE traffic is
