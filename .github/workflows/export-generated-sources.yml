@@ -116,7 +116,7 @@ jobs:
         run: yes | sdkmanager --licenses
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6.2.0
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Gradle permissions
         run: chmod +x gradlew
@@ -125,7 +125,9 @@ jobs:
       # compiled library, and that metadata is target-independent, so the
       # bindings do not require the Android NDK or cargo-ndk.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2

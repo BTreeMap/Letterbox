@@ -158,32 +158,30 @@ Independent of the chain above:
 9. **Default deny**: every workflow declares `permissions: {}` at the top level and every job grants itself the minimum it needs. A job added later starts with no scopes rather than silently inheriting whatever the workflow happened to declare.
 10. **Credentials are not persisted into the work tree** for any job that runs project code. `actions/checkout` writes the token into `.git/config` by default and leaves it there for the rest of the job; only the `commit` job above, which runs no build, keeps it.
 
-### Known gap: actions are referenced by mutable tags
+### Action pinning policy: latest major tag
 
-Every `uses:` in this repository names a tag or branch rather than a commit SHA:
+Every `uses:` names the action's **current major-version tag**:
 
-| Reference | Mutability |
-| --- | --- |
-| `dtolnay/rust-toolchain@stable` | **branch** — moves on every upstream push |
-| `actions/checkout@v7`, `actions/setup-java@v5`, `actions/upload-artifact@v7`, `actions/download-artifact@v8` | major-version tag, repointed by the publisher |
-| `android-actions/setup-android@v4`, `Swatinem/rust-cache@v2`, `softprops/action-gh-release@v3` | major-version tag, third-party |
-| `gradle/actions/setup-gradle@v6.2.0` | patch tag, still re-pointable |
+| Action | Pinned to | Upstream latest |
+| --- | --- | --- |
+| `actions/checkout` | `@v7` | v7.0.1 |
+| `actions/setup-java` | `@v5` | v5.6.0 |
+| `actions/upload-artifact` | `@v7` | v7.0.1 |
+| `actions/download-artifact` | `@v8` | v8.0.1 |
+| `android-actions/setup-android` | `@v4` | v4.0.1 |
+| `gradle/actions/setup-gradle` | `@v6` | v6.2.0 |
+| `Swatinem/rust-cache` | `@v2` | v2.9.1 |
+| `softprops/action-gh-release` | `@v3` | v3.0.2 |
+| `dtolnay/rust-toolchain` | `@v1` | v1 |
 
-A tag is a pointer the action's owner can move, so an upstream account compromise substitutes code into these jobs without any change here. That matters most for `pre-release.yml` and `release.yml`, which hold `contents: write` and repository secrets, and for `export-generated-sources.yml`, which can push to `main`.
+This is a deliberate trade. Pinning to a commit SHA removes the publisher's ability to substitute code, but every action then needs a manual bump to receive a fix, and pins that nobody updates end up worse than a moving tag: they silently retain known-vulnerable versions. Tracking the major tag means security fixes and runtime-deprecation updates (Node version bumps, for instance) arrive without intervention, at the cost of trusting the publisher not to move the tag maliciously. For the accounts above — GitHub's own org, Gradle's, and three widely-used community actions — that trust is already implied by using them at all.
 
-The fix is to pin each to a full commit SHA with the version in a trailing comment, so Dependabot can still offer upgrades:
+Two rules make the trade smaller:
 
-```yaml
-- uses: actions/checkout@<40-char-sha> # v7.0.0
-```
+1. **Major tags only, never patch tags or branches.** A patch pin such as `@v6.2.0` gets the mutability without the updates, which is the worst of both. A branch (`dtolnay/rust-toolchain@stable` was one) moves on *every* upstream push, not just releases — which is why that one is now `@v1` with `toolchain: stable` passed as an input.
+2. **Least privilege is what actually bounds the damage.** No job holds more than it needs, and the job that can push to `main` runs no third-party action beyond `checkout` and `download-artifact`. A compromised build action therefore lands in a job with `contents: read` and no persisted credentials.
 
-Resolve the SHAs with:
-
-```sh
-gh api repos/actions/checkout/git/ref/tags/v7 --jq '.object.sha'
-```
-
-This is deliberately **not** done by guesswork — a wrong SHA breaks every workflow — and is left as a follow-up requiring network access to the GitHub API.
+When a major version is superseded, bump it here and update the table.
 
 ## Runners and native-library build constraint
 

@@ -58,8 +58,9 @@ jobs:
       # The Android NDK only ships a linux-x86_64 host toolchain, so this Android
       # cross-compile must run on an amd64 runner (ubuntu-24.04).
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
         with:
+          toolchain: stable
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
       - name: Cache Rust build (android)
@@ -83,7 +84,7 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6.2.0
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Gradle permissions
         run: chmod +x gradlew

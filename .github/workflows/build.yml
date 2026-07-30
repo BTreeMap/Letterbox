@@ -93,7 +93,9 @@ jobs:
       # (via Gradle's cargoHostBuild), never the Android targets, so no NDK or
       # cargo-ndk is needed in this job.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
 
       - name: Cache Rust build (host)
         uses: Swatinem/rust-cache@v2
@@ -102,7 +104,7 @@ jobs:
           save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6.2.0
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Rust format check
         run: |
@@ -165,7 +167,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
 
       - name: Cache Rust build (proxy host)
         uses: Swatinem/rust-cache@v2
@@ -256,8 +260,9 @@ jobs:
       # cannot execute the NDK clang. The optimized release libraries are built
       # once here and shared with downstream jobs via the jniLibs artifact.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
         with:
+          toolchain: stable
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
       - name: Cache Rust build (android)
@@ -278,7 +283,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6.2.0
+        uses: gradle/actions/setup-gradle@v6
 
       # Single workspace invocation builds letterbox-core, letterbox-proxy and
       # usque-core for all three ABIs in one pass, reusing the compiled
