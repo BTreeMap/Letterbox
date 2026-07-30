@@ -8,7 +8,7 @@ license = "MIT"
 [dependencies]
 # QUIC + HTTP/3. Sans-IO: the caller drives it with byte buffers, which is why it
 # fits Letterbox's blocking worker thread where an async-only stack would not.
-quiche = { version = "0.22.0", features = ["boringssl-vendored"] }
+quiche = { version = "0.29.0", features = ["boringssl-vendored"] }
 octets = "0.3.0"
 
 # The session loop is async internally (tokio::select! over socket and packet
