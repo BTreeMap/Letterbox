@@ -30,15 +30,18 @@ pub struct HttpFetchResponse {
 }
 
 /// Status of the image proxy.
-#[derive(Clone, Debug, uniffi::Record)]
+///
+/// The `Default` is the pre-initialization status: nothing ready, nothing
+/// connected, nothing cached.
+#[derive(Clone, Debug, Default, uniffi::Record)]
 pub struct ProxyStatus {
     /// Whether the proxy is initialized and ready.
     pub ready: bool,
     /// Whether WARP is enabled on this device.
     pub warp_enabled: bool,
-    /// Whether the WireGuard tunnel currently has a live session.
+    /// Whether the tunnel currently has a live session.
     pub tunnel_connected: bool,
-    /// Current WireGuard endpoint (if provisioned).
+    /// Current WARP endpoint (if provisioned).
     pub endpoint: Option<String>,
     /// Last error message (if any).
     pub last_error: Option<String>,
@@ -98,7 +101,11 @@ pub struct WarpDiagnostics {
 /// it remains inspectable even when the tunnel is down — exactly the situation a
 /// user needs visibility into. The private key is included for full
 /// transparency; the Android UI keeps it behind an explicit reveal toggle.
-#[derive(Clone, Debug, uniffi::Record)]
+///
+/// The `Default` is the "nothing provisioned" snapshot, so the unprovisioned
+/// case does not have to spell out fifteen empty fields — a list in which a
+/// wrong entry looks exactly like a right one.
+#[derive(Clone, Debug, Default, uniffi::Record)]
 pub struct WarpStoredConfig {
     /// Whether a provisioned WARP configuration exists on disk.
     pub has_config: bool,
@@ -150,6 +157,13 @@ pub struct UpdateResult {
 }
 
 /// Result of a batch image fetch operation.
+///
+/// The three outcome fields are a `Result` flattened for the FFI, which cannot
+/// carry a Rust sum type per element. They are correlated, not independent:
+/// `success` implies exactly one of `response`/`error` is set. Build them with
+/// [`BatchImageResult::new`] so no caller can produce a combination — a
+/// "successful" result with an error and no response — that the Kotlin side has
+/// no sensible way to render.
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct BatchImageResult {
     /// URL that was requested.
@@ -160,4 +174,24 @@ pub struct BatchImageResult {
     pub response: Option<ImageResponse>,
     /// Error message if failed.
     pub error: Option<String>,
+}
+
+impl BatchImageResult {
+    /// Flatten one URL's outcome into the FFI record.
+    pub(crate) fn new(url: String, outcome: Result<ImageResponse, crate::ProxyError>) -> Self {
+        match outcome {
+            Ok(response) => Self {
+                url,
+                success: true,
+                response: Some(response),
+                error: None,
+            },
+            Err(e) => Self {
+                url,
+                success: false,
+                response: None,
+                error: Some(e.to_string()),
+            },
+        }
+    }
 }

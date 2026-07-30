@@ -14,7 +14,6 @@
 //! failure can never poison it, and so a slow Cloudflare round-trip never blocks
 //! unrelated callers.
 
-use crate::config::WarpConfig;
 use crate::error::ProxyError;
 use crate::provisioning::WarpProvisioner;
 use crate::types::WarpStoredConfig;
@@ -34,49 +33,39 @@ fn snapshot(state: &ProxyState) -> WarpStoredConfig {
         .to_string_lossy()
         .into_owned();
 
-    match &state.config.warp_config {
-        Some(c) => WarpStoredConfig {
-            has_config: true,
-            tunnel_active,
-            account_id: c.account.account_id.clone(),
-            license_key: c.account.license_key.clone(),
-            private_key: c.account.private_key.clone(),
-            // The endpoint key the MASQUE session pins against. There is no
-            // longer a derivable "our public key": registration takes an opaque
-            // 32-byte blob, and the device key that matters is the enrolled
-            // P-256 one below.
-            public_key: c
-                .masque
-                .as_ref()
-                .map(|m| m.endpoint_pub_key_spki.clone())
-                .unwrap_or_default(),
-            peer_public_key: c.peer.public_key.clone(),
-            endpoint_host: c.peer.endpoint_host.clone(),
-            endpoint_ipv4: c.peer.endpoint_ipv4.clone(),
-            endpoint_port: c.peer.endpoint_port,
-            local_address_ipv4: c.interface.address_ipv4.clone(),
-            warp_enabled: c.warp_enabled,
-            account_type: c.account_type.clone(),
-            last_updated_secs: c.last_updated,
-            config_file_path,
-        },
-        None => WarpStoredConfig {
-            has_config: false,
-            tunnel_active,
-            account_id: String::new(),
-            license_key: String::new(),
-            private_key: String::new(),
-            public_key: String::new(),
-            peer_public_key: String::new(),
-            endpoint_host: String::new(),
-            endpoint_ipv4: String::new(),
-            endpoint_port: 0,
-            local_address_ipv4: String::new(),
-            warp_enabled: false,
-            account_type: String::new(),
-            last_updated_secs: 0,
-            config_file_path,
-        },
+    // The two facts that hold whether or not an account exists.
+    let base = WarpStoredConfig {
+        tunnel_active,
+        config_file_path,
+        ..WarpStoredConfig::default()
+    };
+
+    let Some(c) = &state.config.warp_config else {
+        return base;
+    };
+
+    WarpStoredConfig {
+        has_config: true,
+        account_id: c.account.account_id.clone(),
+        license_key: c.account.license_key.clone(),
+        private_key: c.account.private_key.clone(),
+        // The endpoint key the MASQUE session pins against. There is no longer a
+        // derivable "our public key": registration takes an opaque 32-byte blob,
+        // and the device key that matters is the enrolled P-256 one below.
+        public_key: c
+            .masque
+            .as_ref()
+            .map(|m| m.endpoint_pub_key_spki.clone())
+            .unwrap_or_default(),
+        peer_public_key: c.peer.public_key.clone(),
+        endpoint_host: c.peer.endpoint_host.clone(),
+        endpoint_ipv4: c.peer.endpoint_ipv4.clone(),
+        endpoint_port: c.peer.endpoint_port,
+        local_address_ipv4: c.interface.address_ipv4.clone(),
+        warp_enabled: c.warp_enabled,
+        account_type: c.account_type.clone(),
+        last_updated_secs: c.last_updated,
+        ..base
     }
 }
 
@@ -106,14 +95,14 @@ pub fn proxy_stored_config() -> Result<WarpStoredConfig, ProxyError> {
 #[uniffi::export]
 pub fn proxy_reset_identity() -> Result<WarpStoredConfig, ProxyError> {
     // Phase 1: snapshot what we need and drop the existing tunnel under the lock.
-    let (storage_path, old_account) = {
+    let (config_path, old_account) = {
         let mut guard = lock_state();
         let state = guard.as_mut().ok_or(ProxyError::NotInitialized)?;
         // Dropping the manager's last `Arc` joins its worker thread.
         state.manager = None;
         state.last_error = None;
         let old_account = state.config.warp_config.as_ref().map(|c| c.account.clone());
-        (state.config.storage_path.clone(), old_account)
+        (state.config.config_file_path(), old_account)
     };
 
     // Phase 2 + 3: network I/O and persistence run without the lock held, so a
@@ -130,17 +119,13 @@ pub fn proxy_reset_identity() -> Result<WarpStoredConfig, ProxyError> {
         }
 
         let warp = provisioner.provision_new_account().await?;
-        let contents = serde_json::to_string_pretty(&warp)?;
-        let config_path = storage_path.join("warp_config.json");
-        tokio::fs::write(&config_path, contents).await?;
-        Ok::<WarpConfig, ProxyError>(warp)
-    })??;
+        tokio::fs::write(&config_path, serde_json::to_string_pretty(&warp)?).await?;
+        Ok(warp)
+    })?;
 
     // Phase 4: install the fresh configuration under the lock.
     let mut guard = lock_state();
     let state = guard.as_mut().ok_or(ProxyError::NotInitialized)?;
-    state.config.warp_enabled = new_config.warp_enabled;
-    state.config.endpoint_host = Some(new_config.peer.endpoint_host.clone());
     state.config.warp_config = Some(new_config);
     state.manager = None;
     Ok(snapshot(state))

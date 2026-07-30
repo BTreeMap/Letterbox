@@ -1,11 +1,11 @@
-//! Virtual smoltcp [`Device`] bridging the TCP/IP stack to WireGuard.
+//! Virtual smoltcp [`Device`] bridging the TCP/IP stack to the tunnel.
 //!
 //! The device owns two packet queues:
 //!
-//! * `rx_queue` — decrypted IP packets produced by the WireGuard transport that
-//!   smoltcp should ingest.
+//! * `rx_queue` — decrypted IP packets produced by the transport that smoltcp
+//!   should ingest.
 //! * `tx_queue` — IP packets smoltcp wants to emit, which the tunnel drains and
-//!   hands to the WireGuard transport for encryption.
+//!   hands to the transport for encryption.
 //!
 //! Following smoltcp's own loopback device, [`VirtualRxToken`] *owns* the popped
 //! buffer (so it borrows nothing) while [`VirtualTxToken`] borrows only the
@@ -18,13 +18,14 @@ use std::collections::VecDeque;
 
 /// Tunnel MTU. Packets larger than this are fragmented by smoltcp.
 ///
-/// Conservatively set to the IPv6 minimum link MTU (1280) rather than the usual
-/// WireGuard 1420. On mobile networks the underlying L2 MTU is not guaranteed to
-/// be 1500, so the WireGuard overhead can push 1420-byte inner packets past the
-/// real path MTU and cause silent UDP drops. 1280 always fits with room to spare.
-const WIREGUARD_MTU: usize = 1280;
+/// Conservatively set to the IPv6 minimum link MTU (1280) rather than a
+/// path-derived figure. On mobile networks the underlying L2 MTU is not
+/// guaranteed to be 1500, so tunnel overhead can push larger inner packets past
+/// the real path MTU and cause silent UDP drops. 1280 always fits with room to
+/// spare, and matches the MTU the MASQUE session is configured with.
+const TUNNEL_MTU: usize = 1280;
 
-/// A smoltcp device whose "wire" is the WireGuard transport.
+/// A smoltcp device whose "wire" is the tunnel transport.
 pub struct VirtualDevice {
     /// Decrypted inbound IP packets waiting to be read by smoltcp.
     rx_queue: VecDeque<Vec<u8>>,
@@ -88,7 +89,7 @@ impl Device for VirtualDevice {
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
         caps.medium = Medium::Ip;
-        caps.max_transmission_unit = WIREGUARD_MTU;
+        caps.max_transmission_unit = TUNNEL_MTU;
         caps
     }
 }
@@ -129,11 +130,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capabilities_match_wireguard_mtu() {
+    fn capabilities_match_tunnel_mtu() {
         let device = VirtualDevice::new();
         let caps = device.capabilities();
         assert_eq!(caps.medium, Medium::Ip);
-        assert_eq!(caps.max_transmission_unit, WIREGUARD_MTU);
+        assert_eq!(caps.max_transmission_unit, TUNNEL_MTU);
     }
 
     #[test]

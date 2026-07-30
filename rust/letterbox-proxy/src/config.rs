@@ -7,6 +7,9 @@ use crate::error::ProxyError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Name of the persisted WARP configuration inside the storage directory.
+const WARP_CONFIG_FILE: &str = "warp_config.json";
+
 /// WARP account data persisted per user.
 ///
 /// This contains the minimum data needed to recreate the WireGuard tunnel.
@@ -112,16 +115,18 @@ pub struct WarpConfig {
 }
 
 /// Proxy configuration including WARP settings and cache options.
+///
+/// "Is WARP enabled" and "which endpoint" are *questions about* [`Self::warp_config`],
+/// not independent settings, so they are accessors rather than fields. Held as
+/// fields they were copies that four separate assignments had to keep in step
+/// with their source, and a missed one is invisible: the proxy simply reports a
+/// stale endpoint for the rest of the session.
 #[derive(Debug, Clone)]
 pub struct ProxyConfig {
     /// Path to the storage directory
     pub storage_path: PathBuf,
     /// WARP configuration (if provisioned)
     pub warp_config: Option<WarpConfig>,
-    /// Whether WARP is enabled
-    pub warp_enabled: bool,
-    /// Current endpoint host
-    pub endpoint_host: Option<String>,
     /// Maximum image size in bytes (default: 10MB)
     pub max_image_size: u64,
     /// Maximum number of redirects (default: 5)
@@ -135,8 +140,6 @@ impl Default for ProxyConfig {
         Self {
             storage_path: PathBuf::new(),
             warp_config: None,
-            warp_enabled: false,
-            endpoint_host: None,
             max_image_size: 10 * 1024 * 1024, // 10MB
             max_redirects: 5,
             timeout_seconds: 30,
@@ -161,63 +164,82 @@ impl ProxyConfig {
                 })?;
         }
 
-        let config_file = path.join("warp_config.json");
-
-        let mut config = ProxyConfig {
+        let config = ProxyConfig {
             storage_path: path,
             ..Default::default()
         };
+        let config_file = config.config_file_path();
 
-        // Try to load existing configuration
-        if config_file.exists() {
-            match tokio::fs::read_to_string(&config_file).await {
-                Ok(contents) => {
-                    if let Ok(warp_config) = serde_json::from_str::<WarpConfig>(&contents) {
-                        config.warp_enabled = warp_config.warp_enabled;
-                        config.endpoint_host = Some(warp_config.peer.endpoint_host.clone());
-                        config.warp_config = Some(warp_config);
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Failed to read WARP config: {}", e);
-                }
-            }
+        // An unreadable or unparseable file is not fatal: the caller provisions
+        // a fresh account instead, so a corrupt config self-heals rather than
+        // bricking the proxy.
+        if !config_file.exists() {
+            return Ok(config);
         }
+        let warp_config = match tokio::fs::read_to_string(&config_file).await {
+            Ok(contents) => serde_json::from_str::<WarpConfig>(&contents).ok(),
+            Err(e) => {
+                log::warn!("Failed to read WARP config: {e}");
+                None
+            }
+        };
 
-        Ok(config)
+        Ok(ProxyConfig {
+            warp_config,
+            ..config
+        })
     }
 
     /// Save the current configuration to disk.
+    ///
+    /// A configuration with nothing provisioned has nothing to persist; this is
+    /// a no-op rather than an error so callers need not ask first.
     pub async fn save(&self) -> Result<(), ProxyError> {
-        if let Some(ref warp_config) = self.warp_config {
-            let config_file = self.storage_path.join("warp_config.json");
-            let contents = serde_json::to_string_pretty(warp_config)?;
-            tokio::fs::write(&config_file, contents).await?;
-        }
+        let Some(warp_config) = &self.warp_config else {
+            return Ok(());
+        };
+        let contents = serde_json::to_string_pretty(warp_config)?;
+        tokio::fs::write(self.config_file_path(), contents).await?;
         Ok(())
     }
 
     /// Get the path to the WARP configuration file.
     pub fn config_file_path(&self) -> PathBuf {
-        self.storage_path.join("warp_config.json")
+        self.storage_path.join(WARP_CONFIG_FILE)
     }
 
-    /// Check if WARP credentials exist.
-    pub fn has_credentials(&self) -> bool {
-        self.warp_config.is_some()
+    /// Whether WARP is enabled on the provisioned account.
+    ///
+    /// An unprovisioned proxy is not "enabled with no endpoint": it has no
+    /// account at all, which reads as `false`.
+    pub fn warp_enabled(&self) -> bool {
+        self.warp_config.as_ref().is_some_and(|c| c.warp_enabled)
     }
 
-    /// Update the WARP configuration.
+    /// The endpoint host of the provisioned account, if there is one.
+    pub fn endpoint_host(&self) -> Option<&str> {
+        self.warp_config
+            .as_ref()
+            .map(|c| c.peer.endpoint_host.as_str())
+    }
+
+    /// Install a freshly provisioned configuration and persist it.
+    ///
+    /// Installing and persisting are one operation because a configuration held
+    /// only in memory would re-provision on the next launch, leaving an orphaned
+    /// device registration behind each time.
     pub async fn update_warp_config(&mut self, config: WarpConfig) -> Result<(), ProxyError> {
-        self.warp_enabled = config.warp_enabled;
-        self.endpoint_host = Some(config.peer.endpoint_host.clone());
         self.warp_config = Some(config);
         self.save().await
     }
 }
 
 /// Limits for image fetching to prevent abuse.
-#[derive(Debug, Clone)]
+///
+/// `Copy`, because a fetch request carries a copy of these across a channel to
+/// the tunnel worker: three integers move by register, where the previous shape
+/// also cloned eight heap `String`s per request that nothing ever read.
+#[derive(Debug, Clone, Copy)]
 pub struct FetchLimits {
     /// Maximum image size in bytes
     pub max_size: u64,
@@ -225,8 +247,6 @@ pub struct FetchLimits {
     pub max_redirects: u32,
     /// Request timeout in seconds
     pub timeout_seconds: u32,
-    /// Allowed content types (empty means all image/* types)
-    pub allowed_content_types: Vec<String>,
 }
 
 impl Default for FetchLimits {
@@ -235,39 +255,7 @@ impl Default for FetchLimits {
             max_size: 10 * 1024 * 1024, // 10MB
             max_redirects: 5,
             timeout_seconds: 30,
-            allowed_content_types: vec![
-                "image/jpeg".to_string(),
-                "image/png".to_string(),
-                "image/gif".to_string(),
-                "image/webp".to_string(),
-                "image/svg+xml".to_string(),
-                "image/bmp".to_string(),
-                "image/x-icon".to_string(),
-                "image/vnd.microsoft.icon".to_string(),
-            ],
         }
-    }
-}
-
-impl FetchLimits {
-    /// Check if a content type is allowed.
-    pub fn is_content_type_allowed(&self, content_type: &str) -> bool {
-        if self.allowed_content_types.is_empty() {
-            // If no specific types are configured, allow any image/*
-            return content_type.starts_with("image/");
-        }
-
-        // Normalize content type (remove parameters like charset)
-        let normalized = content_type
-            .split(';')
-            .next()
-            .unwrap_or(content_type)
-            .trim()
-            .to_lowercase();
-
-        self.allowed_content_types
-            .iter()
-            .any(|t| t.to_lowercase() == normalized)
     }
 }
 
@@ -282,9 +270,42 @@ mod tests {
         let path = temp.path().to_str().unwrap();
 
         let config = ProxyConfig::load_or_create(path).await.unwrap();
-        assert!(!config.warp_enabled);
+        assert!(!config.warp_enabled());
+        assert_eq!(config.endpoint_host(), None);
         assert!(config.warp_config.is_none());
         assert_eq!(config.max_image_size, 10 * 1024 * 1024);
+    }
+
+    /// A config file that is not valid `WarpConfig` JSON must leave the proxy
+    /// unprovisioned rather than failing to start: the caller then provisions a
+    /// fresh account.
+    #[tokio::test]
+    async fn corrupt_config_file_loads_as_unprovisioned() {
+        let temp = tempdir().unwrap();
+        tokio::fs::write(temp.path().join("warp_config.json"), "{ not json")
+            .await
+            .unwrap();
+
+        let config = ProxyConfig::load_or_create(temp.path().to_str().unwrap())
+            .await
+            .expect("must not fail");
+
+        assert!(config.warp_config.is_none());
+        assert!(!config.warp_enabled());
+    }
+
+    /// Saving an unprovisioned config writes nothing at all — it must not
+    /// truncate or create a file that a later load would read back as corrupt.
+    #[tokio::test]
+    async fn saving_without_credentials_writes_no_file() {
+        let temp = tempdir().unwrap();
+        let config = ProxyConfig::load_or_create(temp.path().to_str().unwrap())
+            .await
+            .unwrap();
+
+        config.save().await.expect("no-op save");
+
+        assert!(!config.config_file_path().exists());
     }
 
     #[tokio::test]
@@ -317,42 +338,13 @@ mod tests {
         };
 
         config.update_warp_config(warp_config).await.unwrap();
-        assert!(config.warp_enabled);
+        assert!(config.warp_enabled());
 
-        // Reload and verify
+        // Reload and verify: the derived views must agree with what was written.
         let loaded = ProxyConfig::load_or_create(path).await.unwrap();
-        assert!(loaded.warp_enabled);
+        assert!(loaded.warp_enabled());
         assert!(loaded.warp_config.is_some());
-        assert_eq!(
-            loaded.endpoint_host.as_deref(),
-            Some("engage.cloudflareclient.com")
-        );
-    }
-
-    #[test]
-    fn test_fetch_limits_content_type() {
-        let limits = FetchLimits::default();
-
-        assert!(limits.is_content_type_allowed("image/png"));
-        assert!(limits.is_content_type_allowed("image/jpeg"));
-        assert!(limits.is_content_type_allowed("image/svg+xml"));
-        assert!(limits.is_content_type_allowed("image/PNG")); // Case insensitive
-        assert!(limits.is_content_type_allowed("image/png; charset=utf-8")); // With params
-
-        assert!(!limits.is_content_type_allowed("text/html"));
-        assert!(!limits.is_content_type_allowed("application/json"));
-    }
-
-    #[test]
-    fn test_fetch_limits_empty_allows_all_images() {
-        let limits = FetchLimits {
-            allowed_content_types: vec![],
-            ..Default::default()
-        };
-
-        assert!(limits.is_content_type_allowed("image/png"));
-        assert!(limits.is_content_type_allowed("image/any-type"));
-        assert!(!limits.is_content_type_allowed("text/html"));
+        assert_eq!(loaded.endpoint_host(), Some("engage.cloudflareclient.com"));
     }
 
     #[test]

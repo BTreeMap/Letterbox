@@ -2,7 +2,7 @@
 name = "letterbox-proxy"
 version = "0.1.0"
 edition = "2021"
-description = "Privacy-preserving image proxy using Cloudflare WARP over WireGuard"
+description = "Privacy-preserving image proxy using Cloudflare WARP over MASQUE"
 readme = "README.md"
 
 [lib]

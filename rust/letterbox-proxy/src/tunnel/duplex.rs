@@ -14,9 +14,8 @@
 //! # Backpressure
 //!
 //! Both channels are bounded and both drop on overflow rather than blocking.
-//! That is the correct policy for a datagram tunnel and matches what the
-//! WireGuard transport already does when its send queue fills: IP is lossy by
-//! contract, and TCP above the stack retransmits. Blocking instead would stall
+//! That is the correct policy for a datagram tunnel: IP is lossy by contract,
+//! and TCP above the stack retransmits. Blocking instead would stall
 //! the session loop, which also services QUIC timers — losing a packet costs a
 //! retransmit, stalling the loop costs the connection.
 

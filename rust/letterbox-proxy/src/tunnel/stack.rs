@@ -1,4 +1,4 @@
-//! WARP tunnel: a smoltcp TCP/IP stack riding the WireGuard transport.
+//! WARP tunnel: a smoltcp TCP/IP stack riding the MASQUE transport.
 //!
 //! [`WarpTunnel`] owns every piece of the userspace network stack for the whole
 //! lifetime of the tunnel, so all storage is plain owned [`Vec`]s — there is no
@@ -7,7 +7,7 @@
 //! by repeatedly driving the poll loop until the requested I/O can make progress.
 //!
 //! ```text
-//! TLS / HTTP  <->  TunnelTcpStream  <->  smoltcp TCP  <->  WireGuard  <->  UDP
+//! TLS / HTTP  <->  TunnelTcpStream  <->  smoltcp TCP  <->  MASQUE  <->  UDP
 //! ```
 
 use crate::config::WarpConfig;
@@ -39,18 +39,24 @@ fn smoltcp_now() -> SmoltcpInstant {
 }
 
 /// Parse a possibly CIDR-suffixed dotted-quad into raw octets.
+///
+/// Delegating to [`Ipv4Addr`](std::net::Ipv4Addr) rather than splitting on `.`
+/// and keeping whichever components happened to parse: the hand-rolled version
+/// *discarded* unparseable labels instead of rejecting them, so `1.x.2.3.4`
+/// silently became `1.2.3.4` and the tunnel came up on an address the account
+/// was never assigned.
 fn parse_ipv4_octets(addr: &str) -> Result<[u8; 4], ProxyError> {
-    let host = addr.split('/').next().unwrap_or(addr);
-    let parts: Vec<u8> = host.split('.').filter_map(|p| p.parse().ok()).collect();
-    match parts.as_slice() {
-        [a, b, c, d] => Ok([*a, *b, *c, *d]),
-        _ => Err(ProxyError::TunnelError {
-            details: format!("Invalid local IPv4 address: {addr}"),
-        }),
-    }
+    addr.split('/')
+        .next()
+        .unwrap_or(addr)
+        .parse::<std::net::Ipv4Addr>()
+        .map(|parsed| parsed.octets())
+        .map_err(|e| ProxyError::TunnelError {
+            details: format!("Invalid local IPv4 address '{addr}': {e}"),
+        })
 }
 
-/// A WireGuard-backed userspace TCP/IP stack to Cloudflare WARP.
+/// A MASQUE-backed userspace TCP/IP stack to Cloudflare WARP.
 pub struct WarpTunnel {
     transport: MasqueTransport,
     interface: Interface,
@@ -111,7 +117,7 @@ impl WarpTunnel {
         self.transport.is_connected()
     }
 
-    /// Live WireGuard statistics.
+    /// Live transport statistics.
     pub fn stats(&self) -> TunnelStats {
         self.transport.stats()
     }
@@ -382,6 +388,18 @@ mod tests {
         assert_eq!(parse_ipv4_octets("172.16.0.2/32").unwrap(), [172, 16, 0, 2]);
         assert_eq!(parse_ipv4_octets("10.0.0.1").unwrap(), [10, 0, 0, 1]);
         assert!(parse_ipv4_octets("not-an-ip").is_err());
+    }
+
+    /// A malformed address must be rejected, never silently repaired by
+    /// dropping the labels that failed to parse.
+    #[test]
+    fn parse_ipv4_rejects_rather_than_salvages() {
+        for malformed in ["1.x.2.3.4", "1.2.3", "1.2.3.4.5", "256.1.1.1", "", "1..2.3"] {
+            assert!(
+                parse_ipv4_octets(malformed).is_err(),
+                "{malformed} must not parse"
+            );
+        }
     }
 
     #[test]

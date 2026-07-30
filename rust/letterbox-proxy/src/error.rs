@@ -159,14 +159,9 @@ impl From<reqwest::Error> for ProxyError {
     }
 }
 
-impl From<url::ParseError> for ProxyError {
-    fn from(err: url::ParseError) -> Self {
-        ProxyError::InvalidUrl {
-            url: String::new(),
-            details: err.to_string(),
-        }
-    }
-}
+// No `From<url::ParseError>`: it could only fabricate an empty `url` field,
+// losing the very string the error is about. Both call sites build the error
+// with the URL in hand, which is the only way it can be complete.
 
 #[cfg(test)]
 mod tests {

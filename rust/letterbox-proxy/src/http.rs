@@ -1,6 +1,6 @@
 //! Image/URL fetching over the WARP tunnel.
 //!
-//! Every request is resolved via DoH and carried over WireGuard — there is no
+//! Every request is resolved via DoH and carried over the tunnel — there is no
 //! direct (non-tunnelled) network path, so the user's real IP is never exposed
 //! to image servers or the update endpoint. The module exposes a generic
 //! [`fetch`] used both for images and for the GitHub update check, plus pure
@@ -116,7 +116,10 @@ pub fn fetch(
 }
 
 /// Parse a URL and ensure it uses a supported scheme.
-fn parse_and_validate(url: &str) -> Result<Url, ProxyError> {
+///
+/// The single admission gate for a fetchable URL: the FFI entry point and every
+/// redirect hop go through it, so "what counts as fetchable" is decided once.
+pub fn parse_and_validate(url: &str) -> Result<Url, ProxyError> {
     let parsed = Url::parse(url).map_err(|e| ProxyError::InvalidUrl {
         url: url.to_string(),
         details: e.to_string(),
@@ -263,6 +266,7 @@ mod tests {
     #[test]
     fn parse_and_validate_rejects_other_schemes() {
         for url in [
+            "not-a-url",
             "file:///etc/passwd",
             "javascript:alert(1)",
             "data:image/png;base64,AAAA",

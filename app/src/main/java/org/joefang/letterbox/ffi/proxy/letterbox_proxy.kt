@@ -821,7 +821,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_clear_cache() != 62065) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_diagnostics() != 157) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_diagnostics() != 39962) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 63800) {
@@ -833,13 +833,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_url() != 15037) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_init() != 3960) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_init() != 38752) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_shutdown() != 19042) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 33270) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_status() != 8452) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_reset_identity() != 22232) {
@@ -1166,6 +1166,13 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
 
 /**
  * Result of a batch image fetch operation.
+ *
+ * The three outcome fields are a `Result` flattened for the FFI, which cannot
+ * carry a Rust sum type per element. They are correlated, not independent:
+ * `success` implies exactly one of `response`/`error` is set. Build them with
+ * [`BatchImageResult::new`] so no caller can produce a combination — a
+ * "successful" result with an error and no response — that the Kotlin side has
+ * no sensible way to render.
  */
 data class BatchImageResult (
     /**
@@ -1355,6 +1362,9 @@ public object FfiConverterTypeImageResponse: FfiConverterRustBuffer<ImageRespons
 
 /**
  * Status of the image proxy.
+ *
+ * The `Default` is the pre-initialization status: nothing ready, nothing
+ * connected, nothing cached.
  */
 data class ProxyStatus (
     /**
@@ -1368,12 +1378,12 @@ data class ProxyStatus (
     var `warpEnabled`: kotlin.Boolean
     , 
     /**
-     * Whether the WireGuard tunnel currently has a live session.
+     * Whether the tunnel currently has a live session.
      */
     var `tunnelConnected`: kotlin.Boolean
     , 
     /**
-     * Current WireGuard endpoint (if provisioned).
+     * Current WARP endpoint (if provisioned).
      */
     var `endpoint`: kotlin.String?
     , 
@@ -1692,6 +1702,10 @@ public object FfiConverterTypeWarpDiagnostics: FfiConverterRustBuffer<WarpDiagno
  * it remains inspectable even when the tunnel is down — exactly the situation a
  * user needs visibility into. The private key is included for full
  * transparency; the Android UI keeps it behind an explicit reveal toggle.
+ *
+ * The `Default` is the "nothing provisioned" snapshot, so the unprovisioned
+ * case does not have to spell out fifteen empty fields — a list in which a
+ * wrong entry looks exactly like a right one.
  */
 data class WarpStoredConfig (
     /**
@@ -2719,7 +2733,7 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     
 
         /**
-         * Collect full WireGuard/WARP diagnostics, provisioning the tunnel if needed.
+         * Collect full tunnel/WARP diagnostics, provisioning the tunnel if needed.
          */
     @Throws(ProxyException::class) fun `proxyDiagnostics`(): WarpDiagnostics {
             return FfiConverterTypeWarpDiagnostics.lift(
@@ -2781,7 +2795,7 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
          * Initialize the image proxy.
          *
          * Loads or creates persisted configuration and prepares the in-memory cache.
-         * WARP provisioning and the WireGuard handshake are deferred until the first
+         * WARP provisioning and the tunnel handshake are deferred until the first
          * fetch so initialization stays fast and works offline.
          */
     @Throws(ProxyException::class) fun `proxyInit`(`storagePath`: kotlin.String, `maxCacheSize`: kotlin.UInt)
@@ -2809,6 +2823,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
 
         /**
          * Get the current proxy status.
+         *
+         * Never fails: "not initialized" is a status, not an error, which is what the
+         * `ready` flag reports.
          */
     @Throws(ProxyException::class) fun `proxyStatus`(): ProxyStatus {
             return FfiConverterTypeProxyStatus.lift(

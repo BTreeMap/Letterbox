@@ -28,6 +28,36 @@ const API_VERSION: &str = "v0a884";
 /// Base URL for the WARP API.
 const API_BASE: &str = "https://api.cloudflareclient.com";
 
+/// WireGuard endpoint port assumed when the API returns a bare host.
+const DEFAULT_ENDPOINT_PORT: u16 = 2408;
+
+/// Account tier reported when the API omits one.
+const DEFAULT_ACCOUNT_TYPE: &str = "free";
+
+/// Split `host:port` into its parts, falling back to the well-known port.
+///
+/// `rsplit_once` rather than `split_once`, so an IPv6 literal's inner colons
+/// stay with the host.
+fn split_endpoint(endpoint: &str) -> (&str, u16) {
+    endpoint
+        .rsplit_once(':')
+        .and_then(|(host, port)| Some((host, port.parse().ok()?)))
+        .unwrap_or((endpoint, DEFAULT_ENDPOINT_PORT))
+}
+
+/// Take the peer Cloudflare assigned, or say which response had none.
+///
+/// The API returns a list but assigns exactly one; an empty list is a protocol
+/// violation, not an empty result to carry on with.
+fn first_peer(peers: Vec<PeerData>, what: &str) -> Result<PeerData, ProxyError> {
+    peers
+        .into_iter()
+        .next()
+        .ok_or_else(|| ProxyError::ProvisioningFailed {
+            details: format!("No peers in {what}"),
+        })
+}
+
 /// Flatten an error and its `source()` chain into a single string.
 ///
 /// `reqwest` nests the real cause (DNS, connect, TLS handshake, ...) behind a
@@ -42,6 +72,39 @@ fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
         source = cause.source();
     }
     msg
+}
+
+/// Require a 2xx, turning any other status into an error carrying the body.
+///
+/// Every call below shares this shape — check the status, otherwise read the
+/// body for the reason — and the body must be consumed *after* the status is
+/// read, since reading it moves the response. Naming the sequence once is what
+/// keeps that ordering from being re-derived at four call sites.
+async fn expect_success(
+    what: &str,
+    response: reqwest::Response,
+) -> Result<reqwest::Response, ProxyError> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let body = response.text().await.unwrap_or_default();
+    Err(ProxyError::ProvisioningFailed {
+        details: format!("{what} failed with status {status}: {body}"),
+    })
+}
+
+/// Decode a JSON body, naming the request that produced it.
+async fn decode_json<T: serde::de::DeserializeOwned>(
+    what: &str,
+    response: reqwest::Response,
+) -> Result<T, ProxyError> {
+    response
+        .json()
+        .await
+        .map_err(|e| ProxyError::ProvisioningFailed {
+            details: format!("Failed to parse {what} response: {e}"),
+        })
 }
 
 /// Default headers for API requests.
@@ -255,24 +318,14 @@ impl WarpProvisioner {
             .send()
             .await
             .map_err(|e| ProxyError::ProvisioningFailed {
-                details: format!("Registration request failed: {}", e),
+                details: format!("Registration request failed: {e}"),
             })?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(ProxyError::ProvisioningFailed {
-                details: format!("Registration failed with status {}: {}", status, body),
-            });
-        }
-
-        let reg_response: RegistrationResponse =
-            response
-                .json()
-                .await
-                .map_err(|e| ProxyError::ProvisioningFailed {
-                    details: format!("Failed to parse registration response: {}", e),
-                })?;
+        let reg_response: RegistrationResponse = decode_json(
+            "registration",
+            expect_success("Registration", response).await?,
+        )
+        .await?;
 
         // Note: private_key will be filled in by the caller
         Ok(WarpAccountData {
@@ -294,54 +347,25 @@ impl WarpProvisioner {
             .send()
             .await
             .map_err(|e| ProxyError::ProvisioningFailed {
-                details: format!("Config fetch failed: {}", e),
+                details: format!("Config fetch failed: {e}"),
             })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(ProxyError::ProvisioningFailed {
-                details: format!("Config fetch failed with status {}: {}", status, body),
-            });
-        }
 
         let config_response: ConfigResponse =
-            response
-                .json()
-                .await
-                .map_err(|e| ProxyError::ProvisioningFailed {
-                    details: format!("Failed to parse config response: {}", e),
-                })?;
+            decode_json("config", expect_success("Config fetch", response).await?).await?;
 
         // Extract peer configuration (use first peer)
-        let peer = config_response
-            .config
-            .peers
-            .into_iter()
-            .next()
-            .ok_or_else(|| ProxyError::ProvisioningFailed {
-                details: "No peers in configuration".to_string(),
-            })?;
-
-        // Parse endpoint port from host (format: "host:port")
-        let (endpoint_host, endpoint_port) = peer
-            .endpoint
-            .host
-            .rsplit_once(':')
-            .map(|(h, p)| (h.to_string(), p.parse().unwrap_or(2408)))
-            .unwrap_or((peer.endpoint.host.clone(), 2408));
+        let peer = first_peer(config_response.config.peers, "configuration")?;
+        let (endpoint_host, endpoint_port) = split_endpoint(&peer.endpoint.host);
 
         let account_type = config_response
             .account
-            .as_ref()
-            .map(|a| a.account_type.clone())
-            .unwrap_or_else(|| "free".to_string());
+            .map_or_else(|| DEFAULT_ACCOUNT_TYPE.to_string(), |a| a.account_type);
 
         Ok(WarpConfig {
             account: account.clone(),
             peer: WarpPeerConfig {
                 public_key: peer.public_key,
-                endpoint_host,
+                endpoint_host: endpoint_host.to_string(),
                 endpoint_ipv4: peer.endpoint.v4,
                 endpoint_port,
             },
@@ -439,35 +463,17 @@ impl WarpProvisioner {
                 details: format!("MASQUE enrolment failed: {e}"),
             })?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(ProxyError::ProvisioningFailed {
-                details: format!("MASQUE enrolment failed with status {status}: {body}"),
-            });
-        }
+        let enrolled: ConfigResponse = decode_json(
+            "MASQUE enrolment",
+            expect_success("MASQUE enrolment", response).await?,
+        )
+        .await?;
 
-        let enrolled: ConfigResponse =
-            response
-                .json()
-                .await
-                .map_err(|e| ProxyError::ProvisioningFailed {
-                    details: format!("Failed to parse MASQUE enrolment response: {e}"),
-                })?;
-
-        let peer_key = enrolled
-            .config
-            .peers
-            .into_iter()
-            .next()
-            .map(|peer| peer.public_key)
-            .ok_or_else(|| ProxyError::ProvisioningFailed {
-                details: "MASQUE enrolment returned no peer key".to_string(),
-            })?;
+        let peer = first_peer(enrolled.config.peers, "the MASQUE enrolment response")?;
 
         Ok(MasqueCredentials {
             ec_private_key_der: BASE64.encode(&private_der),
-            endpoint_pub_key_spki: BASE64.encode(decode_peer_key(&peer_key)?),
+            endpoint_pub_key_spki: BASE64.encode(decode_peer_key(&peer.public_key)?),
         })
     }
 
@@ -488,18 +494,10 @@ impl WarpProvisioner {
             .send()
             .await
             .map_err(|e| ProxyError::ProvisioningFailed {
-                details: format!("Enable WARP request failed: {}", e),
+                details: format!("Enable WARP request failed: {e}"),
             })?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(ProxyError::ProvisioningFailed {
-                details: format!("Enable WARP failed with status {}: {}", status, body),
-            });
-        }
-
-        Ok(())
+        expect_success("Enable WARP", response).await.map(|_| ())
     }
 
     /// Delete a WARP device registration.
@@ -519,15 +517,7 @@ impl WarpProvisioner {
                 details: format!("Delete device request failed: {e}"),
             })?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(ProxyError::ProvisioningFailed {
-                details: format!("Delete device failed with status {status}: {body}"),
-            });
-        }
-
-        Ok(())
+        expect_success("Delete device", response).await.map(|_| ())
     }
 
     /// Provision a new WARP account from scratch.
@@ -545,9 +535,9 @@ impl WarpProvisioner {
         let mut account = self.register(&registration_key).await?;
         account.private_key = registration_key;
 
-        // Step 3: Fetch configuration
+        // Step 3: Fetch configuration. `fetch_config` clones `account` verbatim,
+        // so the key set above is already carried through.
         let mut config = self.fetch_config(&account).await?;
-        config.account.private_key = account.private_key.clone();
 
         // Step 4: Enable WARP if not enabled
         if !config.warp_enabled {
@@ -594,11 +584,9 @@ fn decode_peer_key(encoded: &str) -> Result<Vec<u8>, ProxyError> {
         })
 }
 
-impl Default for WarpProvisioner {
-    fn default() -> Self {
-        Self::new().expect("Failed to create default WarpProvisioner")
-    }
-}
+// No `Default`: building the HTTP client can fail, and a `Default` that panics
+// is a trap for the one caller who reaches for it out of habit. `new` returns
+// the `Result` the operation actually has.
 
 #[cfg(test)]
 mod tests {
@@ -705,14 +693,34 @@ mod tests {
 
     #[test]
     fn test_endpoint_parsing() {
-        // Test parsing endpoint host:port
-        let host_with_port = "engage.cloudflareclient.com:2408";
-        let (host, port) = host_with_port
-            .rsplit_once(':')
-            .map(|(h, p)| (h.to_string(), p.parse::<u16>().unwrap_or(2408)))
-            .unwrap_or((host_with_port.to_string(), 2408));
+        assert_eq!(
+            split_endpoint("engage.cloudflareclient.com:2408"),
+            ("engage.cloudflareclient.com", 2408)
+        );
+    }
 
-        assert_eq!(host, "engage.cloudflareclient.com");
-        assert_eq!(port, 2408);
+    /// A host without a port, or with an unparseable one, must keep the whole
+    /// host and fall back — never truncate the host at the colon.
+    #[test]
+    fn endpoint_without_a_usable_port_keeps_the_whole_host() {
+        assert_eq!(
+            split_endpoint("engage.cloudflareclient.com"),
+            ("engage.cloudflareclient.com", DEFAULT_ENDPOINT_PORT)
+        );
+        assert_eq!(
+            split_endpoint("host:not-a-port"),
+            ("host:not-a-port", DEFAULT_ENDPOINT_PORT)
+        );
+        assert_eq!(
+            split_endpoint("host:99999"),
+            ("host:99999", DEFAULT_ENDPOINT_PORT)
+        );
+    }
+
+    #[test]
+    fn first_peer_names_the_response_that_had_none() {
+        let err = first_peer(Vec::new(), "the MASQUE enrolment response")
+            .expect_err("empty peer list is a protocol violation");
+        assert!(err.to_string().contains("MASQUE enrolment response"));
     }
 }

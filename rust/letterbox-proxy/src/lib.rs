@@ -1,7 +1,7 @@
 //! # Letterbox Image Proxy
 //!
 //! Privacy-preserving image proxy and update checker built on Cloudflare WARP
-//! over a userspace WireGuard tunnel.
+//! over a userspace MASQUE tunnel.
 //!
 //! Every outbound HTTP(S) request — remote images *and* the GitHub update
 //! check — is carried over the tunnel ([`tunnel`]). There is no direct,
@@ -13,7 +13,7 @@
 //! ## Pipeline
 //!
 //! ```text
-//! FFI -> TunnelManager (worker thread) -> http -> tls/dns -> smoltcp -> WireGuard -> UDP
+//! FFI -> TunnelManager (worker thread) -> http -> tls/dns -> smoltcp -> MASQUE -> UDP
 //! ```
 //!
 //! ## FFI API (exposed to Kotlin via UniFFI)
@@ -47,9 +47,12 @@ pub use types::{
 
 use config::{FetchLimits, WarpConfig};
 use provisioning::WarpProvisioner;
-use tunnel::{ConnectionState, TunnelDiagnostics, TunnelManager};
+use tunnel::{TunnelDiagnostics, TunnelManager};
 
 uniffi::setup_scaffolding!();
+
+/// Cache capacity used when the caller asks for zero entries.
+const DEFAULT_CACHE_ENTRIES: std::num::NonZeroUsize = std::num::NonZeroUsize::new(100).unwrap();
 
 /// Global proxy state, lazily initialized.
 static PROXY_STATE: OnceLock<Mutex<Option<ProxyState>>> = OnceLock::new();
@@ -84,41 +87,39 @@ pub(crate) struct ProxyState {
 }
 
 impl ProxyState {
-    /// Build the fetch limits from the current configuration.
+    /// Project the configuration onto the limits a single fetch needs.
+    ///
+    /// Total: every field of [`FetchLimits`] has exactly one source in the
+    /// configuration, so there is nothing left to default.
     fn fetch_limits(&self) -> FetchLimits {
         FetchLimits {
             max_size: self.config.max_image_size,
             max_redirects: self.config.max_redirects,
             timeout_seconds: self.config.timeout_seconds,
-            ..FetchLimits::default()
         }
     }
 }
 
-/// Run an async future to completion on a transient current-thread runtime.
+/// Run a fallible async operation to completion on a transient current-thread
+/// runtime.
 ///
 /// Used only for the (direct-to-Cloudflare) WARP registration and config
 /// persistence, which are inherently async via `reqwest`/`tokio::fs`.
-pub(crate) fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, ProxyError> {
+///
+/// The future's own failure and the failure to build a runtime for it are both
+/// [`ProxyError`], so they are joined into one `Result` here rather than handed
+/// to every caller as a nested pair to unwrap twice.
+pub(crate) fn block_on<T, F>(future: F) -> Result<T, ProxyError>
+where
+    F: std::future::Future<Output = Result<T, ProxyError>>,
+{
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| ProxyError::InitializationFailed {
             details: format!("Failed to create async runtime: {e}"),
-        })
-        .map(|rt| rt.block_on(future))
-}
-
-/// Provision a fresh WARP account and persist it next to the proxy config.
-fn provision_and_save(config: &ProxyConfig) -> Result<WarpConfig, ProxyError> {
-    let config_path = config.config_file_path();
-    block_on(async move {
-        let provisioner = WarpProvisioner::new()?;
-        let warp = provisioner.provision_new_account().await?;
-        let contents = serde_json::to_string_pretty(&warp)?;
-        tokio::fs::write(&config_path, contents).await?;
-        Ok::<WarpConfig, ProxyError>(warp)
-    })?
+        })?
+        .block_on(future)
 }
 
 /// Ensure the tunnel manager exists, provisioning WARP on first use.
@@ -130,10 +131,11 @@ fn ensure_manager(state: &mut ProxyState) -> Result<Arc<TunnelManager>, ProxyErr
     let warp_config = match state.config.warp_config.clone() {
         Some(config) => upgrade_to_masque(state, config),
         None => {
-            let config = provision_and_save(&state.config)?;
-            state.config.warp_enabled = config.warp_enabled;
-            state.config.endpoint_host = Some(config.peer.endpoint_host.clone());
-            state.config.warp_config = Some(config.clone());
+            let config = block_on(async { WarpProvisioner::new()?.provision_new_account().await })?;
+            // Installing and persisting are one step: a config held in memory
+            // but not on disk would silently re-provision on the next launch,
+            // stranding a device registration on Cloudflare's side each time.
+            block_on(state.config.update_warp_config(config.clone()))?;
             config
         }
     };
@@ -160,22 +162,16 @@ fn upgrade_to_masque(state: &mut ProxyState, config: WarpConfig) -> WarpConfig {
         return config;
     }
 
-    let provisioner = match WarpProvisioner::new() {
-        Ok(provisioner) => provisioner,
-        Err(e) => {
-            log::warn!("cannot build provisioner for MASQUE upgrade: {e}");
-            return config;
-        }
-    };
+    let enrolled = block_on(async {
+        WarpProvisioner::new()?
+            .enroll_masque_key(&config.account)
+            .await
+    });
 
-    let credentials = match block_on(provisioner.enroll_masque_key(&config.account)) {
-        Ok(Ok(credentials)) => credentials,
-        Ok(Err(e)) => {
-            log::warn!("MASQUE upgrade failed, staying on WireGuard: {e}");
-            return config;
-        }
+    let credentials = match enrolled {
+        Ok(credentials) => credentials,
         Err(e) => {
-            log::warn!("MASQUE upgrade could not run: {e}");
+            log::warn!("MASQUE upgrade failed, staying on the stored configuration: {e}");
             return config;
         }
     };
@@ -185,7 +181,7 @@ fn upgrade_to_masque(state: &mut ProxyState, config: WarpConfig) -> WarpConfig {
         ..config
     };
     state.config.warp_config = Some(upgraded.clone());
-    if let Err(e) = block_on(state.config.save()).and_then(|r| r) {
+    if let Err(e) = block_on(state.config.save()) {
         // The tunnel still comes up; only the upgrade fails to stick, and the
         // next launch retries it.
         log::warn!("failed to persist MASQUE credentials: {e}");
@@ -194,26 +190,12 @@ fn upgrade_to_masque(state: &mut ProxyState, config: WarpConfig) -> WarpConfig {
     upgraded
 }
 
-/// Validate that a URL is a fetchable http(s) URL.
-fn validate_image_url(url: &str) -> Result<(), ProxyError> {
-    let parsed = url::Url::parse(url).map_err(|e| ProxyError::InvalidUrl {
-        url: url.to_string(),
-        details: e.to_string(),
-    })?;
-    if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        return Err(ProxyError::InvalidUrl {
-            url: url.to_string(),
-            details: "Only http:// and https:// URLs are supported".to_string(),
-        });
-    }
-    Ok(())
-}
-
 /// Convert optional FFI headers into the ordered pairs the tunnel expects.
-fn header_pairs(headers: Option<&HashMap<String, String>>) -> Vec<(String, String)> {
-    headers
-        .map(|map| map.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-        .unwrap_or_default()
+///
+/// Consumes the map: the caller owns it and has no further use for it, so the
+/// strings move rather than being cloned twice over.
+fn header_pairs(headers: Option<HashMap<String, String>>) -> Vec<(String, String)> {
+    headers.map(Vec::from_iter).unwrap_or_default()
 }
 
 /// Acquire the shared manager (initialising it if needed) under the lock,
@@ -237,14 +219,16 @@ fn record_error(message: &str) {
 /// Initialize the image proxy.
 ///
 /// Loads or creates persisted configuration and prepares the in-memory cache.
-/// WARP provisioning and the WireGuard handshake are deferred until the first
+/// WARP provisioning and the tunnel handshake are deferred until the first
 /// fetch so initialization stays fast and works offline.
 #[uniffi::export]
 pub fn proxy_init(storage_path: String, max_cache_size: u32) -> Result<(), ProxyError> {
-    let config = block_on(ProxyConfig::load_or_create(&storage_path))??;
+    let config = block_on(ProxyConfig::load_or_create(&storage_path))?;
 
-    let cache_size = std::num::NonZeroUsize::new(max_cache_size as usize)
-        .unwrap_or(std::num::NonZeroUsize::new(100).unwrap());
+    // A zero-capacity LRU cannot exist, so a caller asking for one gets the
+    // default rather than a panic.
+    let cache_size =
+        std::num::NonZeroUsize::new(max_cache_size as usize).unwrap_or(DEFAULT_CACHE_ENTRIES);
 
     let mut guard = lock_state();
     if guard.is_some() {
@@ -260,27 +244,25 @@ pub fn proxy_init(storage_path: String, max_cache_size: u32) -> Result<(), Proxy
 }
 
 /// Get the current proxy status.
+///
+/// Never fails: "not initialized" is a status, not an error, which is what the
+/// `ready` flag reports.
 #[uniffi::export]
 pub fn proxy_status() -> Result<ProxyStatus, ProxyError> {
-    let guard = lock_state();
-    match guard.as_ref() {
-        Some(state) => Ok(ProxyStatus {
+    Ok(lock_state().as_ref().map_or_else(
+        || ProxyStatus {
+            last_error: Some(ProxyError::NotInitialized.to_string()),
+            ..ProxyStatus::default()
+        },
+        |state| ProxyStatus {
             ready: true,
-            warp_enabled: state.config.warp_enabled,
+            warp_enabled: state.config.warp_enabled(),
             tunnel_connected: state.manager.is_some(),
-            endpoint: state.config.endpoint_host.clone(),
+            endpoint: state.config.endpoint_host().map(str::to_string),
             last_error: state.last_error.clone(),
             cache_size: state.cache.len() as u32,
-        }),
-        None => Ok(ProxyStatus {
-            ready: false,
-            warp_enabled: false,
-            tunnel_connected: false,
-            endpoint: None,
-            last_error: Some("Proxy not initialized".to_string()),
-            cache_size: 0,
-        }),
-    }
+        },
+    ))
 }
 
 /// Fetch a single image through the WARP tunnel.
@@ -289,7 +271,7 @@ pub fn proxy_fetch_image(
     url: String,
     headers: Option<HashMap<String, String>>,
 ) -> Result<ImageResponse, ProxyError> {
-    fetch_image(&url, headers.as_ref()).inspect_err(|e| {
+    fetch_image(&url, headers).inspect_err(|e| {
         record_error(&e.to_string());
     })
 }
@@ -297,9 +279,11 @@ pub fn proxy_fetch_image(
 /// Internal image fetch: cache-aware, tunnelled, content-validated.
 fn fetch_image(
     url: &str,
-    headers: Option<&HashMap<String, String>>,
+    headers: Option<HashMap<String, String>>,
 ) -> Result<ImageResponse, ProxyError> {
-    validate_image_url(url)?;
+    // Reject unsupported schemes before touching the cache or the tunnel, using
+    // the same parser the fetch itself will use so the two cannot disagree.
+    http::parse_and_validate(url)?;
 
     // Fast path: serve from cache without touching the network or the tunnel.
     {
@@ -353,24 +337,16 @@ pub fn proxy_fetch_images_batch(
     urls: Vec<String>,
     _max_concurrent: u32,
 ) -> Result<Vec<BatchImageResult>, ProxyError> {
-    let mut results = Vec::with_capacity(urls.len());
-    for url in urls {
-        match fetch_image(&url, None) {
-            Ok(response) => results.push(BatchImageResult {
-                url,
-                success: true,
-                response: Some(response),
-                error: None,
-            }),
-            Err(e) => results.push(BatchImageResult {
-                url,
-                success: false,
-                response: None,
-                error: Some(e.to_string()),
-            }),
-        }
-    }
-    Ok(results)
+    // Each element's outcome is independent, so a failure is a value in the
+    // result list rather than a short-circuit: one broken image must not hide
+    // the rest.
+    Ok(urls
+        .into_iter()
+        .map(|url| {
+            let outcome = fetch_image(&url, None);
+            BatchImageResult::new(url, outcome)
+        })
+        .collect())
 }
 
 /// Fetch an arbitrary URL through the tunnel (non-image content allowed).
@@ -381,12 +357,7 @@ pub fn proxy_fetch_url(
 ) -> Result<HttpFetchResponse, ProxyError> {
     let (manager, limits) = acquire_manager()?;
     let outcome = manager
-        .fetch(
-            url,
-            header_pairs(headers.as_ref()),
-            "*/*".to_string(),
-            limits,
-        )
+        .fetch(url, header_pairs(headers), "*/*".to_string(), limits)
         .inspect_err(|e| {
             record_error(&e.to_string());
         })?;
@@ -398,7 +369,7 @@ pub fn proxy_fetch_url(
     })
 }
 
-/// Collect full WireGuard/WARP diagnostics, provisioning the tunnel if needed.
+/// Collect full tunnel/WARP diagnostics, provisioning the tunnel if needed.
 #[uniffi::export]
 pub fn proxy_diagnostics() -> Result<WarpDiagnostics, ProxyError> {
     let manager = {
@@ -413,10 +384,7 @@ pub fn proxy_diagnostics() -> Result<WarpDiagnostics, ProxyError> {
 /// Map internal diagnostics into the FFI record.
 fn to_ffi_diagnostics(d: TunnelDiagnostics) -> WarpDiagnostics {
     WarpDiagnostics {
-        connection_state: match d.connection_state {
-            ConnectionState::Connected => "connected".to_string(),
-            ConnectionState::Disconnected => "disconnected".to_string(),
-        },
+        connection_state: d.connection_state.as_str().to_string(),
         protocol: d.protocol.to_string(),
         private_key: d.private_key,
         public_key: d.public_key,
@@ -487,35 +455,52 @@ pub fn proxy_clear_cache() -> Result<(), ProxyError> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn url_validation_rejects_non_http_schemes() {
-        assert!(validate_image_url("not-a-url").is_err());
-        for url in [
-            "ftp://example.com/x.png",
-            "file:///etc/passwd",
-            "javascript:alert(1)",
-            "data:image/png;base64,AAAA",
-        ] {
-            assert!(matches!(
-                validate_image_url(url),
-                Err(ProxyError::InvalidUrl { .. })
-            ));
-        }
-    }
-
-    #[test]
-    fn url_validation_accepts_http_and_https() {
-        assert!(validate_image_url("http://example.com/x.png").is_ok());
-        assert!(validate_image_url("https://example.com/x.png").is_ok());
-    }
+    // URL admission is tested where it is decided, in `http::parse_and_validate`.
 
     #[test]
     fn header_pairs_handles_none_and_some() {
         assert!(header_pairs(None).is_empty());
-        let mut map = HashMap::new();
-        map.insert("X-A".to_string(), "1".to_string());
-        let pairs = header_pairs(Some(&map));
-        assert_eq!(pairs, vec![("X-A".to_string(), "1".to_string())]);
+        let map = HashMap::from([("X-A".to_string(), "1".to_string())]);
+        assert_eq!(
+            header_pairs(Some(map)),
+            vec![("X-A".to_string(), "1".to_string())]
+        );
+    }
+
+    /// The three outcome fields must never disagree, whichever way the fetch went.
+    #[test]
+    fn batch_result_correlates_its_outcome_fields() {
+        let ok = BatchImageResult::new(
+            "https://example.com/a.png".to_string(),
+            Ok(ImageResponse {
+                mime_type: "image/png".to_string(),
+                data: vec![1, 2, 3, 4],
+                from_cache: false,
+                final_url: "https://example.com/a.png".to_string(),
+            }),
+        );
+        assert!(ok.success && ok.response.is_some() && ok.error.is_none());
+
+        let err = BatchImageResult::new(
+            "https://example.com/b.png".to_string(),
+            Err(ProxyError::HttpError {
+                status_code: 404,
+                details: "Not found".to_string(),
+            }),
+        );
+        assert!(!err.success && err.response.is_none());
+        assert!(err.error.expect("error text").contains("404"));
+    }
+
+    /// Before initialization the status is a value, not an error: the FFI call
+    /// must succeed and say `ready: false`.
+    #[test]
+    fn status_before_init_is_not_ready() {
+        let status = ProxyStatus::default();
+        assert!(!status.ready);
+        assert!(!status.tunnel_connected);
+        assert_eq!(status.cache_size, 0);
+        assert_eq!(status.endpoint, None);
     }
 
     #[test]
@@ -529,29 +514,5 @@ mod tests {
         let cloned = response.clone();
         assert_eq!(response.mime_type, cloned.mime_type);
         assert_eq!(response.data, cloned.data);
-    }
-
-    #[test]
-    fn batch_result_variants() {
-        let ok = BatchImageResult {
-            url: "https://example.com/a.png".to_string(),
-            success: true,
-            response: Some(ImageResponse {
-                mime_type: "image/png".to_string(),
-                data: vec![1, 2, 3, 4],
-                from_cache: false,
-                final_url: "https://example.com/a.png".to_string(),
-            }),
-            error: None,
-        };
-        assert!(ok.success && ok.response.is_some() && ok.error.is_none());
-
-        let err = BatchImageResult {
-            url: "https://example.com/b.png".to_string(),
-            success: false,
-            response: None,
-            error: Some("HTTP 404".to_string()),
-        };
-        assert!(!err.success && err.response.is_none() && err.error.is_some());
     }
 }

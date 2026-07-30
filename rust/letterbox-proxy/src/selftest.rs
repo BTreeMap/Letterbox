@@ -56,21 +56,16 @@ pub enum TlsSelfTestOutcome {
 #[uniffi::export]
 pub fn proxy_tls_self_test() -> TlsSelfTestOutcome {
     let probe = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        block_on(async {
-            let provisioner = WarpProvisioner::new()?;
-            provisioner.tls_self_test().await
-        })
+        block_on(async { WarpProvisioner::new()?.tls_self_test().await })
     }));
 
     match probe {
-        // Runtime built, future ran, handshake verified.
-        Ok(Ok(Ok(()))) => TlsSelfTestOutcome::Verified,
-        // Runtime built, future ran, transport error: inspect the chain.
-        Ok(Ok(Err(err))) => classify(err.to_string()),
-        // Runtime build itself failed (no network involved): inconclusive.
-        Ok(Err(err)) => TlsSelfTestOutcome::Inconclusive {
-            reason: err.to_string(),
-        },
+        // The probe ran and the handshake verified.
+        Ok(Ok(())) => TlsSelfTestOutcome::Verified,
+        // The probe ran and failed: inspect the message for the marker. A
+        // runtime that could not even be built lands here too and carries no
+        // marker, so it classifies as inconclusive — which is what it is.
+        Ok(Err(err)) => classify(err.to_string()),
         // The probe unwound — classify the panic payload.
         Err(panic) => classify(panic_message(&panic)),
     }

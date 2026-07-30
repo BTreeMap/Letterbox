@@ -3,8 +3,8 @@
 //! [`TunnelManager`] owns the [`WarpTunnel`] on a dedicated OS thread and
 //! exposes a synchronous, thread-safe request API over a command channel. This
 //! is deliberate message passing rather than shared mutable state: the tunnel —
-//! and the single-threaded smoltcp/boringtun state machine inside it — is only
-//! ever touched by its worker thread, so no `Mutex` guards the hot path.
+//! and the single-threaded smoltcp state machine inside it — is only ever
+//! touched by its worker thread, so no `Mutex` guards the hot path.
 
 use crate::config::{FetchLimits, WarpConfig};
 use crate::error::ProxyError;
@@ -18,13 +18,36 @@ use std::time::Duration;
 /// How long to wait for the initial (and any re-)handshake to complete.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Whether the tunnel currently has a live WireGuard session.
+/// Whether the tunnel currently has a live session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
     /// No completed handshake.
     Disconnected,
     /// A handshake has completed and the session is usable.
     Connected,
+}
+
+impl ConnectionState {
+    /// The wire name the Android diagnostics screen matches on.
+    ///
+    /// Lives with the variants so adding a third state is a compile error at
+    /// this match rather than a silently missing case at the FFI boundary.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Connected => "connected",
+            Self::Disconnected => "disconnected",
+        }
+    }
+}
+
+impl From<bool> for ConnectionState {
+    fn from(connected: bool) -> Self {
+        if connected {
+            Self::Connected
+        } else {
+            Self::Disconnected
+        }
+    }
 }
 
 /// A full diagnostics snapshot of the tunnel and its WARP identity.
@@ -222,7 +245,7 @@ fn worker_loop(
     }
 }
 
-/// Ensure a live WireGuard session, re-handshaking if it has lapsed.
+/// Ensure a live tunnel session, re-handshaking if it has lapsed.
 fn ensure_connected(tunnel: &mut WarpTunnel) -> Result<(), ProxyError> {
     if tunnel.is_connected() {
         return Ok(());
@@ -239,11 +262,7 @@ fn build_diagnostics(
     let stats: TunnelStats = tunnel.stats();
     let endpoint = tunnel.endpoint();
     TunnelDiagnostics {
-        connection_state: if tunnel.is_connected() {
-            ConnectionState::Connected
-        } else {
-            ConnectionState::Disconnected
-        },
+        connection_state: tunnel.is_connected().into(),
         protocol: tunnel.protocol(),
         private_key: config.account.private_key.clone(),
         public_key: public_key.to_string(),
