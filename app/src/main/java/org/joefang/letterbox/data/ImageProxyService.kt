@@ -166,7 +166,7 @@ class ImageProxyService private constructor(private val context: Context) {
     }
 
     /**
-     * Collect full WireGuard/WARP diagnostics for the debug screen.
+     * Collect full WARP tunnel diagnostics for the debug screen.
      *
      * This forces the tunnel to provision and perform a handshake if it has not
      * already, so it doubles as a connectivity self-test.

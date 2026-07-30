@@ -41,7 +41,14 @@ fn snapshot(state: &ProxyState) -> WarpStoredConfig {
             account_id: c.account.account_id.clone(),
             license_key: c.account.license_key.clone(),
             private_key: c.account.private_key.clone(),
-            public_key: WarpProvisioner::public_key_from_private(&c.account.private_key)
+            // The endpoint key the MASQUE session pins against. There is no
+            // longer a derivable "our public key": registration takes an opaque
+            // 32-byte blob, and the device key that matters is the enrolled
+            // P-256 one below.
+            public_key: c
+                .masque
+                .as_ref()
+                .map(|m| m.endpoint_pub_key_spki.clone())
                 .unwrap_or_default(),
             peer_public_key: c.peer.public_key.clone(),
             endpoint_host: c.peer.endpoint_host.clone(),

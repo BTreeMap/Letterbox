@@ -9,9 +9,8 @@
 use crate::config::{FetchLimits, WarpConfig};
 use crate::error::ProxyError;
 use crate::http::{self, FetchOutcome};
-use crate::provisioning::WarpProvisioner;
 use crate::tunnel::stack::WarpTunnel;
-use crate::tunnel::transport::TunnelStats;
+use crate::tunnel::stats::TunnelStats;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -90,10 +89,17 @@ pub struct TunnelManager {
 impl TunnelManager {
     /// Start the worker thread and block until the first handshake completes.
     ///
-    /// `config` is the provisioned WARP configuration. The worker derives the
-    /// public key once and retains the config for diagnostics.
+    /// `config` is the provisioned WARP configuration, retained for diagnostics.
     pub fn start(config: WarpConfig) -> Result<Self, ProxyError> {
-        let public_key = WarpProvisioner::public_key_from_private(&config.account.private_key)?;
+        // The endpoint's MASQUE key, shown in diagnostics. Previously this
+        // derived a WireGuard public key from the private one; with WireGuard
+        // gone there is no such relationship, and the key worth showing is the
+        // one the session actually pins against.
+        let public_key = config
+            .masque
+            .as_ref()
+            .map(|m| m.endpoint_pub_key_spki.clone())
+            .unwrap_or_default();
         let (tx, rx) = channel::<Command>();
         let (ready_tx, ready_rx) = channel::<Result<(), ProxyError>>();
 

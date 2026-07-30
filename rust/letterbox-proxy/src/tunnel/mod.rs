@@ -2,9 +2,11 @@
 //!
 //! The tunnel is layered bottom-up:
 //!
-//! * [`transport`] — boringtun WireGuard over a UDP socket.
+//! * [`masque`] — Cloudflare MASQUE (CONNECT-IP over HTTP/3) via `usque-core`.
+//! * [`duplex`] — a packet-framed bridge between the async session loop and
+//!   this blocking one.
 //! * [`device`] — a smoltcp [`Device`](smoltcp::phy::Device) bridging IP packets
-//!   to the WireGuard transport.
+//!   to the transport.
 //! * [`stack`] — the smoltcp TCP/IP interface and a blocking TCP stream adapter.
 //! * [`tls`] — rustls over the tunnelled TCP stream.
 //! * [`http1`] — a pure HTTP/1.1 request/response codec.
@@ -15,12 +17,11 @@ pub mod device;
 pub mod dns;
 pub mod duplex;
 pub mod http1;
-pub mod link;
 pub mod manager;
 pub mod masque;
 pub mod stack;
+pub mod stats;
 pub mod tls;
-pub mod transport;
 
 pub use manager::{ConnectionState, TunnelDiagnostics, TunnelManager};
 pub use stack::WarpTunnel;

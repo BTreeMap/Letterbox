@@ -13,8 +13,8 @@
 use crate::config::WarpConfig;
 use crate::error::ProxyError;
 use crate::tunnel::device::VirtualDevice;
-use crate::tunnel::link::Link;
-use crate::tunnel::transport::TunnelStats;
+use crate::tunnel::masque::MasqueTransport;
+use crate::tunnel::stats::TunnelStats;
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer, State as TcpState};
 use smoltcp::time::Instant as SmoltcpInstant;
@@ -52,7 +52,7 @@ fn parse_ipv4_octets(addr: &str) -> Result<[u8; 4], ProxyError> {
 
 /// A WireGuard-backed userspace TCP/IP stack to Cloudflare WARP.
 pub struct WarpTunnel {
-    transport: Link,
+    transport: MasqueTransport,
     interface: Interface,
     sockets: SocketSet<'static>,
     device: VirtualDevice,
@@ -63,7 +63,7 @@ pub struct WarpTunnel {
 impl WarpTunnel {
     /// Build a tunnel from provisioned WARP configuration (no I/O yet).
     pub fn new(config: &WarpConfig) -> Result<Self, ProxyError> {
-        let transport = Link::for_config(config)?;
+        let transport = MasqueTransport::new(config)?;
         let local_ipv4 = parse_ipv4_octets(&config.interface.address_ipv4)?;
 
         let mut device = VirtualDevice::new();
@@ -98,8 +98,12 @@ impl WarpTunnel {
     }
 
     /// Which transport is carrying this tunnel.
+    ///
+    /// Constant now that MASQUE is the only one, but kept because the
+    /// diagnostics screen and the on-device test both assert on it — and a
+    /// future second transport should not have to reintroduce the plumbing.
     pub fn protocol(&self) -> &'static str {
-        self.transport.protocol()
+        MasqueTransport::PROTOCOL
     }
 
     /// Whether the tunnel is ready to carry packets.
@@ -322,12 +326,20 @@ impl TunnelTcpStream<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{WarpAccountData, WarpInterfaceConfig, WarpPeerConfig};
+    use crate::config::{MasqueCredentials, WarpAccountData, WarpInterfaceConfig, WarpPeerConfig};
     use crate::provisioning::WarpProvisioner;
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
+    /// A config with real, freshly generated MASQUE credentials.
+    ///
+    /// The keys are genuine DER — `MasqueTransport::new` decodes them — but no
+    /// session starts, because construction no longer connects. These tests
+    /// therefore touch no network.
     fn test_config() -> WarpConfig {
-        let (private_key, _) = WarpProvisioner::generate_keypair();
-        let (_, peer_public) = WarpProvisioner::generate_keypair();
+        let private_key = WarpProvisioner::generate_registration_key();
+        let peer_public = WarpProvisioner::generate_registration_key();
+        let (masque_private, masque_public) =
+            WarpProvisioner::generate_masque_keypair().expect("generate MASQUE keypair");
         WarpConfig {
             account: WarpAccountData {
                 account_id: "test".to_string(),
@@ -347,7 +359,10 @@ mod tests {
             warp_enabled: true,
             account_type: "test".to_string(),
             last_updated: 0,
-            masque: None,
+            masque: Some(MasqueCredentials {
+                ec_private_key_der: BASE64.encode(&masque_private),
+                endpoint_pub_key_spki: BASE64.encode(&masque_public),
+            }),
         }
     }
 

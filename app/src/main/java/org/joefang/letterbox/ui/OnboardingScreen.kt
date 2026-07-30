@@ -65,7 +65,7 @@ fun OnboardingScreen(
             Text(
                 text = "Some messages contain remote images, and Letterbox can check GitHub " +
                     "for app updates. To keep your real IP address private, all of this " +
-                    "traffic is routed through a Cloudflare WARP tunnel (WireGuard) using a " +
+                    "traffic is routed through a Cloudflare WARP tunnel (MASQUE) using a " +
                     "per-device identity created automatically on first use.",
                 style = MaterialTheme.typography.bodyMedium
             )

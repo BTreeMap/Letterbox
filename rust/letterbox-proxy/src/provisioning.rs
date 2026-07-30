@@ -21,7 +21,6 @@ use rand::Rng;
 use rustls::{ClientConfig, RootCertStore};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use x25519_dalek::{PublicKey, StaticSecret};
 
 /// Cloudflare WARP API version.
 const API_VERSION: &str = "v0a884";
@@ -188,39 +187,21 @@ impl WarpProvisioner {
         Ok(Self { client })
     }
 
-    /// Generate a new WireGuard keypair.
+    /// Mint the throwaway key that `POST /reg` requires.
     ///
-    /// Returns (private_key_base64, public_key_base64).
-    pub fn generate_keypair() -> (String, String) {
+    /// Cloudflare's registration endpoint is WireGuard-shaped: it will not mint
+    /// a device without a `key` field holding 32 bytes. Nothing ever uses that
+    /// key — the MASQUE session authenticates with the P-256 key enrolled
+    /// afterwards by [`Self::enroll_masque_key`] — so this is 32 random bytes,
+    /// not a keypair. No curve arithmetic is involved, which is what let the
+    /// `x25519-dalek` and `curve25519-dalek` dependencies go with WireGuard.
+    ///
+    /// The reference implementation does the same thing, for the same reason.
+    pub fn generate_registration_key() -> String {
         let mut rng = rand::rng();
-        let mut private_key_bytes = [0u8; 32];
-        rng.fill_bytes(&mut private_key_bytes);
-
-        let secret = StaticSecret::from(private_key_bytes);
-        let public = PublicKey::from(&secret);
-
-        let private_b64 = BASE64.encode(secret.as_bytes());
-        let public_b64 = BASE64.encode(public.as_bytes());
-
-        (private_b64, public_b64)
-    }
-
-    /// Derive the base64 WireGuard public key from a base64 private key.
-    ///
-    /// Used for diagnostics, where only the private key is persisted.
-    pub fn public_key_from_private(private_b64: &str) -> Result<String, ProxyError> {
-        let bytes: [u8; 32] = BASE64
-            .decode(private_b64)
-            .map_err(|e| ProxyError::CryptoError {
-                details: format!("Invalid private key: {e}"),
-            })?
-            .try_into()
-            .map_err(|_| ProxyError::CryptoError {
-                details: "Private key must be 32 bytes".to_string(),
-            })?;
-        let secret = StaticSecret::from(bytes);
-        let public = PublicKey::from(&secret);
-        Ok(BASE64.encode(public.as_bytes()))
+        let mut key = [0u8; 32];
+        rng.fill_bytes(&mut key);
+        BASE64.encode(key)
     }
 
     /// Get the current timestamp in the format expected by Cloudflare.
@@ -557,12 +538,12 @@ impl WarpProvisioner {
     /// 3. Fetch the tunnel configuration
     /// 4. Enable WARP if needed
     pub async fn provision_new_account(&self) -> Result<WarpConfig, ProxyError> {
-        // Step 1: Generate keypair
-        let (private_key, public_key) = Self::generate_keypair();
+        // Step 1: Mint the throwaway key registration insists on
+        let registration_key = Self::generate_registration_key();
 
         // Step 2: Register
-        let mut account = self.register(&public_key).await?;
-        account.private_key = private_key;
+        let mut account = self.register(&registration_key).await?;
+        account.private_key = registration_key;
 
         // Step 3: Fetch configuration
         let mut config = self.fetch_config(&account).await?;
@@ -624,20 +605,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_generate_keypair() {
-        let (private, public) = WarpProvisioner::generate_keypair();
+    fn registration_key_is_32_random_base64_bytes() {
+        let key = WarpProvisioner::generate_registration_key();
 
-        // Keys should be base64 encoded
-        assert!(BASE64.decode(&private).is_ok());
-        assert!(BASE64.decode(&public).is_ok());
+        assert!(BASE64.decode(&key).is_ok(), "must be base64");
+        assert_eq!(
+            BASE64.decode(&key).unwrap().len(),
+            32,
+            "registration rejects anything but 32 bytes"
+        );
+        assert_ne!(
+            key,
+            WarpProvisioner::generate_registration_key(),
+            "each device must register a distinct key"
+        );
+    }
 
-        // Keys should be 32 bytes
-        assert_eq!(BASE64.decode(&private).unwrap().len(), 32);
-        assert_eq!(BASE64.decode(&public).unwrap().len(), 32);
+    #[test]
+    fn masque_keypair_is_der_and_distinct_per_call() {
+        let (private_der, public_der) =
+            WarpProvisioner::generate_masque_keypair().expect("generate");
 
-        // Different calls should produce different keys
-        let (private2, _) = WarpProvisioner::generate_keypair();
-        assert_ne!(private, private2);
+        // PKCS#8 and SPKI both start with a SEQUENCE tag; more importantly they
+        // must not be the same blob, which is the mistake TunnelIdentity's two
+        // separately named fields exist to prevent.
+        assert_eq!(private_der[0], 0x30, "PKCS#8 DER should be a SEQUENCE");
+        assert_eq!(public_der[0], 0x30, "SPKI DER should be a SEQUENCE");
+        assert_ne!(private_der, public_der);
+
+        let (second, _) = WarpProvisioner::generate_masque_keypair().expect("generate");
+        assert_ne!(private_der, second, "keys must not repeat");
     }
 
     #[test]

@@ -21,7 +21,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
  * Proxy mode for fetching remote images.
  */
 enum class ProxyMode {
-    /** Use Cloudflare WARP via WireGuard tunnel (recommended) */
+    /** Use Cloudflare WARP via the MASQUE tunnel (recommended) */
     WARP,
     /** Load images directly without proxy (exposes IP address) */
     DIRECT

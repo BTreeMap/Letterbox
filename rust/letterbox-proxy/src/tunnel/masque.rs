@@ -1,10 +1,11 @@
 //! MASQUE transport: CONNECT-IP over HTTP/3, via [`usque_core`].
 //!
-//! # Why this exists beside the WireGuard transport
+//! # Why MASQUE
 //!
-//! WireGuard is trivially fingerprinted and widely blocked. MASQUE carries the
-//! same IP packets inside QUIC datagrams on UDP/443, which is indistinguishable
-//! from ordinary HTTP/3 to anything short of deep behavioural analysis.
+//! It replaced a userspace WireGuard transport, which was trivially
+//! fingerprinted and widely blocked. MASQUE carries the same IP packets inside
+//! QUIC datagrams on UDP/443, indistinguishable from ordinary HTTP/3 to
+//! anything short of deep behavioural analysis.
 //!
 //! # Shape
 //!
@@ -15,15 +16,12 @@
 //! the two with [`PacketDuplex`], whose framing contract is what makes the
 //! hand-off safe.
 //!
-//! The result presents the same seven operations as [`WireGuardTransport`], so
-//! everything above it — the `smoltcp` interface, TLS, HTTP/1.1, DNS — is
-//! unchanged and unaware of which tunnel is carrying it.
-//!
-//! [`WireGuardTransport`]: crate::tunnel::transport::WireGuardTransport
+//! Everything above it — the `smoltcp` interface, TLS, HTTP/1.1, DNS — works in
+//! raw IP packets and is unaware of how they are carried.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -34,7 +32,7 @@ use usque_core::{AtomicBool, TunnelIdentity};
 use crate::config::WarpConfig;
 use crate::error::ProxyError;
 use crate::tunnel::duplex::{PacketDuplex, PACKET_QUEUE_DEPTH};
-use crate::tunnel::transport::TunnelStats;
+use crate::tunnel::stats::TunnelStats;
 
 /// Cloudflare's consumer MASQUE anycast endpoint (IPv4).
 ///
@@ -92,20 +90,38 @@ pub struct MasqueTransport {
     /// When the tunnel was first seen connected. `OnceLock` because it is
     /// written once, lazily, from `&self` in [`MasqueTransport::stats`].
     connected_at: OnceLock<Instant>,
+    /// Everything the session needs, held until [`initiate_handshake`] consumes
+    /// it. `Some` means "not yet started"; taking it is what makes starting
+    /// idempotent without a separate flag that could disagree with reality.
+    ///
+    /// [`initiate_handshake`]: MasqueTransport::initiate_handshake
+    pending: Option<PendingSession>,
     session: Option<JoinHandle<()>>,
 }
 
+/// The half of a transport that only exists before the session starts.
+struct PendingSession {
+    identity: TunnelIdentity,
+    outbound: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    inbound: SyncSender<Vec<u8>>,
+}
+
 impl MasqueTransport {
-    /// Start a MASQUE session for the provisioned account.
+    /// Name reported by diagnostics and asserted by the on-device test.
+    pub const PROTOCOL: &'static str = "masque";
+
+    /// Build a transport for the provisioned account, **without connecting**.
     ///
-    /// Returns as soon as the session thread is running; the tunnel is not yet
-    /// usable. Poll [`is_connected`](Self::is_connected) — the session sets it
-    /// only after the CONNECT-IP flow is open.
+    /// Construction is pure: it validates and decodes credentials and nothing
+    /// else. The session thread starts at
+    /// [`initiate_handshake`](Self::initiate_handshake), so constructing a
+    /// transport never touches the network — which is what lets the stack be
+    /// unit-tested offline, and keeps "I have a transport" from meaning "I am
+    /// dialling Cloudflare".
     ///
     /// # Errors
     ///
-    /// Fails if the account carries no MASQUE credentials, if the endpoint
-    /// address is unparseable, or if the session thread cannot be spawned.
+    /// Fails if the account carries no MASQUE credentials or they do not decode.
     pub fn new(config: &WarpConfig) -> Result<Self, ProxyError> {
         let credentials = config
             .masque
@@ -131,43 +147,20 @@ impl MasqueTransport {
         let (out_tx, out_rx) = tokio::sync::mpsc::channel(PACKET_QUEUE_DEPTH);
         let (in_tx, in_rx) = sync_channel(PACKET_QUEUE_DEPTH);
 
-        let stats = Stats::new();
-        let established = Arc::new(AtomicBool::new(false));
-        let finished = Arc::new(StdAtomicBool::new(false));
-
-        let session = std::thread::Builder::new()
-            .name("masque-session".to_string())
-            .spawn({
-                let stats = Arc::clone(&stats);
-                let established = Arc::clone(&established);
-                let finished = Arc::clone(&finished);
-                move || {
-                    run_session(
-                        &identity,
-                        endpoint,
-                        PacketDuplex::new(out_rx, in_tx),
-                        stats,
-                        established,
-                    );
-                    // Whatever happened, the tunnel is down. Recording it here
-                    // rather than inferring from silence keeps `is_connected`
-                    // honest for a session that dies after establishing.
-                    finished.store(true, StdOrdering::Release);
-                }
-            })
-            .map_err(|e| ProxyError::TunnelError {
-                details: format!("Failed to spawn MASQUE session thread: {e}"),
-            })?;
-
         Ok(Self {
             endpoint,
             outbound: out_tx,
             inbound: in_rx,
-            stats,
-            established,
-            finished,
+            stats: Stats::new(),
+            established: Arc::new(AtomicBool::new(false)),
+            finished: Arc::new(StdAtomicBool::new(false)),
             connected_at: OnceLock::new(),
-            session: Some(session),
+            pending: Some(PendingSession {
+                identity,
+                outbound: out_rx,
+                inbound: in_tx,
+            }),
+            session: None,
         })
     }
 
@@ -186,11 +179,10 @@ impl MasqueTransport {
 
     /// Live counters, mapped onto the shared [`TunnelStats`] shape.
     ///
-    /// `since_handshake` is `None` until the flow opens, matching how the
-    /// WireGuard transport reports a tunnel that has not completed its
-    /// handshake. RTT and loss are not surfaced: quiche measures them per-path
-    /// in units that do not correspond to WireGuard's, and reporting a
-    /// plausible-looking wrong number is worse than reporting none.
+    /// `since_handshake` is `None` until the flow opens — "not connected" and
+    /// "connected just now" are different facts. RTT and loss are not surfaced:
+    /// quiche measures them per-path, and reporting a plausible-looking wrong
+    /// number is worse than reporting none.
     #[must_use]
     pub fn stats(&self) -> TunnelStats {
         let snapshot = self.stats.snapshot();
@@ -209,12 +201,46 @@ impl MasqueTransport {
         }
     }
 
-    /// No-op: MASQUE has no separate handshake step to trigger.
+    /// Start the session thread, which begins connecting immediately.
     ///
-    /// The session thread began connecting in [`new`](Self::new); QUIC and the
-    /// CONNECT exchange are internal to it. Kept so both transports present the
-    /// same interface, and so `connect` above can stay one code path.
+    /// Idempotent: the second call finds nothing pending and returns. Returning
+    /// does not mean connected — QUIC and the CONNECT exchange happen on that
+    /// thread. Poll [`is_connected`](Self::is_connected), which the session sets
+    /// only once the CONNECT-IP flow is open.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the session thread cannot be spawned.
     pub fn initiate_handshake(&mut self) -> Result<(), ProxyError> {
+        let Some(pending) = self.pending.take() else {
+            return Ok(());
+        };
+
+        let endpoint = self.endpoint;
+        let stats = Arc::clone(&self.stats);
+        let established = Arc::clone(&self.established);
+        let finished = Arc::clone(&self.finished);
+
+        self.session = Some(
+            std::thread::Builder::new()
+                .name("masque-session".to_string())
+                .spawn(move || {
+                    run_session(
+                        &pending.identity,
+                        endpoint,
+                        PacketDuplex::new(pending.outbound, pending.inbound),
+                        stats,
+                        established,
+                    );
+                    // Whatever happened, the tunnel is down. Recording it here
+                    // rather than inferring from silence keeps `is_connected`
+                    // honest for a session that dies after establishing.
+                    finished.store(true, StdOrdering::Release);
+                })
+                .map_err(|e| ProxyError::TunnelError {
+                    details: format!("Failed to spawn MASQUE session thread: {e}"),
+                })?,
+        );
         Ok(())
     }
 
@@ -260,8 +286,7 @@ impl MasqueTransport {
 
     /// No-op: QUIC timers live inside the session loop.
     ///
-    /// WireGuard needs an external tick because its timer state is driven by the
-    /// caller. quiche's is driven by `conn.timeout()` in the session's own
+    /// quiche's timers are driven by `conn.timeout()` in the session's own
     /// `select!`, so there is nothing for the poll loop to advance.
     pub fn tick(&mut self) -> Result<(), ProxyError> {
         Ok(())
@@ -277,7 +302,8 @@ impl Drop for MasqueTransport {
     /// believes it has shut down.
     fn drop(&mut self) {
         // Replacing the sender with a closed one is what signals EOF; the
-        // session is blocked on that channel, so this is what wakes it.
+        // session is blocked on that channel, so this is what wakes it. A
+        // transport that never started has no thread and nothing to wake.
         let (closed, _) = tokio::sync::mpsc::channel(1);
         self.outbound = closed;
 

@@ -67,7 +67,7 @@ private sealed interface LiveState {
 }
 
 /**
- * Developer dialog for inspecting and repairing the WireGuard/WARP tunnel.
+ * Developer dialog for inspecting and repairing the WARP tunnel.
  *
  * It surfaces two layers independently:
  *  - the persisted identity and configuration (always available), and
@@ -196,7 +196,7 @@ private fun ResetConfirmationDialog(onConfirm: () -> Unit, onDismiss: () -> Unit
         title = { Text("Reset WARP identity?") },
         text = {
             Text(
-                "This generates a brand-new WireGuard keypair and re-registers " +
+                "This generates a brand-new device identity and re-registers " +
                         "with Cloudflare, replacing the stored identity. The current " +
                         "device registration is deleted and the tunnel reconnects. " +
                         "Use this if the connection is stuck."
@@ -311,13 +311,12 @@ private fun LiveTunnelBody(d: WarpDiagnostics) {
         valueColor = if (connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
     )
     // "Connected" alone cannot distinguish MASQUE from a silent fallback to
-    // WireGuard, which is the first thing to establish in any report about
+    // a different transport, which is the first thing to establish in any report about
     // images not loading behind a restrictive firewall.
     DiagnosticRow(
         "Transport",
         when (d.protocol) {
             "masque" -> "MASQUE (HTTP/3, UDP 443)"
-            "wireguard" -> "WireGuard (UDP 500)"
             else -> d.protocol.ifBlank { "unknown" }
         }
     )

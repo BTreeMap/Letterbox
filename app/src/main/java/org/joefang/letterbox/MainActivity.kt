@@ -1205,7 +1205,7 @@ private fun SettingsContent(
                     style = MaterialTheme.typography.titleSmall
                 )
                 Text(
-                    text = "Inspect the WireGuard tunnel and connection state",
+                    text = "Inspect the WARP tunnel and connection state",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

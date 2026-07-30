@@ -137,9 +137,9 @@ jobs:
         run: ./gradlew test --no-daemon
 
   warp-smoke-test:
-    name: Real WARP smoke test
+    name: Real MASQUE smoke test
     runs-on: ubuntu-24.04
-    # The full privacy path (provision a real WARP device -> WireGuard handshake
+    # The full privacy path (provision a real WARP device -> MASQUE CONNECT-IP
     # -> DoH -> TLS -> HTTP image fetch -> delete device) is exercised against
     # live Cloudflare here. It is inherently flaky (network, rate limits, anycast
     # routing), so a failure is surfaced as a warning and never gates the build.
@@ -160,14 +160,9 @@ jobs:
           shared-key: warp
           save-if: ${{ env.RUST_CACHE_SAVE == 'true' }}
 
-      - name: Run real Cloudflare WARP end-to-end test
-        id: warp
-        # Non-blocking: the step may fail without failing the job. The outcome is
-        # inspected below and turned into a warning annotation when it does not pass.
-        continue-on-error: true
-        working-directory: rust/letterbox-proxy
-        run: cargo test --test warp_real -- --ignored --nocapture
-
+      # Non-blocking: the step may fail without failing the job; the outcome is
+      # turned into a warning below.
+      #
       # The MASQUE path has one dependency nothing local can check: that
       # Cloudflare keeps accepting `api.cloudflare.com` as the tunnel SNI. That
       # is a server-side policy we do not control and could lose without notice,
@@ -178,22 +173,13 @@ jobs:
         working-directory: rust/letterbox-proxy
         run: cargo test --test masque_real -- --ignored --nocapture --test-threads=1
 
-      - name: Report WARP test outcome
-        if: always()
-        run: |
-          if [[ "${{ steps.warp.outcome }}" == "success" ]]; then
-            echo "Real Cloudflare WARP end-to-end test passed."
-          else
-            echo "::warning title=Real WARP test failed::The live Cloudflare WARP end-to-end test did not pass (outcome: ${{ steps.warp.outcome }}). This is non-blocking and is most often transient network/anycast/rate-limit flakiness, but should be investigated if it persists."
-          fi
-
       - name: Report MASQUE test outcome
         if: always()
         run: |
           if [[ "${{ steps.masque.outcome }}" == "success" ]]; then
             echo "Real Cloudflare MASQUE end-to-end test passed (SNI api.cloudflare.com accepted)."
           else
-            echo "::warning title=Real MASQUE test failed::The live Cloudflare MASQUE end-to-end test did not pass (outcome: ${{ steps.masque.outcome }}). Non-blocking. If it fails repeatedly while the WARP test passes, suspect the substituted SNI (tunnel::masque::MASQUE_SNI) being rejected rather than a broken tunnel."
+            echo "::warning title=Real MASQUE test failed::The live Cloudflare MASQUE end-to-end test did not pass (outcome: ${{ steps.masque.outcome }}). Non-blocking. If it fails repeatedly, check whether the substituted SNI (tunnel::masque::MASQUE_SNI) is still accepted before suspecting the tunnel; masque_real has a separate case that isolates exactly that."
           fi
 
   build:
