@@ -100,6 +100,11 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Loading) }
     var revealSecrets by remember { mutableStateOf(false) }
     var verifyState by remember { mutableStateOf<VerifyState>(VerifyState.Idle) }
+    // The proxy records why the last fetch failed, and until now nothing read
+    // it. A remote image that fails renders as blank space — the `<img>` gets a
+    // 502 whose body is text, which a browser draws as nothing at all — so the
+    // reason existed but had nowhere to appear.
+    var lastFetchError by remember { mutableStateOf<String?>(null) }
     var resetting by remember { mutableStateOf(false) }
     var resetError by remember { mutableStateOf<String?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
@@ -124,6 +129,9 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
         } catch (e: Exception) {
             LiveState.Failed(e.message ?: "Failed to establish the tunnel")
         }
+
+        // Read last, so it reflects everything above it.
+        lastFetchError = service.getStatus()?.lastError
     }
 
     if (confirmReset) {
@@ -203,6 +211,8 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
                         }
                     }
                 )
+
+                LastFetchErrorSection(lastFetchError)
             }
         },
         confirmButton = {
@@ -235,6 +245,29 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
                 ) { Text("Refresh") }
             }
         }
+    )
+}
+
+/**
+ * The reason the last image fetch failed, if one did.
+ *
+ * A remote image that the proxy refuses is drawn as nothing: the interceptor
+ * answers the `<img>` with a 502 whose body is plain text, and a browser renders
+ * that as empty space. The tunnel meanwhile reports itself connected, because it
+ * is — so the two surfaces that exist both said everything was fine while every
+ * image failed. This is the surface that can say otherwise.
+ *
+ * Absent means absent, not "fine": the proxy only records a message when a fetch
+ * fails, and the record is in memory, so a restart clears it.
+ */
+@Composable
+private fun LastFetchErrorSection(message: String?) {
+    if (message == null) return
+    SectionLabel("Last fetch error")
+    DiagnosticRow(
+        "Reason",
+        message,
+        valueColor = MaterialTheme.colorScheme.error
     )
 }
 
