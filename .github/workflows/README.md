@@ -355,10 +355,29 @@ configuration cache would freeze and replay with a stale answer.
 ## Runners and the native-library constraint
 
 All jobs run on `ubuntu-24.04` (amd64). The Android cross-compile is **pinned to
-amd64 on purpose**: the pinned NDK (r26, `26.1.10909125`) ships only a
-`linux-x86_64` host toolchain — there is no `linux-aarch64` host — so an arm64
-runner cannot execute the NDK clang. arm64 runners would help only host
-`linux-gnu` work, which this project does not ship.
+amd64 on purpose**: the NDK ships no `linux-aarch64` host toolchain. Google's
+SDK index has never advertised a `('linux', 'aarch64')` archive for any NDK from
+r16 to r30 — the only aarch64 *host* it offers is macOS — and the prebuilt path
+inside the Linux tarball is `toolchains/llvm/prebuilt/linux-x86_64` with no
+sibling. An arm64 runner would have to run that clang under emulation.
+
+It would not be faster even if it existed. The work is compiling Rust and
+BoringSSL *for Android targets*; the host architecture decides which binary does
+the compiling, not how much compiling there is, and GitHub's public arm64
+runners have the same core count as the x86_64 ones.
+
+The NDK is pinned to `27.3.13750724`, which is the version the `ubuntu-24.04`
+image already carries, so `sdkmanager --install` is a no-op instead of a ~1 GB
+download on every run. It stays an explicit version rather than "whatever the
+image has": if the image moves, this fetches r27.3 and the build stays
+reproducible, only slower for that one run.
+
+Both `ANDROID_NDK_HOME` and `ANDROID_NDK_ROOT` are exported to it. cargo-ndk
+reads the first and cmake's Android toolchain file reads the second, so setting
+only one leaves the two halves of this build free to resolve different NDKs —
+and the half reading `ANDROID_NDK_ROOT` is the one that compiles quiche's
+vendored BoringSSL. Under r26 the image's own `ANDROID_NDK_ROOT` pointed at
+r27.3 while we pinned r26, and cargo-ndk warned about exactly that.
 
 `cargo ndk … build --release --workspace --lib` — `--lib` is load-bearing.
 Without it the pass also cross-compiled the two `uniffi-bindgen` *binaries* for
