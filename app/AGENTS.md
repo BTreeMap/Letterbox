@@ -18,8 +18,9 @@ Room. Root rules apply; this file adds module-local ones.
   and regenerate.
 * Persist blobs through `HistoryRepository`, never with direct file writes
   (`docs/deduplication.md`).
-* Run search/filter/sort through the Room FTS4 layer
-  (`docs/full-text-search.md`), not ad hoc queries.
+* Search/filter/sort has one definition: `HistoryQuery`, a pure function tested
+  in `HistoryQueryTest`. Extend it rather than adding queries elsewhere; the
+  `email_fts` FTS4 table is intentionally unused (`docs/full-text-search.md`).
 * For host-side FFI tests, override the native library path with
   `LETTERBOX_CORE_LIB_PATH` (or the `uniffi.component.letterbox_core.libraryOverride`
   system property) when the default `target/release/` artifact is missing.

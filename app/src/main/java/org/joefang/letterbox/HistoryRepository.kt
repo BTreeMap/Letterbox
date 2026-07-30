@@ -1,25 +1,17 @@
 package org.joefang.letterbox
 
-import androidx.sqlite.db.SimpleSQLiteQuery
 import org.joefang.letterbox.data.BlobDao
 import org.joefang.letterbox.data.BlobEntity
-import org.joefang.letterbox.data.EmailFilter
 import org.joefang.letterbox.data.HistoryItemDao
 import org.joefang.letterbox.data.HistoryItemEntity
-import org.joefang.letterbox.data.SortDirection
-import org.joefang.letterbox.data.SortField
 import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -27,26 +19,19 @@ import kotlinx.coroutines.withContext
 // domain values stay free of Room and coroutine dependencies.
 
 /**
- * Repository for managing email file history with Content-Addressable Storage (CAS).
- * 
- * ## Features
- * 
- * - **Deduplication**: Same file content is stored only once
- * - **Indefinite caching**: Emails are cached until user explicitly clears them
- * - **Persistence**: Uses Room database for metadata and file system for blobs
- * - **Full-text search**: FTS4 index for fast text search across email content
- * - **Sorting**: By date, subject, or sender
- * - **Filtering**: By date range, sender, attachments
- * 
- * ## Search Implementation
- * 
- * Uses SQLite FTS4 (Full-Text Search) for efficient text matching across:
- * - Subject
- * - Sender email and name
- * - Recipient emails and names
- * - Body preview (first 500 characters)
- * 
- * FTS4 was chosen over FTS5 for better Room compatibility on Android API 26+.
+ * Repository for email file history backed by Content-Addressable Storage (CAS).
+ *
+ * - **Deduplication**: identical content is stored once, keyed by SHA-256
+ * - **Indefinite caching**: entries persist until the user clears them
+ * - **Persistence**: Room for metadata, the file system for blobs
+ *
+ * ## Querying
+ *
+ * This repository exposes the whole history as [items] and does not query,
+ * filter or sort. Search, filtering and ordering are one pure function,
+ * [HistoryQuery], applied to that list. Keeping the decision out of the
+ * repository means it has a single definition and can be tested without a
+ * database; see `docs/full-text-search.md`.
  */
 class HistoryRepository(
     private val baseDir: File,
@@ -55,15 +40,9 @@ class HistoryRepository(
 ) {
     private val casDir: File = File(baseDir, "cas").also { it.mkdirs() }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    
+
     private val _items = MutableStateFlow<List<HistoryEntry>>(emptyList())
     val items: StateFlow<List<HistoryEntry>> = _items.asStateFlow()
-    
-    // Search, sort, and filter state
-    private val _searchQuery = MutableStateFlow("")
-    private val _sortField = MutableStateFlow(SortField.DATE)
-    private val _sortDirection = MutableStateFlow(SortDirection.DESCENDING)
-    private val _filter = MutableStateFlow(EmailFilter())
 
     init {
         // Load initial items from database
@@ -170,13 +149,6 @@ class HistoryRepository(
     }
 
     /**
-     * Get blob metadata by hash.
-     */
-    suspend fun blobMeta(hash: String): BlobEntity? {
-        return blobDao.getByHash(hash)
-    }
-    
-    /**
      * Delete a single history entry by ID.
      */
     suspend fun delete(entryId: Long) {
@@ -262,178 +234,16 @@ class HistoryRepository(
         bodyPreview = bodyPreview
     )
     
-    // =========================================================================
-    // Search, Filter, and Sort Methods
-    // =========================================================================
-    
-    /**
-     * Search emails using full-text search.
-     * 
-     * The query is matched against subject, sender, recipients, and body preview.
-     * Uses SQLite FTS4 for efficient text matching.
-     * 
-     * @param query Search query string. Supports FTS4 match syntax.
-     * @return Flow of matching history entries
-     */
-    fun search(query: String): Flow<List<HistoryEntry>> {
-        if (query.isBlank()) {
-            return items
-        }
-        // Escape special FTS characters and use prefix matching
-        val sanitizedQuery = sanitizeFtsQuery(query)
-        return historyItemDao.searchEmailsFlow(sanitizedQuery).map { entities ->
-            entities.map { it.toHistoryEntry() }
-        }
-    }
-    
-    /**
-     * Get items sorted by the specified field and direction.
-     */
-    fun getSorted(field: SortField, direction: SortDirection): Flow<List<HistoryEntry>> {
-        return when (field) {
-            SortField.DATE -> when (direction) {
-                SortDirection.DESCENDING -> historyItemDao.getAllByDateDesc()
-                SortDirection.ASCENDING -> historyItemDao.getAllByDateAsc()
-            }
-            SortField.SUBJECT -> when (direction) {
-                SortDirection.DESCENDING -> historyItemDao.getAllBySubjectDesc()
-                SortDirection.ASCENDING -> historyItemDao.getAllBySubjectAsc()
-            }
-            SortField.SENDER -> when (direction) {
-                SortDirection.DESCENDING -> historyItemDao.getAllBySenderDesc()
-                SortDirection.ASCENDING -> historyItemDao.getAllBySenderAsc()
-            }
-        }.map { entities -> entities.map { it.toHistoryEntry() } }
-    }
-    
-    /**
-     * Get items filtered by attachment presence.
-     */
-    fun getWithAttachments(): Flow<List<HistoryEntry>> {
-        return historyItemDao.getWithAttachments().map { entities ->
-            entities.map { it.toHistoryEntry() }
-        }
-    }
-    
-    /**
-     * Get items filtered by date range.
-     * 
-     * @param fromDate Start of range (epoch millis, inclusive)
-     * @param toDate End of range (epoch millis, inclusive)
-     */
-    fun getByDateRange(fromDate: Long, toDate: Long): Flow<List<HistoryEntry>> {
-        return historyItemDao.getByDateRange(fromDate, toDate).map { entities ->
-            entities.map { it.toHistoryEntry() }
-        }
-    }
-    
-    /**
-     * Get items filtered by sender (partial match).
-     */
-    fun getBySender(senderQuery: String): Flow<List<HistoryEntry>> {
-        return historyItemDao.getBySender(senderQuery).map { entities ->
-            entities.map { it.toHistoryEntry() }
-        }
-    }
-    
-    /**
-     * Search with combined filters and sorting.
-     * 
-     * Builds a dynamic SQL query to handle complex filter combinations efficiently.
-     * 
-     * @param searchQuery Text search query (empty for no text filter)
-     * @param filter Filter criteria to apply
-     * @param sortField Field to sort by
-     * @param sortDirection Sort direction
-     * @return Flow of matching and sorted history entries
-     */
-    fun searchWithFilters(
-        searchQuery: String,
-        filter: EmailFilter,
-        sortField: SortField,
-        sortDirection: SortDirection
-    ): Flow<List<HistoryEntry>> {
-        val queryBuilder = StringBuilder()
-        val args = mutableListOf<Any>()
-        
-        // Start with base query
-        if (searchQuery.isNotBlank()) {
-            // Use FTS join for text search
-            queryBuilder.append("""
-                SELECT history_items.* FROM history_items
-                JOIN email_fts ON history_items.rowid = email_fts.rowid
-                WHERE email_fts MATCH ?
-            """.trimIndent())
-            args.add(sanitizeFtsQuery(searchQuery))
-        } else {
-            queryBuilder.append("SELECT * FROM history_items WHERE 1=1")
-        }
-        
-        // Apply filters
-        filter.hasAttachments?.let { hasAttach ->
-            queryBuilder.append(" AND has_attachments = ?")
-            args.add(if (hasAttach) 1 else 0)
-        }
-        
-        filter.dateFrom?.let { from ->
-            queryBuilder.append(" AND CASE WHEN email_date > 0 THEN email_date ELSE last_accessed END >= ?")
-            args.add(from)
-        }
-        
-        filter.dateTo?.let { to ->
-            queryBuilder.append(" AND CASE WHEN email_date > 0 THEN email_date ELSE last_accessed END <= ?")
-            args.add(to)
-        }
-        
-        filter.senderContains?.let { sender ->
-            queryBuilder.append(" AND (sender_email LIKE ? OR sender_name LIKE ?)")
-            val pattern = "%$sender%"
-            args.add(pattern)
-            args.add(pattern)
-        }
-        
-        // Apply sorting
-        val orderClause = when (sortField) {
-            SortField.DATE -> "CASE WHEN email_date > 0 THEN email_date ELSE last_accessed END"
-            SortField.SUBJECT -> "subject COLLATE NOCASE"
-            SortField.SENDER -> "CASE WHEN sender_name != '' THEN sender_name ELSE sender_email END COLLATE NOCASE"
-        }
-        val directionSql = if (sortDirection == SortDirection.DESCENDING) "DESC" else "ASC"
-        queryBuilder.append(" ORDER BY $orderClause $directionSql")
-        
-        val query = SimpleSQLiteQuery(queryBuilder.toString(), args.toTypedArray())
-        return historyItemDao.searchWithFilters(query).map { entities ->
-            entities.map { it.toHistoryEntry() }
-        }
-    }
-    
-    /**
-     * Sanitize a search query for FTS4.
-     * Escapes special characters and adds prefix matching.
-     */
-    private fun sanitizeFtsQuery(query: String): String {
-        // FTS4 special characters: " * ( ) - OR AND NOT
-        // For simple searches, we escape quotes and use prefix matching
-        return query
-            .replace("\"", "\"\"")
-            .split("\\s+".toRegex())
-            .filter { it.isNotBlank() }
-            .joinToString(" ") { "$it*" }
-    }
 }
 
 /**
- * In-memory implementation of HistoryRepository for testing and simple usage.
- * Does not require Room database.
- * 
- * Emails are cached indefinitely until user explicitly clears them.
- * 
- * ## Search Support
- * 
- * This implementation provides simple in-memory search filtering:
- * - Text search across subject, sender, and body preview
- * - Sorting by date, subject, or sender
- * - Filtering by attachments, date range, and sender
+ * In-memory stand-in for [HistoryRepository], for tests that need ingestion,
+ * deduplication and blob lifecycle without a Room database.
+ *
+ * Deliberately does **not** reimplement search, filtering or sorting: those
+ * belong to [HistoryQuery], which is pure and tested directly. An earlier copy
+ * here searched a different set of fields than the code the app actually ran,
+ * so the suite could pass while real search misbehaved.
  */
 class InMemoryHistoryRepository(
     private val baseDir: File
@@ -448,11 +258,6 @@ class InMemoryHistoryRepository(
         val sizeBytes: Long,
         val refCount: Int
     )
-    
-    /**
-     * Internal storage for body previews (for search).
-     */
-    private val bodyPreviews = mutableMapOf<Long, String>()
 
     /**
      * Ingest an email file into the repository.
@@ -513,9 +318,6 @@ class InMemoryHistoryRepository(
             bodyPreview = bodyPreviewText
         )
         
-        // Store body preview for backward compatibility (deprecated - use entry.bodyPreview)
-        bodyPreviews[id] = bodyPreviewText
-        
         _items.value = (_items.value + newEntry).sortedByDescending { it.lastAccessed }
         return newEntry
     }
@@ -541,7 +343,6 @@ class InMemoryHistoryRepository(
         val entry = _items.value.find { it.id == entryId } ?: return
         val remaining = _items.value.filter { it.id != entryId }
         _items.value = remaining
-        bodyPreviews.remove(entryId)
         
         // Check if blob is still referenced
         val remainingRefs = remaining.count { it.blobHash == entry.blobHash }
@@ -561,7 +362,6 @@ class InMemoryHistoryRepository(
     @Synchronized
     fun clearAll() {
         _items.value = emptyList()
-        bodyPreviews.clear()
         // Delete all blob files
         blobs.keys.toList().forEach { hash ->
             File(casDir, hash).delete()
@@ -577,68 +377,6 @@ class InMemoryHistoryRepository(
         val entryCount = _items.value.size
         val totalSize = blobs.values.sumOf { it.sizeBytes }
         return CacheStats(entryCount, totalSize)
-    }
-    
-    // =========================================================================
-    // Search, Filter, and Sort Methods
-    // =========================================================================
-    
-    /**
-     * Search emails by text query.
-     * Searches across subject, sender name/email, and body preview.
-     */
-    fun search(query: String): List<HistoryEntry> {
-        if (query.isBlank()) {
-            return _items.value
-        }
-        val lowerQuery = query.lowercase()
-        return _items.value.filter { entry ->
-            entry.subject.lowercase().contains(lowerQuery) ||
-            entry.senderName.lowercase().contains(lowerQuery) ||
-            entry.senderEmail.lowercase().contains(lowerQuery) ||
-            entry.bodyPreview.lowercase().contains(lowerQuery)
-        }
-    }
-    
-    /**
-     * Get sorted items.
-     */
-    fun getSorted(field: SortField, direction: SortDirection): List<HistoryEntry> {
-        val comparator: Comparator<HistoryEntry> = when (field) {
-            SortField.DATE -> compareBy { it.effectiveDate }
-            SortField.SUBJECT -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.subject }
-            SortField.SENDER -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.displaySender }
-        }
-        val sorted = _items.value.sortedWith(comparator)
-        return if (direction == SortDirection.DESCENDING) sorted.reversed() else sorted
-    }
-    
-    /**
-     * Get items with attachments.
-     */
-    fun getWithAttachments(): List<HistoryEntry> {
-        return _items.value.filter { it.hasAttachments }
-    }
-    
-    /**
-     * Get items within date range.
-     */
-    fun getByDateRange(fromDate: Long, toDate: Long): List<HistoryEntry> {
-        return _items.value.filter { entry ->
-            val date = entry.effectiveDate
-            date in fromDate..toDate
-        }
-    }
-    
-    /**
-     * Get items by sender (partial match).
-     */
-    fun getBySender(senderQuery: String): List<HistoryEntry> {
-        val lowerQuery = senderQuery.lowercase()
-        return _items.value.filter { entry ->
-            entry.senderEmail.lowercase().contains(lowerQuery) ||
-            entry.senderName.lowercase().contains(lowerQuery)
-        }
     }
 
     private fun nextId(): Long = (_items.value.maxOfOrNull { it.id } ?: 0L) + 1L

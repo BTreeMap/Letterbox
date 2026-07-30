@@ -58,8 +58,10 @@ here.
   fix the root cause rather than adding `#[allow(...)]`.
 * Do not persist blobs with direct file writes. Use `HistoryRepository`, the
   content-addressable store (`docs/deduplication.md`).
-* Do not run search/sort ad hoc. Go through the Room FTS4 layer
-  (`docs/full-text-search.md`).
+* Do not reimplement search/filter/sort. There is exactly one definition,
+  `HistoryQuery`, and it is pure and unit-tested (`docs/full-text-search.md`).
+  The `email_fts` FTS4 table is deliberately unqueried — see that doc before
+  reaching for it.
 * Do not push tags or trigger releases unless explicitly asked — the release
   flow lives in `.github/workflows/`.
 * Do not rewrite Renovate bot commits (the `⬆️`-prefixed ones); they
@@ -116,7 +118,7 @@ Read the matching file only when your task touches that domain:
 * Engineering standards (full) & execution contract → `docs/agents/engineering-standards.md`
 * Image proxy / WARP / WireGuard → `docs/image-proxy-design.md`, `docs/remote-images.md`
 * History dedup & content-addressable store → `docs/deduplication.md`
-* Full-text search (FTS4) → `docs/full-text-search.md`
+* Search, filter & sort (`HistoryQuery`) → `docs/full-text-search.md`
 * Signing & versioning → `docs/signing.md`, `docs/versioning.md`
 * Dependency policy (Renovate) → `docs/renovate.md`
 * Build / test troubleshooting → `docs/troubleshooting.md`

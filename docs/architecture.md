@@ -7,7 +7,7 @@ Letterbox pairs an Android/Jetpack Compose client with a Rust email parsing core
 ## Components
 
 - **Android UI (`app/`)**: `MainActivity` drives Compose screens for history and message detail, launches file pickers for `.eml`, provides search/filter/sort controls, and shares the current email via a FileProvider.
-- **View model & data layer**: `EmailViewModel` orchestrates parsing, error handling, history updates, and search/filter/sort state management. `HistoryRepository` and Room entities (`data/`) deduplicate blobs, track access times, extract email metadata for indexing, and provide search queries; `InMemoryHistoryRepository` is used for tests.
+- **View model & data layer**: `EmailViewModel` orchestrates parsing, error handling, history updates, and search/filter/sort state. `HistoryRepository` and Room entities (`data/`) deduplicate blobs, track access times, and extract email metadata; the repository exposes the whole history and does not query, filter or sort — that is `HistoryQuery`'s job. `InMemoryHistoryRepository` is a test stand-in for ingestion and blob lifecycle only.
 - **Rust core (`rust/letterbox-core`)**: Parses emails with `mail-parser`, returns an `EmailHandle` exposing headers, body variants, inline resource metadata, structured sender/recipient info, and attachment accessors; exported through UniFFI.
 - **FFI bindings (`app/src/main/java/org/joefang/letterbox/ffi/`)**: Generated Kotlin bindings load `letterbox_core` via JNA and surface `parseEml`/`parseEmlFromPath` plus `EmailHandle` methods including `senderInfo()`, `recipientInfo()`, `dateTimestamp()`, and `bodyPreview()`.
 
@@ -30,18 +30,11 @@ Email metadata is stored in the `history_items` table with additional indexed co
 - `has_attachments`: Boolean flag for attachment presence
 - `body_preview`: First 500 characters of body text
 
-### Full-Text Search (FTS4)
+### Search, filter and sort
 
-A virtual FTS4 table (`email_fts`) is synchronized with `history_items` for efficient text search across:
-- Subject
-- Sender email and name
-- Recipient emails and names
-- Body preview
+`HistoryQuery` is the single definition: a plain value describing which entries to show and in what order, applied by a pure `applyTo` to the entry list the UI already holds. Text matching is case-insensitive substring across subject, sender name, sender address, file display name and body preview. It carries no Android, Room or coroutine dependency and is unit-tested directly.
 
-**Design Choice: FTS4 vs FTS5**: We chose FTS4 because:
-1. Room has better built-in support for FTS4 via `@Fts4` annotation
-2. FTS4 is available on all Android API levels we support (26+)
-3. FTS5 requires manual SQL and content synchronization doesn't integrate as well with Room
+A virtual FTS4 table (`email_fts`) is synchronized with `history_items` by Room, but **nothing queries it**. FTS4 `MATCH` offers only token and token-prefix matching, so routing search through it would stop "port" from finding "airport". It remains registered only because dropping the entity would change Room's schema identity and, under `fallbackToDestructiveMigration()`, erase cached email. See `docs/full-text-search.md` for the rationale and the migration needed to retire it.
 
 ### Sorting Options
 

@@ -142,30 +142,26 @@ data class HistoryItemEntity(
 )
 
 /**
- * FTS4 virtual table for full-text search across email content.
- * 
- * ## Design Choice: FTS4 vs FTS5
- * 
- * We use FTS4 instead of FTS5 because:
- * 1. Room has better built-in support for FTS4 via @Fts4 annotation
- * 2. FTS4 is available on all Android API levels we support (26+)
- * 3. FTS5 requires manual SQL and contentSync doesn't work as well with Room
- * 
- * ## Content Synchronization
- * 
- * This table uses contentEntity to automatically sync with history_items table.
- * When a history item is inserted, updated, or deleted, the FTS index is
- * automatically updated by Room.
- * 
- * ## Searchable Fields
- * 
- * The FTS table indexes the following fields for full-text search:
- * - subject: Email subject line
- * - senderEmail: Sender's email address
- * - senderName: Sender's display name
- * - recipientEmails: All recipient email addresses
- * - recipientNames: All recipient display names
- * - bodyPreview: First 500 characters of email body
+ * FTS4 virtual table over the searchable columns of [HistoryItemEntity].
+ *
+ * ## Unused, and pending removal
+ *
+ * Nothing queries this table. Search is [org.joefang.letterbox.HistoryQuery], a
+ * pure in-memory function over the entry list the UI already holds, which gives
+ * case-insensitive **substring** matching. FTS4 `MATCH` only offers token and
+ * token-prefix matching, so routing search through here would stop "port" from
+ * finding "airport" — a regression, not an optimisation. See
+ * `docs/full-text-search.md` for the full rationale.
+ *
+ * The entity is still registered because removing it changes Room's schema
+ * identity, and this database is built with `fallbackToDestructiveMigration()`:
+ * dropping the entity without a hand-written migration would delete every
+ * user's cached email. Retiring it needs a `Migration(3, 4)` that drops
+ * `email_fts` **and** the `room_fts_content_sync_email_fts_*` triggers Room
+ * generates to keep it in sync, verified against a real database.
+ *
+ * Until then it costs index maintenance on every insert, update and delete of
+ * `history_items`, and nothing else.
  */
 @Fts4(contentEntity = HistoryItemEntity::class)
 @Entity(tableName = "email_fts")
@@ -197,24 +193,3 @@ data class EmailFtsEntity(
 
 // SortField and SortDirection live in HistoryOrder.kt: they are domain values
 // with no Room dependency, so they stay out of this entity-declaration file.
-
-/**
- * Filter criteria for the email history list.
- */
-data class EmailFilter(
-    /** Only show emails with attachments. Null means no filter. */
-    val hasAttachments: Boolean? = null,
-    
-    /** Only show emails from this date onwards (epoch millis). Null means no filter. */
-    val dateFrom: Long? = null,
-    
-    /** Only show emails up to this date (epoch millis). Null means no filter. */
-    val dateTo: Long? = null,
-    
-    /** Only show emails from this sender (partial match). Null means no filter. */
-    val senderContains: String? = null
-) {
-    /** Returns true if no filters are active. */
-    val isEmpty: Boolean
-        get() = hasAttachments == null && dateFrom == null && dateTo == null && senderContains == null
-}

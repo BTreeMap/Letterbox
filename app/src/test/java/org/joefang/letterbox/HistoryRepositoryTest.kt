@@ -1,7 +1,5 @@
 package org.joefang.letterbox
 
-import org.joefang.letterbox.data.SortDirection
-import org.joefang.letterbox.data.SortField
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.assertEquals
@@ -165,7 +163,11 @@ class HistoryRepositoryTest {
     }
     
     // =========================================================================
-    // Search, Filter, and Sort Tests
+    // Ingestion of search metadata
+    //
+    // Search, filter and sort semantics are HistoryQuery's, tested directly in
+    // HistoryQueryTest. What matters here is that ingestion persists the fields
+    // those queries read.
     // =========================================================================
     
     @Test
@@ -190,98 +192,11 @@ class HistoryRepositoryTest {
         assertTrue(entry.hasAttachments)
     }
     
-    @Test
-    fun `search finds emails by subject`() {
-        val meta1 = EmailMetadata(subject = "Important Meeting Tomorrow")
-        val meta2 = EmailMetadata(subject = "Weekly Report")
-        val meta3 = EmailMetadata(subject = "Meeting Notes")
-        
-        repository.ingest("1".toByteArray(), "d1", null, meta1)
-        repository.ingest("2".toByteArray(), "d2", null, meta2)
-        repository.ingest("3".toByteArray(), "d3", null, meta3)
-        
-        val results = repository.search("meeting")
-        
-        assertEquals(2, results.size)
-        assertTrue(results.any { it.subject == "Important Meeting Tomorrow" })
-        assertTrue(results.any { it.subject == "Meeting Notes" })
-    }
     
-    @Test
-    fun `search finds emails by sender name`() {
-        val meta1 = EmailMetadata(subject = "Email 1", senderName = "John Smith")
-        val meta2 = EmailMetadata(subject = "Email 2", senderName = "Jane Doe")
-        val meta3 = EmailMetadata(subject = "Email 3", senderName = "John Doe")
-        
-        repository.ingest("1".toByteArray(), "d1", null, meta1)
-        repository.ingest("2".toByteArray(), "d2", null, meta2)
-        repository.ingest("3".toByteArray(), "d3", null, meta3)
-        
-        val results = repository.search("john")
-        
-        assertEquals(2, results.size)
-        assertTrue(results.all { it.senderName.contains("John", ignoreCase = true) })
-    }
     
-    @Test
-    fun `search finds emails by sender email`() {
-        val meta1 = EmailMetadata(subject = "Email 1", senderEmail = "john@example.com")
-        val meta2 = EmailMetadata(subject = "Email 2", senderEmail = "jane@company.org")
-        
-        repository.ingest("1".toByteArray(), "d1", null, meta1)
-        repository.ingest("2".toByteArray(), "d2", null, meta2)
-        
-        val results = repository.search("example.com")
-        
-        assertEquals(1, results.size)
-        assertEquals("john@example.com", results[0].senderEmail)
-    }
     
-    @Test
-    fun `search returns empty list for no matches`() {
-        val meta = EmailMetadata(subject = "Normal Email", senderName = "John")
-        repository.ingest("1".toByteArray(), "d1", null, meta)
-        
-        val results = repository.search("xyz123nonexistent")
-        
-        assertTrue(results.isEmpty())
-    }
     
-    @Test
-    fun `search finds emails by body preview - full text search`() {
-        val meta1 = EmailMetadata(
-            subject = "Unrelated Subject",
-            bodyPreview = "The quarterly budget meeting was successful"
-        )
-        val meta2 = EmailMetadata(
-            subject = "Another Subject",
-            bodyPreview = "Please review the attached document"
-        )
-        val meta3 = EmailMetadata(
-            subject = "Third Subject",
-            bodyPreview = "Budget planning for next quarter"
-        )
-        
-        repository.ingest("1".toByteArray(), "d1", null, meta1)
-        repository.ingest("2".toByteArray(), "d2", null, meta2)
-        repository.ingest("3".toByteArray(), "d3", null, meta3)
-        
-        // Search for "budget" should find emails 1 and 3 via body preview
-        val results = repository.search("budget")
-        
-        assertEquals(2, results.size)
-        assertTrue(results.any { it.bodyPreview.contains("budget", ignoreCase = true) })
-    }
     
-    @Test
-    fun `search with empty query returns all items`() {
-        repository.ingest("1".toByteArray(), "d1", null)
-        repository.ingest("2".toByteArray(), "d2", null)
-        
-        val results = repository.search("")
-        
-        assertEquals(2, results.size)
-    }
     
     @Test
     fun `body preview is included in HistoryEntry`() {
@@ -296,123 +211,12 @@ class HistoryRepositoryTest {
         assertEquals(bodyText, entry.bodyPreview)
     }
     
-    @Test
-    fun `getSorted by date descending returns newest first`() {
-        val meta1 = EmailMetadata(emailDate = 1000L)
-        val meta2 = EmailMetadata(emailDate = 3000L)
-        val meta3 = EmailMetadata(emailDate = 2000L)
-        
-        repository.ingest("1".toByteArray(), "oldest", null, meta1)
-        repository.ingest("2".toByteArray(), "newest", null, meta2)
-        repository.ingest("3".toByteArray(), "middle", null, meta3)
-        
-        val sorted = repository.getSorted(SortField.DATE, SortDirection.DESCENDING)
-        
-        assertEquals("newest", sorted[0].displayName)
-        assertEquals("middle", sorted[1].displayName)
-        assertEquals("oldest", sorted[2].displayName)
-    }
     
-    @Test
-    fun `getSorted by date ascending returns oldest first`() {
-        val meta1 = EmailMetadata(emailDate = 1000L)
-        val meta2 = EmailMetadata(emailDate = 3000L)
-        val meta3 = EmailMetadata(emailDate = 2000L)
-        
-        repository.ingest("1".toByteArray(), "oldest", null, meta1)
-        repository.ingest("2".toByteArray(), "newest", null, meta2)
-        repository.ingest("3".toByteArray(), "middle", null, meta3)
-        
-        val sorted = repository.getSorted(SortField.DATE, SortDirection.ASCENDING)
-        
-        assertEquals("oldest", sorted[0].displayName)
-        assertEquals("middle", sorted[1].displayName)
-        assertEquals("newest", sorted[2].displayName)
-    }
     
-    @Test
-    fun `getSorted by subject ascending returns alphabetical order`() {
-        val meta1 = EmailMetadata(subject = "Zebra")
-        val meta2 = EmailMetadata(subject = "Apple")
-        val meta3 = EmailMetadata(subject = "Mango")
-        
-        repository.ingest("1".toByteArray(), "d1", null, meta1)
-        repository.ingest("2".toByteArray(), "d2", null, meta2)
-        repository.ingest("3".toByteArray(), "d3", null, meta3)
-        
-        val sorted = repository.getSorted(SortField.SUBJECT, SortDirection.ASCENDING)
-        
-        assertEquals("Apple", sorted[0].subject)
-        assertEquals("Mango", sorted[1].subject)
-        assertEquals("Zebra", sorted[2].subject)
-    }
     
-    @Test
-    fun `getSorted by sender uses name when available`() {
-        val meta1 = EmailMetadata(senderName = "Zach", senderEmail = "a@x.com")
-        val meta2 = EmailMetadata(senderName = "Adam", senderEmail = "z@x.com")
-        val meta3 = EmailMetadata(senderName = "", senderEmail = "mike@x.com") // No name
-        
-        repository.ingest("1".toByteArray(), "d1", null, meta1)
-        repository.ingest("2".toByteArray(), "d2", null, meta2)
-        repository.ingest("3".toByteArray(), "d3", null, meta3)
-        
-        val sorted = repository.getSorted(SortField.SENDER, SortDirection.ASCENDING)
-        
-        // Adam, mike@x.com, Zach
-        assertEquals("Adam", sorted[0].displaySender)
-        assertEquals("mike@x.com", sorted[1].displaySender)
-        assertEquals("Zach", sorted[2].displaySender)
-    }
     
-    @Test
-    fun `getWithAttachments filters correctly`() {
-        val meta1 = EmailMetadata(subject = "With", hasAttachments = true)
-        val meta2 = EmailMetadata(subject = "Without", hasAttachments = false)
-        val meta3 = EmailMetadata(subject = "Also With", hasAttachments = true)
-        
-        repository.ingest("1".toByteArray(), "d1", null, meta1)
-        repository.ingest("2".toByteArray(), "d2", null, meta2)
-        repository.ingest("3".toByteArray(), "d3", null, meta3)
-        
-        val filtered = repository.getWithAttachments()
-        
-        assertEquals(2, filtered.size)
-        assertTrue(filtered.all { it.hasAttachments })
-    }
     
-    @Test
-    fun `getByDateRange filters within bounds`() {
-        val meta1 = EmailMetadata(emailDate = 1000L)
-        val meta2 = EmailMetadata(emailDate = 2000L)
-        val meta3 = EmailMetadata(emailDate = 3000L)
-        
-        repository.ingest("1".toByteArray(), "d1", null, meta1)
-        repository.ingest("2".toByteArray(), "d2", null, meta2)
-        repository.ingest("3".toByteArray(), "d3", null, meta3)
-        
-        val filtered = repository.getByDateRange(1500L, 2500L)
-        
-        assertEquals(1, filtered.size)
-        assertEquals(2000L, filtered[0].emailDate)
-    }
     
-    @Test
-    fun `getBySender filters by partial match`() {
-        val meta1 = EmailMetadata(senderEmail = "john@example.com", senderName = "John")
-        val meta2 = EmailMetadata(senderEmail = "jane@company.org", senderName = "Jane")
-        val meta3 = EmailMetadata(senderEmail = "johnson@example.com", senderName = "Johnson")
-        
-        repository.ingest("1".toByteArray(), "d1", null, meta1)
-        repository.ingest("2".toByteArray(), "d2", null, meta2)
-        repository.ingest("3".toByteArray(), "d3", null, meta3)
-        
-        val filtered = repository.getBySender("john")
-        
-        assertEquals(2, filtered.size)
-        assertTrue(filtered.any { it.senderName == "John" })
-        assertTrue(filtered.any { it.senderName == "Johnson" })
-    }
     
     @Test
     fun `effectiveDate falls back to lastAccessed when emailDate is zero`() {
