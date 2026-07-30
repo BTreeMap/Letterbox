@@ -6,11 +6,14 @@ import org.joefang.letterbox.data.BlobEntity
 import org.joefang.letterbox.data.HistoryItemDao
 import org.joefang.letterbox.data.HistoryItemEntity
 import java.io.File
+import java.io.OutputStream
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,6 +23,14 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 private const val TAG = "HistoryRepository"
+
+/**
+ * Rows read per page while exporting.
+ *
+ * Small enough that peak memory does not track the cache size, large enough that
+ * a full export is not dominated by query round trips.
+ */
+private const val EXPORT_PAGE_SIZE = 200
 
 /**
  * This row with `search_text` derived from its own searchable fields.
@@ -280,6 +291,55 @@ class HistoryRepository(
             blobMutex.withLock {
                 reclaimUnknownFiles(casDir, blobDao.allHashes().toHashSet())
             }
+        }
+    }
+
+    /**
+     * Write every cached email into [output] as a zip of `.eml` files.
+     *
+     * Takes ownership of [output] and closes it.
+     *
+     * Bounded in memory regardless of how large the cache has grown: rows are
+     * read one page at a time and each message is streamed from disk into the
+     * archive, so nothing here holds the whole mailbox — or even a whole message.
+     * That matters because the cache never evicts.
+     *
+     * [onProgress] is called with `(processed, total)` after each message. `total`
+     * is sampled once at the start; a concurrent ingest would make it a slight
+     * underestimate, which is preferable to re-counting per page.
+     *
+     * Cancellation is honoured between messages. A cancelled export leaves a
+     * partial archive at the destination the user chose, which is unavoidable
+     * once bytes have been handed to the picker's stream.
+     *
+     * Needs no [blobMutex]: every row's blob has a `blobs` entry, so
+     * [reclaimOrphanedBlobs] can never delete a file this walk will read.
+     */
+    suspend fun exportAll(
+        output: OutputStream,
+        onProgress: (processed: Int, total: Int) -> Unit = { _, _ -> }
+    ): ArchiveSummary = withContext(Dispatchers.IO) {
+        // Constructed first so that `use` owns the stream from the earliest
+        // possible point: a failure while counting must not leak it.
+        EmailArchiveWriter(output).use { writer ->
+            val total = historyItemDao.count()
+            var offset = 0
+            while (true) {
+                val page = historyItemDao.page(EXPORT_PAGE_SIZE, offset)
+                if (page.isEmpty()) break
+
+                for (item in page) {
+                    currentCoroutineContext().ensureActive()
+                    writer.add(
+                        subject = item.subject.ifBlank { item.displayName },
+                        source = File(casDir, item.blobHash),
+                        timestamp = if (item.emailDate > 0) item.emailDate else item.lastAccessed
+                    )
+                    onProgress(writer.summary.total, total)
+                }
+                offset += page.size
+            }
+            writer.summary
         }
     }
 

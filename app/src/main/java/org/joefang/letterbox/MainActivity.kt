@@ -43,6 +43,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -90,6 +91,7 @@ import org.joefang.letterbox.ui.DiagnosticsDialog
 import org.joefang.letterbox.ui.OnboardingScreen
 import org.joefang.letterbox.ui.UpdateAvailableDialog
 import org.joefang.letterbox.ui.UpToDateDialog
+import org.joefang.letterbox.ui.exportArchiveName
 import org.joefang.letterbox.ui.formatRelativeTimestamp
 import org.joefang.letterbox.ui.formatStorageSize
 import org.joefang.letterbox.ui.sharedEmailFilename
@@ -175,6 +177,23 @@ private sealed interface UpdateCheckState {
     data class Failed(val message: String) : UpdateCheckState
 }
 
+/** MIME type of an exported mailbox archive. */
+private const val ARCHIVE_MIME_TYPE = "application/zip"
+
+/**
+ * State of the "export all emails" flow.
+ *
+ * [Running] carries counts rather than a bare flag so the dialog can show real
+ * progress: exporting an unbounded cache is not instant, and a spinner that says
+ * nothing about how far along it is reads as a hang.
+ */
+private sealed interface ExportState {
+    data object Idle : ExportState
+    data class Running(val processed: Int, val total: Int) : ExportState
+    data class Done(val summary: ArchiveSummary) : ExportState
+    data class Failed(val message: String) : ExportState
+}
+
 class MainActivity : ComponentActivity() {
     private val viewModel: EmailViewModel by viewModels {
         val database = LetterboxDatabase.getInstance(this)
@@ -246,6 +265,26 @@ class MainActivity : ComponentActivity() {
         )
 
         var updateCheckState by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
+        var exportState by remember { mutableStateOf<ExportState>(ExportState.Idle) }
+
+        // The user names and places the archive through the system document
+        // picker, and the export streams straight into the stream it returns —
+        // so a full mailbox is never staged in the app's own cache first.
+        val exportLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.CreateDocument(ARCHIVE_MIME_TYPE)
+        ) { destination: Uri? ->
+            if (destination == null) {
+                // Picker dismissed; nothing was created.
+                exportState = ExportState.Idle
+            } else {
+                scope.launch {
+                    exportState = ExportState.Running(processed = 0, total = 0)
+                    exportState = exportArchiveTo(destination) { processed, total ->
+                        exportState = ExportState.Running(processed, total)
+                    }
+                }
+            }
+        }
 
         // First-launch onboarding establishes network consent.
         if (!onboardingCompleted) {
@@ -273,6 +312,22 @@ class MainActivity : ComponentActivity() {
                 snackbarHostState.showSnackbar(message)
                 viewModel.clearError()
             }
+        }
+
+        // Export feedback. Running shows a dialog rather than nothing, so a long
+        // export cannot be mistaken for a dead button; terminal states report once
+        // and reset.
+        when (val export = exportState) {
+            is ExportState.Running -> ExportProgressDialog(export.processed, export.total)
+            is ExportState.Done -> LaunchedEffect(export) {
+                snackbarHostState.showSnackbar(exportSummaryMessage(export.summary))
+                exportState = ExportState.Idle
+            }
+            is ExportState.Failed -> LaunchedEffect(export) {
+                snackbarHostState.showSnackbar("Export failed: ${export.message}")
+                exportState = ExportState.Idle
+            }
+            ExportState.Idle -> Unit
         }
 
         // Bind the optional email once: the branch then smart-casts, and the
@@ -321,6 +376,9 @@ class MainActivity : ComponentActivity() {
                 onEntryDelete = { entry -> viewModel.deleteHistoryEntry(entry) },
                 onOpenFile = { uri -> loadEmailFromUri(uri) },
                 onClearHistory = { viewModel.clearHistory() },
+                onExportAll = {
+                    exportLauncher.launch(exportArchiveName(System.currentTimeMillis()))
+                },
                 preferences = preferences,
                 onAlwaysLoadRemoteImagesChange = { enabled ->
                     scope.launch { preferencesRepository.setAlwaysLoadRemoteImages(enabled) }
@@ -425,6 +483,32 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * Stream every cached email into the archive the user chose.
+     *
+     * An effect boundary: the picker gives us a `content://` destination, we open
+     * it, and every failure becomes an [ExportState] rather than an exception.
+     * [EmailViewModel.exportAll] takes ownership of the stream and closes it, so
+     * this must not wrap it in `use`.
+     */
+    private suspend fun exportArchiveTo(
+        destination: Uri,
+        onProgress: (processed: Int, total: Int) -> Unit
+    ): ExportState =
+        try {
+            val output = contentResolver.openOutputStream(destination)
+            if (output == null) {
+                ExportState.Failed("Could not open the chosen file")
+            } else {
+                ExportState.Done(viewModel.exportAll(output, onProgress))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Export failed: ${e.message}")
+            ExportState.Failed(e.message ?: "Unknown error")
+        }
+
+    /**
      * The single place an update check happens: query GitHub through WARP and,
      * on success only, record the check time that throttles the launch check.
      * Both the silent launch check and the manual Settings check funnel through
@@ -479,6 +563,40 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * Progress while the mailbox is being written out.
+ *
+ * Not dismissible: bytes are already going into a file the user chose, and there
+ * is no meaningful "cancel" that leaves a valid archive behind. The count is shown
+ * because an unbounded cache can take a while, and a bare spinner is
+ * indistinguishable from a hang.
+ */
+@Composable
+private fun ExportProgressDialog(processed: Int, total: Int) {
+    AlertDialog(
+        onDismissRequest = { },
+        title = { Text("Exporting emails") },
+        text = {
+            Column {
+                Text(
+                    text = if (total > 0) "$processed of $total" else "Preparing…",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                if (total > 0) {
+                    LinearProgressIndicator(
+                        progress = { processed.toFloat() / total },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+        },
+        confirmButton = { }
+    )
+}
+
 @Composable
 private fun LoadingScreen() {
     Box(
@@ -507,6 +625,7 @@ private fun LetterboxScaffold(
     onEntryDelete: (HistoryEntry) -> Unit,
     onOpenFile: (Uri) -> Unit,
     onClearHistory: () -> Unit,
+    onExportAll: () -> Unit,
     preferences: AppPreferences,
     onAlwaysLoadRemoteImagesChange: (Boolean) -> Unit,
     onEnablePrivacyProxyChange: (Boolean) -> Unit,
@@ -736,6 +855,10 @@ private fun LetterboxScaffold(
                     showSettingsSheet = false
                     showClearCacheDialog = true
                 },
+                onExportAll = {
+                    showSettingsSheet = false
+                    onExportAll()
+                },
                 appVersion = BuildConfig.VERSION_NAME,
                 onOpenDiagnostics = {
                     showSettingsSheet = false
@@ -927,6 +1050,7 @@ private fun SettingsContent(
     onAlwaysLoadRemoteImagesChange: (Boolean) -> Unit,
     onEnablePrivacyProxyChange: (Boolean) -> Unit,
     onClearCache: () -> Unit,
+    onExportAll: () -> Unit,
     appVersion: String,
     onOpenDiagnostics: () -> Unit,
     onCheckForUpdate: () -> Unit
@@ -1051,6 +1175,34 @@ private fun SettingsContent(
                     text = "Clear",
                     color = if (cacheStats.entryCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+
+        // Export all emails
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Export all emails",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text(
+                    text = "Save every cached email into a .zip archive",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            TextButton(
+                onClick = onExportAll,
+                enabled = cacheStats.entryCount > 0,
+                modifier = Modifier.testTag("exportAllButton")
+            ) {
+                Text("Export")
             }
         }
 

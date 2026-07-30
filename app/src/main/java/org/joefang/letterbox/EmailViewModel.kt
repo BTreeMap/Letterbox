@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.OutputStream
 import org.joefang.letterbox.data.SortField
 import org.joefang.letterbox.data.SortDirection
 
@@ -282,6 +283,19 @@ class EmailViewModel(
             repository.clearAll()
         }
     }
+
+    /**
+     * Write every cached email into [output] as a zip, closing it when done.
+     *
+     * Suspends rather than launching, so the caller owns the scope: the export
+     * writes into a stream the caller opened from a document the user picked, and
+     * the caller is what reports progress and completion. Cancelling the caller's
+     * coroutine cancels the export between messages.
+     */
+    suspend fun exportAll(
+        output: OutputStream,
+        onProgress: (processed: Int, total: Int) -> Unit
+    ): ArchiveSummary = repository.exportAll(output, onProgress)
 
     /**
      * Close the currently viewed email and return to history.

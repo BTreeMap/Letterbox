@@ -101,6 +101,17 @@ interface HistoryItemDao {
     @Query("SELECT COUNT(*) FROM history_items")
     suspend fun count(): Int
 
+    /**
+     * One page of history rows, ordered by `id`.
+     *
+     * Ordered by the primary key rather than by access time so that walking the
+     * whole table page by page is stable: `last_accessed` changes while a long
+     * walk is in progress, which would let rows shift between pages and be
+     * visited twice or skipped. Used by export.
+     */
+    @Query("SELECT * FROM history_items ORDER BY id LIMIT :limit OFFSET :offset")
+    suspend fun page(limit: Int, offset: Int): List<HistoryItemEntity>
+
     @Query("SELECT COUNT(*) FROM history_items WHERE blob_hash = :hash")
     suspend fun countByBlobHash(hash: String): Int
 

@@ -30,8 +30,14 @@ private const val MAX_SHARED_FILENAME_LENGTH = 50
 /** Characters replaced by `_` when turning a subject into a filename. */
 private val UNSAFE_FILENAME_CHARS = Regex("[^a-zA-Z0-9]")
 
+/** Extension for a single exported or shared message. */
+internal const val EML_EXTENSION = ".eml"
+
 /** Name used for an email file with no usable subject or provider display name. */
-internal const val DEFAULT_EMAIL_FILENAME = "email.eml"
+internal const val DEFAULT_EMAIL_FILENAME = "email$EML_EXTENSION"
+
+/** Date stamp used in the default name of an exported archive. */
+private val ARCHIVE_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
 /**
  * The `MMM d` pattern, parsed once. [DateTimeFormatter] is immutable and
@@ -103,5 +109,21 @@ internal fun sourceLabel(uri: String): String = when {
  */
 internal fun sharedEmailFilename(subject: String): String {
     val stem = subject.take(MAX_SHARED_FILENAME_LENGTH).replace(UNSAFE_FILENAME_CHARS, "_")
-    return if (stem.isEmpty()) DEFAULT_EMAIL_FILENAME else "$stem.eml"
+    return if (stem.isEmpty()) DEFAULT_EMAIL_FILENAME else "$stem$EML_EXTENSION"
+}
+
+/**
+ * Default name offered when exporting the whole cache, e.g.
+ * `letterbox-export-2026-07-29.zip`.
+ *
+ * Dated rather than timestamped: a user exporting twice in one day is far more
+ * likely to want to overwrite than to accumulate near-identical archives, and the
+ * document picker lets them rename either way.
+ */
+internal fun exportArchiveName(
+    now: Long,
+    zone: ZoneId = ZoneId.systemDefault()
+): String {
+    val date = ARCHIVE_DATE.format(Instant.ofEpochMilli(now).atZone(zone))
+    return "letterbox-export-$date.zip"
 }

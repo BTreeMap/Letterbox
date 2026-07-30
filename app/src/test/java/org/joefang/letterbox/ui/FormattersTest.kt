@@ -131,4 +131,25 @@ class FormattersTest {
     fun `punctuation-only subject still yields a visible name`() {
         assertEquals("___.eml", sharedEmailFilename("!!!"))
     }
+
+    // ------------------------------------------------------------- archive name
+
+    @Test
+    fun `archive name carries the export date`() {
+        val timestamp = Instant.parse("2026-07-29T10:15:00Z").toEpochMilli()
+
+        assertEquals("letterbox-export-2026-07-29.zip", exportArchiveName(timestamp, utc))
+    }
+
+    @Test
+    fun `archive name uses the requested zone`() {
+        // 23:30 UTC is already the next day in Tokyo.
+        val timestamp = Instant.parse("2026-07-29T23:30:00Z").toEpochMilli()
+
+        assertEquals("letterbox-export-2026-07-29.zip", exportArchiveName(timestamp, utc))
+        assertEquals(
+            "letterbox-export-2026-07-30.zip",
+            exportArchiveName(timestamp, ZoneId.of("Asia/Tokyo"))
+        )
+    }
 }
