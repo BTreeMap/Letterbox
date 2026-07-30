@@ -24,15 +24,29 @@ import androidx.room.RoomDatabase
  *                  Each unique EML file (by SHA-256 checksum) now has exactly one history entry.
  * 
  * ## Migration Strategy
- * 
- * Since the app is pre-beta, we use `fallbackToDestructiveMigration()` instead of
- * writing migration scripts. This means existing cached emails will be lost on update,
- * which is acceptable for early development.
+ *
+ * `fallbackToDestructiveMigration()` is still the fallback, which means any schema
+ * change without an explicit `Migration` **destroys every user's cached email**.
+ * That makes an untested migration a silent-data-loss bug, so schemas are
+ * exported and migrations are tested.
+ *
+ * ## Schema export
+ *
+ * `exportSchema = true` writes a JSON description of each version to
+ * `app/schemas/`, and those files are committed. Room's `MigrationTestHelper`
+ * needs the JSON for the *starting* version in order to create a database at
+ * that version, so a schema can only be tested against a predecessor whose JSON
+ * was captured **before** the change. Committing them is therefore not
+ * housekeeping: it is the only thing that keeps the next migration testable.
+ *
+ * When changing any `@Entity`: bump [version], write a `Migration`, add a case to
+ * `LetterboxDatabaseMigrationTest`, and commit the regenerated `app/schemas/`
+ * alongside the change.
  */
 @Database(
     entities = [BlobEntity::class, HistoryItemEntity::class, EmailFtsEntity::class],
     version = 3,
-    exportSchema = false
+    exportSchema = true
 )
 abstract class LetterboxDatabase : RoomDatabase() {
     abstract fun blobDao(): BlobDao

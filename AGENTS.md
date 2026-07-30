@@ -58,6 +58,11 @@ here.
   fix the root cause rather than adding `#[allow(...)]`.
 * Do not persist blobs with direct file writes. Use `HistoryRepository`, the
   content-addressable store (`docs/deduplication.md`).
+* Do not change a Room `@Entity` without bumping the database version, writing a
+  `Migration`, testing it, and committing the regenerated `app/schemas/` JSON in
+  the same change. The database falls back to destructive migration, so an
+  untested schema change deletes every user's cached email
+  (`app/schemas/README.md`).
 * Do not reimplement search/filter/sort. There is exactly one definition,
   `HistoryQuery`, and it is pure and unit-tested (`docs/full-text-search.md`).
   The `email_fts` FTS4 table is deliberately unqueried — see that doc before

@@ -18,6 +18,10 @@ Room. Root rules apply; this file adds module-local ones.
   and regenerate.
 * Persist blobs through `HistoryRepository`, never with direct file writes
   (`docs/deduplication.md`).
+* Schema changes: bump `LetterboxDatabase.version`, write and test a `Migration`,
+  and commit the regenerated `schemas/` JSON alongside it. The JSON for version N
+  must be committed *before* N+1 exists or the migration becomes untestable
+  (`schemas/README.md`).
 * Search/filter/sort has one definition: `HistoryQuery`, a pure function tested
   in `HistoryQueryTest`. Extend it rather than adding queries elsewhere; the
   `email_fts` FTS4 table is intentionally unused (`docs/full-text-search.md`).

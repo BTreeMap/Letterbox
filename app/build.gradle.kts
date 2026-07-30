@@ -276,6 +276,12 @@ android {
 
     sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
 
+    // Room writes one JSON per schema version to app/schemas (see the
+    // room.schemaLocation KSP argument below) and those files are committed.
+    // MigrationTestHelper reads them from the instrumented APK's assets, so a
+    // migration test can only start from a version whose JSON is present.
+    sourceSets["androidTest"].assets.srcDirs("$projectDir/schemas")
+
     testOptions {
         managedDevices {
             val pixel7Api34 = localDevices.create("pixel7Api34") {
@@ -343,6 +349,18 @@ tasks.withType<Test> {
     systemProperty("jna.library.path", hostLibDir.absolutePath)
 }
 
+/**
+ * Room schema export.
+ *
+ * Writes one JSON per database version to `app/schemas/`, which is committed.
+ * `MigrationTestHelper` creates a database from the JSON of the version it starts
+ * at, so the file for version N must exist before version N+1 is written —
+ * regenerating it after the change is too late. See `LetterboxDatabase`.
+ */
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.core.ktx)
@@ -380,6 +398,9 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test:rules:1.7.0")
     androidTestImplementation(libs.espresso.intents)
+    // MigrationTestHelper: creates a database at an exported schema version and
+    // validates the result of running migrations against the next one.
+    androidTestImplementation(libs.room.testing)
 
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
