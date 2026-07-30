@@ -164,12 +164,12 @@ class HistoryQuerySqlTest {
             order(SortField.SUBJECT, SortDirection.DESCENDING)
         )
         assertEquals(
-            "CASE WHEN sender_name != '' THEN sender_name ELSE sender_email END " +
+            "CASE WHEN TRIM(sender_name) != '' THEN sender_name ELSE sender_email END " +
                 "COLLATE NOCASE ASC, id ASC",
             order(SortField.SENDER, SortDirection.ASCENDING)
         )
         assertEquals(
-            "CASE WHEN sender_name != '' THEN sender_name ELSE sender_email END " +
+            "CASE WHEN TRIM(sender_name) != '' THEN sender_name ELSE sender_email END " +
                 "COLLATE NOCASE DESC, id DESC",
             order(SortField.SENDER, SortDirection.DESCENDING)
         )

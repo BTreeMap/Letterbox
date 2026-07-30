@@ -223,16 +223,35 @@ class HistoryQueryTest {
     }
 
     @Test
-    fun `descending order preserves incoming order among ties`() {
-        // Reversing the comparator, not the sorted list, keeps equal keys in the
-        // order they arrived. Reversing the result would flip them.
+    fun `ties are broken by id, in the direction of the sort`() {
+        // The order must be total, and must match what ORDER BY key, id produces,
+        // or the SQL interpreter disagrees with this one on every tie. Incoming
+        // order is deliberately not the tie-break: it would make the result depend
+        // on how rows happened to arrive.
         val entries = listOf(
-            entry(1, emailDate = 1_000),
             entry(2, emailDate = 1_000),
-            entry(3, emailDate = 1_000)
+            entry(3, emailDate = 1_000),
+            entry(1, emailDate = 1_000)
         )
 
-        assertEquals(listOf(1L, 2L, 3L), HistoryQuery().applyTo(entries).map { it.id })
+        assertEquals(
+            listOf(3L, 2L, 1L),
+            HistoryQuery(sortDirection = SortDirection.DESCENDING).applyTo(entries).map { it.id }
+        )
+        assertEquals(
+            listOf(1L, 2L, 3L),
+            HistoryQuery(sortDirection = SortDirection.ASCENDING).applyTo(entries).map { it.id }
+        )
+    }
+
+    @Test
+    fun `the order is independent of the order rows arrive in`() {
+        val entries = (1L..6L).map { entry(it, emailDate = it % 2) }
+
+        val forward = HistoryQuery().applyTo(entries).map { it.id }
+        val reversed = HistoryQuery().applyTo(entries.reversed()).map { it.id }
+
+        assertEquals(forward, reversed)
     }
 
     // ------------------------------------------------------------------ algebra

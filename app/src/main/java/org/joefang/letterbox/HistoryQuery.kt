@@ -125,18 +125,24 @@ data class HistoryQuery(
     /**
      * The total order this query imposes.
      *
-     * Descending reverses the *comparator*, not the sorted list. Both agree on
-     * distinct keys; for ties, reversing the comparator leaves equal elements in
-     * their incoming order, whereas reversing the result flipped them. Keeping
-     * insertion order among equals is the more predictable of the two, and it
-     * saves a full list copy.
+     * Descending reverses the *comparator*, not the sorted list, which avoids a
+     * full list copy.
+     *
+     * `id` is the final tie-breaker, which makes the order **total**. That is not
+     * cosmetic: [toSqlSelect] must break ties the same way or the two interpreters
+     * disagree whenever two entries share a key, and under paging a non-total
+     * order has no stable row sequence across separately loaded pages — an entry
+     * can appear twice or not at all while scrolling. Reversing a comparator that
+     * already includes `id` reverses the tie-break too, exactly as
+     * `ORDER BY key DESC, id DESC` does.
      */
     fun comparator(): Comparator<HistoryEntry> {
-        val ascending: Comparator<HistoryEntry> = when (sortField) {
+        val byKey: Comparator<HistoryEntry> = when (sortField) {
             SortField.DATE -> compareBy { it.effectiveDate }
             SortField.SUBJECT -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.subject }
             SortField.SENDER -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.displaySender }
         }
+        val ascending = byKey.thenBy { it.id }
         return when (sortDirection) {
             SortDirection.ASCENDING -> ascending
             SortDirection.DESCENDING -> ascending.reversed()
@@ -201,8 +207,13 @@ data class HistoryQuery(
             SortField.DATE ->
                 "CASE WHEN email_date > 0 THEN email_date ELSE last_accessed END"
             SortField.SUBJECT -> "subject COLLATE NOCASE"
+            // TRIM, not `!= ''`: the specification uses `ifBlank`, which treats a
+            // whitespace-only name as absent. `!= ''` would not, and the two
+            // interpreters would then disagree for such a row. The key itself stays
+            // untrimmed, matching `ifBlank`'s non-blank branch.
             SortField.SENDER ->
-                "CASE WHEN sender_name != '' THEN sender_name ELSE sender_email END COLLATE NOCASE"
+                "CASE WHEN TRIM(sender_name) != '' THEN sender_name ELSE sender_email END " +
+                    "COLLATE NOCASE"
         }
         val direction = when (sortDirection) {
             SortDirection.ASCENDING -> "ASC"
