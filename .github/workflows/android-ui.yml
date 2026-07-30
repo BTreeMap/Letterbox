@@ -62,8 +62,11 @@ jobs:
           sdkmanager "system-images;android-34;google_apis;x86_64"
           sdkmanager "emulator"
 
+      # Bounded input rather than `yes |`, which dies of SIGPIPE once sdkmanager
+      # stops reading and would fail this step the moment anyone adds
+      # `set -o pipefail` to it.
       - name: Accept Android licenses
-        run: yes | sdkmanager --licenses
+        run: printf 'y\n%.0s' {1..100} | sdkmanager --licenses > /dev/null
 
       # Reuse the native libraries built once by the Build workflow instead of
       # re-running the expensive Android cross-compile here. Only the x86_64 ABI

@@ -111,8 +111,11 @@ jobs:
       - name: Install Android components
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
+      # Bounded input rather than `yes |`, which dies of SIGPIPE once sdkmanager
+      # stops reading and would fail this step the moment anyone adds
+      # `set -o pipefail` to it.
       - name: Accept Android licenses
-        run: yes | sdkmanager --licenses
+        run: printf 'y\n%.0s' {1..100} | sdkmanager --licenses > /dev/null
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6

@@ -168,7 +168,11 @@ jobs:
       - name: Install NDK
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses > /dev/null
+          # Bounded input rather than `yes |`. sdkmanager stops reading once
+          # every licence is accepted, and the SIGPIPE that then kills `yes`
+          # is a pipeline failure under `pipefail`. 200 bytes fits the pipe
+          # buffer, so nothing is ever left writing to a closed pipe.
+          printf 'y\n%.0s' {1..100} | sdkmanager --licenses > /dev/null
           sdkmanager --install "ndk;${NDK_VERSION}"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
 
@@ -256,7 +260,11 @@ jobs:
         run: |
           set -euo pipefail
           sdkmanager "platform-tools" "platforms;${ANDROID_PLATFORM}" "build-tools;${ANDROID_BUILD_TOOLS}"
-          yes | sdkmanager --licenses > /dev/null
+          # Bounded input rather than `yes |`. sdkmanager stops reading once
+          # every licence is accepted, and the SIGPIPE that then kills `yes`
+          # is a pipeline failure under `pipefail`. 200 bytes fits the pipe
+          # buffer, so nothing is ever left writing to a closed pipe.
+          printf 'y\n%.0s' {1..100} | sdkmanager --licenses > /dev/null
 
       # Host toolchain only. Gradle's `cargoHostBuild` builds the libraries the
       # JVM tests load through JNA; it needs no NDK and no Android targets.
@@ -348,7 +356,11 @@ jobs:
         run: |
           set -euo pipefail
           sdkmanager "platform-tools" "platforms;${ANDROID_PLATFORM}" "build-tools;${ANDROID_BUILD_TOOLS}"
-          yes | sdkmanager --licenses > /dev/null
+          # Bounded input rather than `yes |`. sdkmanager stops reading once
+          # every licence is accepted, and the SIGPIPE that then kills `yes`
+          # is a pipeline failure under `pipefail`. 200 bytes fits the pipe
+          # buffer, so nothing is ever left writing to a closed pipe.
+          printf 'y\n%.0s' {1..100} | sdkmanager --licenses > /dev/null
 
       # No Rust toolchain, no NDK, no cargo-ndk: `cargoNdkBuild` is gated on
       # `-PrustBuild=true` and stays skipped, and `assemble` pulls in no task
