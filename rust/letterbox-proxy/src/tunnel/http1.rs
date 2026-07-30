@@ -36,36 +36,85 @@ impl HttpResponse {
     }
 }
 
+/// Headers this codec owns outright.
+///
+/// They frame the message rather than describe the client, so a caller-supplied
+/// copy is never merely redundant: a second `Content-Length` or
+/// `Transfer-Encoding` is how a request is smuggled past a parser, and a second
+/// `Host` picks a different origin than the one the connection was opened to.
+/// A value supplied for any of these is dropped.
+const RESERVED_HEADERS: &[&str] = &[
+    "host",
+    "connection",
+    "accept-encoding",
+    "content-length",
+    "transfer-encoding",
+];
+
+/// The `User-Agent` every tunnelled request carries unless the caller names its
+/// own.
+///
+/// Sending none is not the private option, it is the conspicuous one. Almost no
+/// real client omits this header, so its absence both singles the request out
+/// and gets it refused: Cloudflare and Akamai score a missing `User-Agent` as a
+/// bot and answer 403. That is why remote images failed while the tunnel looked
+/// healthy — `/cdn-cgi/trace`, which the in-app check fetches, is exempt from
+/// bot management and answers anyone. [`crate::update`] already carried its own
+/// `User-Agent` for the same reason, the GitHub API rejecting requests without
+/// one outright; image fetches were the only path left sending none.
+///
+/// Privacy here comes from every install sending the *same* string, not from
+/// sending nothing — a shared value is an anonymity set, a unique or absent one
+/// is a fingerprint. This is Chrome's reduced Android user agent, in which the
+/// OS version is frozen at `10` and the device model at `K` for every device on
+/// every Android release, which makes it the largest such set available.
+pub const USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 \
+                              (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
+
 /// Build a serialised HTTP/1.1 `GET` request with `Connection: close`.
 ///
-/// `extra_headers` are appended verbatim; `Host`, `Connection` and `Accept`
-/// are always supplied by this function so callers cannot accidentally leak
-/// identifying defaults.
+/// Headers come from two places and the rule between them is explicit:
+/// [`RESERVED_HEADERS`] are always this function's and a caller-supplied value
+/// is discarded, while `Accept` and `User-Agent` are *defaults* that a caller
+/// may replace. Emitting a default unconditionally would have put two `Accept`
+/// lines on the wire for any caller that set one.
 pub fn build_get_request(
     host: &str,
     path: &str,
     accept: &str,
     extra_headers: &[(String, String)],
 ) -> Vec<u8> {
-    let mut request = String::with_capacity(256);
+    let supplied = |name: &str| {
+        extra_headers
+            .iter()
+            .any(|(header, _)| header.eq_ignore_ascii_case(name))
+    };
+
+    let mut request = String::with_capacity(512);
     request.push_str("GET ");
     request.push_str(if path.is_empty() { "/" } else { path });
     request.push_str(" HTTP/1.1\r\n");
+
+    // Reserved: ours, unconditionally.
     request.push_str("Host: ");
     request.push_str(host);
-    request.push_str("\r\n");
-    request.push_str("Accept: ");
-    request.push_str(accept);
-    request.push_str("\r\n");
-    request.push_str("Accept-Encoding: identity\r\n");
-    request.push_str("Connection: close\r\n");
+    request.push_str("\r\nAccept-Encoding: identity\r\nConnection: close\r\n");
+
+    // Defaulted: ours only where the caller has not spoken.
+    if !supplied("accept") {
+        request.push_str("Accept: ");
+        request.push_str(accept);
+        request.push_str("\r\n");
+    }
+    if !supplied("user-agent") {
+        request.push_str("User-Agent: ");
+        request.push_str(USER_AGENT);
+        request.push_str("\r\n");
+    }
+
     for (name, value) in extra_headers {
-        // Skip headers we manage ourselves to avoid duplicates / smuggling.
         let lower = name.to_ascii_lowercase();
-        if matches!(
-            lower.as_str(),
-            "host" | "connection" | "accept-encoding" | "content-length" | "transfer-encoding"
-        ) {
+        if RESERVED_HEADERS.contains(&lower.as_str()) {
             continue;
         }
         request.push_str(name);
@@ -200,6 +249,70 @@ mod tests {
         assert!(text.contains("Host: example.com\r\n"));
         assert!(text.contains("Connection: close\r\n"));
         assert!(text.ends_with("\r\n\r\n"));
+    }
+
+    /// The regression this file exists to prevent. A request with no
+    /// `User-Agent` is answered with 403 by every major bot-management service,
+    /// so remote images failed uniformly while the tunnel itself was healthy.
+    #[test]
+    fn always_sends_a_user_agent() {
+        let text = String::from_utf8(build_get_request("example.com", "/i.png", "image/*", &[]))
+            .expect("request is ASCII");
+        assert!(
+            text.contains(&format!("User-Agent: {USER_AGENT}\r\n")),
+            "no User-Agent in:\n{text}"
+        );
+    }
+
+    /// The default is a default, not a mandate: `update` identifies itself to
+    /// the GitHub API. Replacing must not mean *appending*, because two
+    /// `User-Agent` lines is a malformed request.
+    #[test]
+    fn a_caller_supplied_user_agent_replaces_the_default() {
+        let extra = vec![(
+            "User-Agent".to_string(),
+            "Letterbox-UpdateChecker".to_string(),
+        )];
+        let text = String::from_utf8(build_get_request("api.github.com", "/", "*/*", &extra))
+            .expect("request is ASCII");
+        assert_eq!(text.matches("User-Agent:").count(), 1);
+        assert!(text.contains("User-Agent: Letterbox-UpdateChecker\r\n"));
+        assert!(!text.contains("Mozilla/5.0"));
+    }
+
+    /// `Accept` arrives both as a parameter and, potentially, as a caller
+    /// header. Emitting both put two `Accept` lines on the wire.
+    #[test]
+    fn a_caller_supplied_accept_replaces_the_parameter() {
+        // Lowercase on purpose: header names are case-insensitive on the wire,
+        // so the override must match that way and not by spelling.
+        let extra = vec![("accept".to_string(), "text/plain".to_string())];
+        let text = String::from_utf8(build_get_request("example.com", "/", "image/*", &extra))
+            .expect("request is ASCII");
+        let accepts = text
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().starts_with("accept:"))
+            .count();
+        assert_eq!(accepts, 1, "expected one Accept line in:\n{text}");
+        assert!(text.contains("accept: text/plain\r\n"));
+        assert!(!text.contains("image/*"));
+    }
+
+    /// Framing headers are not defaults and cannot be overridden: a second
+    /// `Content-Length` or `Transfer-Encoding` is how a request is smuggled.
+    #[test]
+    fn reserved_headers_cannot_be_overridden() {
+        let extra = vec![
+            ("Content-Length".to_string(), "0".to_string()),
+            ("Transfer-Encoding".to_string(), "chunked".to_string()),
+            ("Accept-Encoding".to_string(), "gzip".to_string()),
+        ];
+        let text = String::from_utf8(build_get_request("example.com", "/", "*/*", &extra))
+            .expect("request is ASCII");
+        assert!(!text.contains("Content-Length"));
+        assert!(!text.contains("chunked"));
+        assert_eq!(text.matches("Accept-Encoding:").count(), 1);
+        assert!(text.contains("Accept-Encoding: identity\r\n"));
     }
 
     #[test]
