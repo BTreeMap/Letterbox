@@ -4,10 +4,10 @@ import android.content.Context
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.joefang.letterbox.ffi.proxy.BatchImageResult
+import org.joefang.letterbox.attempt
+import org.joefang.letterbox.describe
 import org.joefang.letterbox.ffi.proxy.HttpFetchResponse
 import org.joefang.letterbox.ffi.proxy.FetchedResource
-import org.joefang.letterbox.ffi.proxy.ProxyException
 import org.joefang.letterbox.ffi.proxy.ProxyStatus
 import org.joefang.letterbox.ffi.proxy.TlsSelfTestOutcome
 import org.joefang.letterbox.ffi.proxy.TunnelVerification
@@ -129,6 +129,14 @@ class ImageProxyService private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * Whether [proxyInit] has run. `@Volatile` because it is written and read
+     * from different `Dispatchers.IO` threads; without it a coroutine can keep
+     * missing the update and re-initialise for ever. Correctness does not rest
+     * on it — `proxy_init` re-checks under its own lock and is idempotent — so
+     * this is an optimisation that must merely be *visible*, not a lock.
+     */
+    @Volatile
     private var initialized = false
 
     /**
@@ -144,32 +152,30 @@ class ImageProxyService private constructor(private val context: Context) {
     suspend fun initialize(): Boolean = withContext(Dispatchers.IO) {
         if (initialized) return@withContext true
 
-        try {
+        attempt {
             val storageDir = File(context.filesDir, "warp_proxy")
             if (!storageDir.exists()) {
                 storageDir.mkdirs()
             }
-
             proxyInit(storageDir.absolutePath, DEFAULT_CACHE_SIZE)
-            initialized = true
-            true
-        } catch (e: ProxyException) {
-            android.util.Log.e(TAG, "Failed to initialize proxy: ${e.message}", e)
-            false
-        } catch (e: Exception) {
-            android.util.Log.e(TAG, "Unexpected error initializing proxy: ${e.message}", e)
-            false
-        }
+        }.fold(
+            onSuccess = {
+                initialized = true
+                true
+            },
+            onFailure = {
+                android.util.Log.e(TAG, "Failed to initialize proxy: ${it.message}", it)
+                false
+            }
+        )
     }
 
     /**
      * Get the current proxy status.
      */
     suspend fun getStatus(): ProxyStatus? = withContext(Dispatchers.IO) {
-        try {
-            proxyStatus()
-        } catch (e: Exception) {
-            android.util.Log.e(TAG, "Failed to get proxy status: ${e.message}", e)
+        attempt { proxyStatus() }.getOrElse {
+            android.util.Log.e(TAG, "Failed to get proxy status: ${it.message}", it)
             null
         }
     }
@@ -329,20 +335,19 @@ class ImageProxyService private constructor(private val context: Context) {
             return@withContext ResourceFetchResult.Error("Proxy not initialized")
         }
 
-        try {
-            val response = fetch()
-            ResourceFetchResult.Success(
-                mimeType = response.mimeType,
-                data = response.data,
-                fromCache = response.fromCache,
-                finalUrl = response.finalUrl
-            )
-        } catch (e: ProxyException) {
-            ResourceFetchResult.Error(e.message ?: "Unknown error")
-        } catch (e: Exception) {
-            ResourceFetchResult.Error(e.message ?: "Unexpected error")
-        }
+        attempt { fetch() }.fold(
+            onSuccess = { it.asSuccess() },
+            onFailure = { ResourceFetchResult.Error(it.describe("Unexpected error")) }
+        )
     }
+
+    /** Project an FFI record onto the sealed result the app renders. */
+    private fun FetchedResource.asSuccess() = ResourceFetchResult.Success(
+        mimeType = mimeType,
+        data = data,
+        fromCache = fromCache,
+        finalUrl = finalUrl
+    )
 
     /**
      * Fetch multiple images in parallel through the privacy proxy.
@@ -364,25 +369,16 @@ class ImageProxyService private constructor(private val context: Context) {
             }
         }
 
-        try {
-            val results = proxyFetchImagesBatch(urls, maxConcurrent)
-            results.associate { result ->
-                val fetchResult = if (result.success && result.response != null) {
-                    ResourceFetchResult.Success(
-                        mimeType = result.response!!.mimeType,
-                        data = result.response!!.data,
-                        fromCache = result.response!!.fromCache,
-                        finalUrl = result.response!!.finalUrl
-                    )
-                } else {
-                    ResourceFetchResult.Error(result.error ?: "Unknown error")
-                }
-                result.url to fetchResult
+        attempt {
+            proxyFetchImagesBatch(urls, maxConcurrent).associate { result ->
+                // Eliminated on the response, not on `success`. Rust builds all
+                // three fields together so they cannot disagree, but the FFI
+                // cannot say so — re-deriving that here needed four `!!`.
+                result.url to (result.response?.asSuccess()
+                    ?: ResourceFetchResult.Error(result.error ?: "Unknown error"))
             }
-        } catch (e: ProxyException) {
-            urls.associateWith { ResourceFetchResult.Error(e.message ?: "Unknown error") }
-        } catch (e: Exception) {
-            urls.associateWith { ResourceFetchResult.Error(e.message ?: "Unexpected error") }
+        }.getOrElse { failure ->
+            urls.associateWith { ResourceFetchResult.Error(failure.describe("Unexpected error")) }
         }
     }
 
@@ -390,13 +386,13 @@ class ImageProxyService private constructor(private val context: Context) {
      * Clear the in-memory image cache.
      */
     suspend fun clearCache(): Boolean = withContext(Dispatchers.IO) {
-        try {
-            proxyClearCache()
-            true
-        } catch (e: Exception) {
-            android.util.Log.e(TAG, "Failed to clear cache: ${e.message}", e)
-            false
-        }
+        attempt { proxyClearCache() }.fold(
+            onSuccess = { true },
+            onFailure = {
+                android.util.Log.e(TAG, "Failed to clear cache: ${it.message}", it)
+                false
+            }
+        )
     }
 
     /**
@@ -405,13 +401,15 @@ class ImageProxyService private constructor(private val context: Context) {
      * After calling this, the service must be initialized again before use.
      */
     suspend fun shutdown(): Boolean = withContext(Dispatchers.IO) {
-        try {
-            proxyShutdown()
-            initialized = false
-            true
-        } catch (e: Exception) {
-            android.util.Log.e(TAG, "Failed to shutdown proxy: ${e.message}", e)
-            false
-        }
+        attempt { proxyShutdown() }.fold(
+            onSuccess = {
+                initialized = false
+                true
+            },
+            onFailure = {
+                android.util.Log.e(TAG, "Failed to shutdown proxy: ${it.message}", it)
+                false
+            }
+        )
     }
 }

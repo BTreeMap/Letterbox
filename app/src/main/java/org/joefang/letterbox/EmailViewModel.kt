@@ -162,8 +162,8 @@ class EmailViewModel(
     fun ingestFromUri(bytes: ByteArray, filename: String, uri: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
-            
-            try {
+
+            attempt {
                 // Parse the email to extract metadata for indexing
                 val (parsed, metadata) = parseEmailBytesWithMetadata(bytes)
                 val displayName = parsed?.subject?.takeIf { it.isNotBlank() } ?: filename
@@ -190,10 +190,10 @@ class EmailViewModel(
                         errorMessage = "Could not parse email"
                     ) }
                 }
-            } catch (e: Exception) {
+            }.onFailure { failure ->
                 _uiState.update { it.copy(
                     isLoading = false,
-                    errorMessage = "Error: ${e.message}"
+                    errorMessage = "Error: ${failure.message}"
                 ) }
             }
         }
@@ -206,8 +206,8 @@ class EmailViewModel(
     fun openHistoryEntry(entry: HistoryEntry) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
-            
-            try {
+
+            attempt {
                 // Update last accessed time
                 repository.access(entry.id)
                 
@@ -242,10 +242,10 @@ class EmailViewModel(
                         errorMessage = "Email file not found"
                     ) }
                 }
-            } catch (e: Exception) {
+            }.onFailure { failure ->
                 _uiState.update { it.copy(
                     isLoading = false,
-                    errorMessage = "Error: ${e.message}"
+                    errorMessage = "Error: ${failure.message}"
                 ) }
             }
         }

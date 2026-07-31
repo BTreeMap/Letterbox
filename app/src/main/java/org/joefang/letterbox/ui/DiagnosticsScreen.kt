@@ -31,8 +31,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.CancellationException
+import org.joefang.letterbox.attempt
 import org.joefang.letterbox.data.ImageProxyService
+import org.joefang.letterbox.describe
 import org.joefang.letterbox.ffi.proxy.TunnelVerification
 import org.joefang.letterbox.ffi.proxy.WarpDiagnostics
 import org.joefang.letterbox.ffi.proxy.WarpStoredConfig
@@ -83,34 +84,6 @@ private sealed interface VerifyState {
     data class Done(val result: TunnelVerification) : VerifyState
     data class Failed(val message: String) : VerifyState
 }
-
-/**
- * Run [block], capturing a genuine failure as a value and letting cancellation
- * through untouched.
- *
- * The distinction is the whole reason this exists. `catch (e: Exception)` — and
- * `runCatching`, which is worse, catching `Throwable` — also swallow
- * `CancellationException`, and a swallowed cancellation is not an error that got
- * mishandled: it is a *non-event* promoted to an error. That is where "Live
- * tunnel: Failed — The coroutine scope left the composition" came from. The
- * tunnel was fine. Compose had cancelled the scope the work was launched in,
- * the resulting exception was caught by a handler looking for network faults,
- * and its message was rendered as the tunnel's verdict.
- *
- * Rethrowing also keeps structured concurrency intact: a coroutine that absorbs
- * its own cancellation goes on running after its caller has given up on it.
- */
-private inline fun <T> attempt(block: () -> T): Result<T> =
-    try {
-        Result.success(block())
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        Result.failure(e)
-    }
-
-/** The failure's message, or [fallback] when it carries none. */
-private fun Throwable.describe(fallback: String): String = message ?: fallback
 
 /**
  * Developer dialog for inspecting and repairing the WARP tunnel.
