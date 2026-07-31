@@ -24,7 +24,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -32,7 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import org.joefang.letterbox.data.ImageProxyService
 import org.joefang.letterbox.ffi.proxy.TunnelVerification
 import org.joefang.letterbox.ffi.proxy.WarpDiagnostics
@@ -72,6 +71,11 @@ private sealed interface LiveState {
  *
  * [Idle] rather than a nullable result, so "never run" is a state the UI names
  * instead of a blank that could be mistaken for a check that found nothing.
+ *
+ * [Running] is also the *request*: the button does nothing but move into it, and
+ * the effect that performs the check is keyed on this value. There is therefore
+ * no second place recording that a check is in flight which could disagree with
+ * the one the screen draws from.
  */
 private sealed interface VerifyState {
     data object Idle : VerifyState
@@ -79,6 +83,34 @@ private sealed interface VerifyState {
     data class Done(val result: TunnelVerification) : VerifyState
     data class Failed(val message: String) : VerifyState
 }
+
+/**
+ * Run [block], capturing a genuine failure as a value and letting cancellation
+ * through untouched.
+ *
+ * The distinction is the whole reason this exists. `catch (e: Exception)` — and
+ * `runCatching`, which is worse, catching `Throwable` — also swallow
+ * `CancellationException`, and a swallowed cancellation is not an error that got
+ * mishandled: it is a *non-event* promoted to an error. That is where "Live
+ * tunnel: Failed — The coroutine scope left the composition" came from. The
+ * tunnel was fine. Compose had cancelled the scope the work was launched in,
+ * the resulting exception was caught by a handler looking for network faults,
+ * and its message was rendered as the tunnel's verdict.
+ *
+ * Rethrowing also keeps structured concurrency intact: a coroutine that absorbs
+ * its own cancellation goes on running after its caller has given up on it.
+ */
+private inline fun <T> attempt(block: () -> T): Result<T> =
+    try {
+        Result.success(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+/** The failure's message, or [fallback] when it carries none. */
+private fun Throwable.describe(fallback: String): String = message ?: fallback
 
 /**
  * Developer dialog for inspecting and repairing the WARP tunnel.
@@ -94,7 +126,6 @@ private sealed interface VerifyState {
 @Composable
 fun DiagnosticsDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var reloadKey by remember { mutableIntStateOf(0) }
     var storedState by remember { mutableStateOf<StoredState>(StoredState.Loading) }
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Loading) }
@@ -118,20 +149,61 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
         liveState = LiveState.Loading
         val service = ImageProxyService.getInstance(context)
 
-        storedState = try {
-            StoredState.Loaded(service.getStoredConfig())
-        } catch (e: Exception) {
-            StoredState.Failed(e.message ?: "Failed to read stored configuration")
-        }
+        storedState = attempt { service.getStoredConfig() }.fold(
+            onSuccess = { StoredState.Loaded(it) },
+            onFailure = { StoredState.Failed(it.describe("Failed to read stored configuration")) }
+        )
 
-        liveState = try {
-            LiveState.Loaded(service.getDiagnostics())
-        } catch (e: Exception) {
-            LiveState.Failed(e.message ?: "Failed to establish the tunnel")
-        }
+        liveState = attempt { service.getDiagnostics() }.fold(
+            onSuccess = { LiveState.Loaded(it) },
+            onFailure = { LiveState.Failed(it.describe("Failed to establish the tunnel")) }
+        )
 
         // Read last, so it reflects everything above it.
         lastFetchError = service.getStatus()?.lastError
+    }
+
+    // `resetting` is the request, exactly as `VerifyState.Running` is: the
+    // dialog's confirm button only moves into it. Running the work in an effect
+    // keyed on that state, rather than in a scope the button borrows, is what
+    // makes cancellation mean "nobody is looking any more" — the flag and the
+    // work it describes are cancelled together and cannot come apart. Launched
+    // from the button, a cancellation between `resetting = true` and
+    // `resetting = false` left the spinner up for ever.
+    LaunchedEffect(resetting) {
+        if (!resetting) return@LaunchedEffect
+        resetError = attempt { ImageProxyService.getInstance(context).resetIdentity() }
+            .exceptionOrNull()
+            ?.describe("Reset failed")
+        // Last, because it re-keys this effect and ends it.
+        reloadKey++
+        resetting = false
+    }
+
+    // The end-to-end check, interpreting `VerifyState.Running`.
+    //
+    // Both results are computed before either is published: publishing
+    // `verifyState` re-keys this effect and cancels what remains of it, so an
+    // assignment made partway through would strand the rest. Compute, then
+    // commit, with the re-keying write last.
+    LaunchedEffect(verifyState) {
+        if (verifyState !is VerifyState.Running) return@LaunchedEffect
+        val service = ImageProxyService.getInstance(context)
+
+        val verified = attempt { service.verifyTunnel() }.fold(
+            onSuccess = { VerifyState.Done(it) },
+            onFailure = { VerifyState.Failed(it.describe("Verification failed")) }
+        )
+
+        // The check moves real bytes, so the counters above are now stale;
+        // refresh them rather than leave two numbers on screen that disagree.
+        val refreshed = attempt { service.getDiagnostics() }.fold(
+            onSuccess = { LiveState.Loaded(it) },
+            onFailure = { LiveState.Failed(it.describe("Failed to re-read the tunnel")) }
+        )
+
+        liveState = refreshed
+        verifyState = verified
     }
 
     if (confirmReset) {
@@ -140,16 +212,6 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
                 confirmReset = false
                 resetError = null
                 resetting = true
-                scope.launch {
-                    resetError = try {
-                        ImageProxyService.getInstance(context).resetIdentity()
-                        null
-                    } catch (e: Exception) {
-                        e.message ?: "Reset failed"
-                    }
-                    resetting = false
-                    reloadKey++
-                }
             },
             onDismiss = { confirmReset = false }
         )
@@ -188,28 +250,9 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
                 EndToEndSection(
                     state = verifyState,
                     enabled = liveState is LiveState.Loaded,
-                    onRun = {
-                        verifyState = VerifyState.Running
-                        scope.launch {
-                            verifyState = try {
-                                VerifyState.Done(
-                                    ImageProxyService.getInstance(context).verifyTunnel()
-                                )
-                            } catch (e: Exception) {
-                                VerifyState.Failed(e.message ?: "Verification failed")
-                            }
-                            // The check moves real bytes, so the counters above
-                            // are now stale; refresh them rather than leave two
-                            // numbers on screen that disagree.
-                            liveState = try {
-                                LiveState.Loaded(
-                                    ImageProxyService.getInstance(context).getDiagnostics()
-                                )
-                            } catch (e: Exception) {
-                                LiveState.Failed(e.message ?: "Failed to re-read the tunnel")
-                            }
-                        }
-                    }
+                    // Nothing but a state transition. The work lives in the
+                    // effect keyed on `verifyState` below.
+                    onRun = { verifyState = VerifyState.Running }
                 )
 
                 LastFetchErrorSection(lastFetchError)
