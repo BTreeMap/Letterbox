@@ -5,7 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import kotlinx.coroutines.runBlocking
-import org.joefang.letterbox.data.ImageFetchResult
+import org.joefang.letterbox.data.ResourceFetchResult
 import org.joefang.letterbox.data.ImageProxyService
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -106,7 +106,7 @@ class RemoteImageWarpE2ETest {
         }
 
         when (result) {
-            is ImageFetchResult.Success -> {
+            is ResourceFetchResult.Success -> {
                 assertTrue(
                     "Fetched image should contain bytes",
                     result.data.isNotEmpty()
@@ -116,7 +116,7 @@ class RemoteImageWarpE2ETest {
                     result.mimeType.startsWith("image/")
                 )
             }
-            is ImageFetchResult.Error ->
+            is ResourceFetchResult.Error ->
                 // Treat a network-level error as an environment skip, not a failure.
                 assumeNoException(
                     "Image fetch failed (likely no connectivity): ${result.message}",

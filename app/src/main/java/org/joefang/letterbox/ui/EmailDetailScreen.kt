@@ -68,7 +68,7 @@ import androidx.core.content.FileProvider
 import androidx.browser.customtabs.CustomTabsIntent
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import org.joefang.letterbox.data.ImageFetchResult
+import org.joefang.letterbox.data.ResourceFetchResult
 import org.joefang.letterbox.data.ImageProxyService
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -585,9 +585,22 @@ private fun EmailHeader(
 
 /**
  * Secure WebView that only loads content we provide.
- * - Disables file access for security
+ * - Disables file access and scripting for security
  * - Intercepts cid: URLs to load inline images from email attachments
- * - Optionally loads remote images through the WARP privacy proxy
+ * - Optionally loads remote subresources through the WARP privacy proxy
+ *
+ * ## What the remote-content policy is about
+ *
+ * Contacting a third party, not fetching a picture. A remote stylesheet or web
+ * font tells its host that this message was opened, on this network, at this
+ * moment, exactly as a tracking pixel does — so [allowNetworkLoads] gates every
+ * external subresource alike, and content already inside the message (`cid:`
+ * attachments, `data:` URIs) is never gated at all, because there is nobody for
+ * it to tell.
+ *
+ * Scripting is off and stays off, and the proxy independently refuses to hand
+ * back executable content, so "no code runs from a message" does not rest on the
+ * renderer alone.
  *
  * ## Why the policy is read through [rememberUpdatedState]
  *
@@ -660,29 +673,20 @@ private fun EmailWebView(
                                 )
                             } else {
                                 // Return 404 for missing cid: resources
-                                WebResourceResponse(
-                                    "text/plain",
-                                    "utf-8",
-                                    404,
-                                    "Not Found",
-                                    emptyMap(),
-                                    ByteArrayInputStream("Resource not found".toByteArray())
-                                )
+                                blocked(404, "Not Found")
                             }
                         }
 
                         // Handle HTTP/HTTPS requests
                         if (url.startsWith("http://") || url.startsWith("https://")) {
-                            // Only fetch images if allowed
+                            // The consent gate, and the only one. It covers every
+                            // external subresource rather than images alone: a web
+                            // font and a stylesheet each contact a third party and
+                            // report the message was opened just as a picture does,
+                            // so a policy that let them through while blocking
+                            // images would leak exactly what it set out to protect.
                             if (!currentAllowNetworkLoads) {
-                                return WebResourceResponse(
-                                    "text/plain",
-                                    "utf-8",
-                                    403,
-                                    "Forbidden",
-                                    emptyMap(),
-                                    ByteArrayInputStream("External resources are blocked for security".toByteArray())
-                                )
+                                return blocked(403, "Forbidden")
                             }
 
                             // If not using proxy, let WebView handle directly
@@ -696,44 +700,42 @@ private fun EmailWebView(
                             // ImageProxyService.getInstance() is a thread-safe singleton.
                             return try {
                                 val proxyService = ImageProxyService.getInstance(context)
+                                // The renderer already said what it wants; asking on
+                                // its behalf for something else is what made every
+                                // stylesheet fail as "expected image, got text/css".
+                                val accept = request?.requestHeaders
+                                    ?.entries
+                                    ?.firstOrNull { it.key.equals("Accept", ignoreCase = true) }
+                                    ?.value
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: "*/*"
                                 val result = runBlocking {
-                                    proxyService.fetchImage(url)
+                                    proxyService.fetchSubresource(url, accept)
                                 }
-                                
+
                                 when (result) {
-                                    is ImageFetchResult.Success -> {
+                                    is ResourceFetchResult.Success -> {
                                         WebResourceResponse(
                                             result.mimeType,
                                             null,
                                             ByteArrayInputStream(result.data)
                                         )
                                     }
-                                    is ImageFetchResult.Error -> {
+                                    is ResourceFetchResult.Error -> {
                                         Log.w("EmailWebView", "Proxy fetch failed for $url: ${result.message}")
-                                        WebResourceResponse(
-                                            "text/plain",
-                                            "utf-8",
-                                            502,
-                                            "Bad Gateway",
-                                            emptyMap(),
-                                            ByteArrayInputStream("Failed to fetch image: ${result.message}".toByteArray())
-                                        )
+                                        blocked(502, "Bad Gateway")
                                     }
                                 }
                             } catch (e: Exception) {
                                 Log.e("EmailWebView", "Proxy error for $url", e)
-                                WebResourceResponse(
-                                    "text/plain",
-                                    "utf-8",
-                                    500,
-                                    "Internal Error",
-                                    emptyMap(),
-                                    ByteArrayInputStream("Proxy error: ${e.message}".toByteArray())
-                                )
+                                blocked(500, "Internal Error")
                             }
                         }
 
-                        // For other schemes, return null to let WebView handle them
+                        // For other schemes — `data:` above all — return null and
+                        // let the WebView handle them. A base64 image is already in
+                        // the message: it contacts nobody, so there is nothing for
+                        // the remote-content policy to decide about it.
                         return null
                     }
 
@@ -782,12 +784,26 @@ private fun EmailWebView(
         },
         update = { webView ->
             // Applied on every recomposition, so the gate tracks the policy.
-            // `blockNetworkLoads` must be false for the proxy path: the
-            // interceptor only runs when the WebView actually attempts a
-            // request, so blocking here would suppress the interception itself
-            // rather than the network access it performs.
+            // `blockNetworkLoads` is scoped to what its name says — resources
+            // reached over http/https — and is a second lock behind the
+            // interceptor, at the network layer rather than the callback.
+            //
+            // `blockNetworkImage` is *not* its narrower sibling and is gone. The
+            // public API documents it as covering "images specified using
+            // network URI schemes", but the WebView glue implements it as
+            // `AwSettings.setImagesEnabled(!flag)` — the global image switch,
+            // which Android's own documentation describes as controlling "all
+            // images, including those embedded using the data URI scheme". So
+            // every message whose pictures were inline — a base64 `data:` URI,
+            // or a `cid:` attachment this very client serves out of the message
+            // itself — rendered blank whenever remote content was blocked, which
+            // is the default. Nothing was fetched, nothing failed, and no
+            // diagnostic appeared anywhere, because no request was ever made.
+            //
+            // The name promised a predicate about the network; the
+            // implementation applied a predicate about images. Trusting the name
+            // hid a bug affecting messages that never touch the network at all.
             webView.settings.blockNetworkLoads = !allowNetworkLoads
-            webView.settings.blockNetworkImage = !allowNetworkLoads
 
             val key = html to allowNetworkLoads
             if (lastLoaded[0] != key) {
@@ -798,6 +814,24 @@ private fun EmailWebView(
         modifier = modifier
     )
 }
+
+/**
+ * The response for a subresource this app will not supply.
+ *
+ * The body is deliberately empty. It used to carry an explanatory sentence,
+ * which was harmless for an `<img>` and actively wrong for everything else:
+ * handed to the CSS parser as a stylesheet, "External resources are blocked for
+ * security" is a syntax error, and the prose was never visible to anyone in
+ * either case.
+ */
+private fun blocked(status: Int, reason: String) = WebResourceResponse(
+    "text/plain",
+    "utf-8",
+    status,
+    reason,
+    emptyMap(),
+    ByteArrayInputStream(ByteArray(0))
+)
 
 /**
  * Guess MIME type based on Content-ID extension or file magic bytes.

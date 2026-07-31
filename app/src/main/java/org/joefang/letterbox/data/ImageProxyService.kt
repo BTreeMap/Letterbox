@@ -6,7 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.joefang.letterbox.ffi.proxy.BatchImageResult
 import org.joefang.letterbox.ffi.proxy.HttpFetchResponse
-import org.joefang.letterbox.ffi.proxy.ImageResponse
+import org.joefang.letterbox.ffi.proxy.FetchedResource
 import org.joefang.letterbox.ffi.proxy.ProxyException
 import org.joefang.letterbox.ffi.proxy.ProxyStatus
 import org.joefang.letterbox.ffi.proxy.TlsSelfTestOutcome
@@ -19,6 +19,7 @@ import org.joefang.letterbox.ffi.proxy.proxyClearCache
 import org.joefang.letterbox.ffi.proxy.proxyDiagnostics
 import org.joefang.letterbox.ffi.proxy.proxyFetchImage
 import org.joefang.letterbox.ffi.proxy.proxyFetchImagesBatch
+import org.joefang.letterbox.ffi.proxy.proxyFetchSubresource
 import org.joefang.letterbox.ffi.proxy.proxyFetchUrl
 import org.joefang.letterbox.ffi.proxy.proxyInit
 import org.joefang.letterbox.ffi.proxy.proxyResetIdentity
@@ -30,16 +31,22 @@ import org.joefang.letterbox.ffi.proxy.proxyVerifyTunnel
 import java.io.File
 
 /**
- * Result of an image fetch operation.
+ * Result of fetching one subresource through the proxy.
+ *
+ * This was `ImageFetchResult`, and the rename is the point rather than tidying:
+ * the renderer asks this service for every external thing a message references —
+ * pictures, stylesheets, web fonts — and the old name was the visible end of a
+ * chain that refused all but the first. A message whose layout lives in a remote
+ * stylesheet rendered unstyled, and reported "expected image, got text/css".
  */
-sealed class ImageFetchResult {
-    /** Successfully fetched image */
+sealed class ResourceFetchResult {
+    /** Successfully fetched bytes, with the type the server declared. */
     data class Success(
         val mimeType: String,
         val data: ByteArray,
         val fromCache: Boolean,
         val finalUrl: String
-    ) : ImageFetchResult() {
+    ) : ResourceFetchResult() {
         /**
          * Convert the image to a data URI for embedding in HTML.
          */
@@ -68,7 +75,7 @@ sealed class ImageFetchResult {
     }
 
     /** Failed to fetch image */
-    data class Error(val message: String) : ImageFetchResult()
+    data class Error(val message: String) : ResourceFetchResult()
 }
 
 /**
@@ -88,10 +95,10 @@ sealed class ImageFetchResult {
  * 
  * val result = service.fetchImage("https://example.com/image.png")
  * when (result) {
- *     is ImageFetchResult.Success -> {
+ *     is ResourceFetchResult.Success -> {
  *         // Use result.data or result.toDataUri()
  *     }
- *     is ImageFetchResult.Error -> {
+ *     is ResourceFetchResult.Error -> {
  *         Log.e(TAG, "Failed: ${result.message}")
  *     }
  * }
@@ -267,7 +274,35 @@ class ImageProxyService private constructor(private val context: Context) {
     }
 
     /**
-     * Fetch a single image through the privacy proxy.
+     * Fetch one subresource a rendered message referenced — image, stylesheet,
+     * web font, anything inert.
+     *
+     * This is what the WebView's interceptor calls, and it imposes no content
+     * type of its own: `accept` is forwarded from the renderer's own request, so
+     * the far end is told what the page actually wants rather than what this
+     * layer assumed it wanted. The proxy still refuses executable content; see
+     * `is_active_content` in `letterbox-proxy`.
+     *
+     * @param url the URL the message referenced
+     * @param accept the renderer's `Accept` header for this request
+     * @param headers optional custom headers to include
+     */
+    suspend fun fetchSubresource(
+        url: String,
+        accept: String = "*/*",
+        headers: Map<String, String>? = null
+    ): ResourceFetchResult = fetching {
+        proxyFetchSubresource(url, accept, headers)
+    }
+
+    /**
+     * Fetch a single image through the privacy proxy, refusing anything that is
+     * not one.
+     *
+     * Distinct from [fetchSubresource] because the callers differ in kind: this
+     * one is for code that wants a picture specifically and has nothing sensible
+     * to do with a stylesheet. The renderer is not such a caller, and treating it
+     * as one is what broke remote content.
      *
      * @param url The URL of the image to fetch
      * @param headers Optional custom headers to include in the request
@@ -276,26 +311,36 @@ class ImageProxyService private constructor(private val context: Context) {
     suspend fun fetchImage(
         url: String,
         headers: Map<String, String>? = null
-    ): ImageFetchResult = withContext(Dispatchers.IO) {
-        if (!initialized) {
-            val initResult = initialize()
-            if (!initResult) {
-                return@withContext ImageFetchResult.Error("Proxy not initialized")
-            }
+    ): ResourceFetchResult = fetching {
+        proxyFetchImage(url, headers)
+    }
+
+    /**
+     * Run one FFI fetch, mapping both of its failure modes onto the error case.
+     *
+     * The two fetch entry points differ only in which FFI call they make; the
+     * initialise-first rule and the exception-to-value mapping are the same
+     * operation and are written once.
+     */
+    private suspend inline fun fetching(
+        crossinline fetch: () -> FetchedResource
+    ): ResourceFetchResult = withContext(Dispatchers.IO) {
+        if (!initialized && !initialize()) {
+            return@withContext ResourceFetchResult.Error("Proxy not initialized")
         }
 
         try {
-            val response = proxyFetchImage(url, headers)
-            ImageFetchResult.Success(
+            val response = fetch()
+            ResourceFetchResult.Success(
                 mimeType = response.mimeType,
                 data = response.data,
                 fromCache = response.fromCache,
                 finalUrl = response.finalUrl
             )
         } catch (e: ProxyException) {
-            ImageFetchResult.Error(e.message ?: "Unknown error")
+            ResourceFetchResult.Error(e.message ?: "Unknown error")
         } catch (e: Exception) {
-            ImageFetchResult.Error(e.message ?: "Unexpected error")
+            ResourceFetchResult.Error(e.message ?: "Unexpected error")
         }
     }
 
@@ -309,12 +354,12 @@ class ImageProxyService private constructor(private val context: Context) {
     suspend fun fetchImages(
         urls: List<String>,
         maxConcurrent: UInt = MAX_CONCURRENT_FETCHES
-    ): Map<String, ImageFetchResult> = withContext(Dispatchers.IO) {
+    ): Map<String, ResourceFetchResult> = withContext(Dispatchers.IO) {
         if (!initialized) {
             val initResult = initialize()
             if (!initResult) {
                 return@withContext urls.associateWith {
-                    ImageFetchResult.Error("Proxy not initialized")
+                    ResourceFetchResult.Error("Proxy not initialized")
                 }
             }
         }
@@ -323,21 +368,21 @@ class ImageProxyService private constructor(private val context: Context) {
             val results = proxyFetchImagesBatch(urls, maxConcurrent)
             results.associate { result ->
                 val fetchResult = if (result.success && result.response != null) {
-                    ImageFetchResult.Success(
+                    ResourceFetchResult.Success(
                         mimeType = result.response!!.mimeType,
                         data = result.response!!.data,
                         fromCache = result.response!!.fromCache,
                         finalUrl = result.response!!.finalUrl
                     )
                 } else {
-                    ImageFetchResult.Error(result.error ?: "Unknown error")
+                    ResourceFetchResult.Error(result.error ?: "Unknown error")
                 }
                 result.url to fetchResult
             }
         } catch (e: ProxyException) {
-            urls.associateWith { ImageFetchResult.Error(e.message ?: "Unknown error") }
+            urls.associateWith { ResourceFetchResult.Error(e.message ?: "Unknown error") }
         } catch (e: Exception) {
-            urls.associateWith { ImageFetchResult.Error(e.message ?: "Unexpected error") }
+            urls.associateWith { ResourceFetchResult.Error(e.message ?: "Unexpected error") }
         }
     }
 

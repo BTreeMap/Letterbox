@@ -281,6 +281,83 @@ class ImageProxyTest {
         }
     }
 
+    /**
+     * The renderer's entry point applies the same scheme gate as the image one.
+     *
+     * `proxyFetchSubresource` deliberately imposes no *content type*, so this
+     * test guards the boundary that does remain: the set of fetchable schemes.
+     * Loosening one entry point without the other would let a message reach
+     * `file://` through whichever door was left open.
+     */
+    @Test
+    fun `proxy fetch subresource rejects non-http schemes`() {
+        val tempDir = java.io.File.createTempFile("proxy_subresource_test", "").apply {
+            delete()
+            mkdirs()
+        }
+
+        try {
+            proxyInit(tempDir.absolutePath, 100u)
+
+            for (url in listOf(
+                "file:///etc/passwd",
+                "javascript:alert('xss')",
+                "content://media/external/images/1",
+                "not-a-url"
+            )) {
+                assertFailsWith<ProxyException.InvalidUrl>("$url should be refused") {
+                    proxyFetchSubresource(url, "*/*", null)
+                }
+            }
+        } finally {
+            tempDir.deleteRecursively()
+            try {
+                proxyShutdown()
+            } catch (e: Exception) {
+                // Ignore shutdown errors
+            }
+        }
+    }
+
+    /**
+     * The regression that made every remote stylesheet and web font fail.
+     *
+     * The renderer's only route to the tunnel demanded `image/*`, so a message
+     * whose layout lived in a remote stylesheet reported "expected image, got
+     * text/css" and rendered unstyled. A subresource fetch must therefore be
+     * willing to *ask* for something other than an image; that it accepts the
+     * `Accept` at all is the property under test here, since anything further
+     * needs a network the host tests do not have.
+     */
+    @Test
+    fun `proxy fetch subresource accepts a non-image Accept`() {
+        val tempDir = java.io.File.createTempFile("proxy_css_test", "").apply {
+            delete()
+            mkdirs()
+        }
+
+        try {
+            proxyInit(tempDir.absolutePath, 100u)
+
+            try {
+                proxyFetchSubresource("https://example.com/site.css", "text/css,*/*;q=0.1", null)
+            } catch (e: ProxyException.InvalidUrl) {
+                throw AssertionError("https:// should be accepted, got InvalidUrl")
+            } catch (e: ProxyException.InvalidContentType) {
+                throw AssertionError("a subresource fetch must not require an image")
+            } catch (e: ProxyException) {
+                // Any other failure is the absent network, which is expected.
+            }
+        } finally {
+            tempDir.deleteRecursively()
+            try {
+                proxyShutdown()
+            } catch (e: Exception) {
+                // Ignore shutdown errors
+            }
+        }
+    }
+
     @Test
     fun `proxy accepts http scheme URLs`() {
         val tempDir = java.io.File.createTempFile("proxy_http_test", "").apply {
