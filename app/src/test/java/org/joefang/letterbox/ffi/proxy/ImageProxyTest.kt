@@ -322,7 +322,7 @@ class ImageProxyTest {
     /**
      * The regression that made every remote stylesheet and web font fail.
      *
-     * The renderer's only route to the tunnel demanded `image/*`, so a message
+     * The renderer's only route to the tunnel demanded an image type, so a message
      * whose layout lived in a remote stylesheet reported "expected image, got
      * text/css" and rendered unstyled. A subresource fetch must therefore be
      * willing to *ask* for something other than an image; that it accepts the
