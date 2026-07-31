@@ -6,7 +6,7 @@
 //! resolver IP (`1.1.1.1`) is a literal, so DoH itself needs no bootstrap DNS.
 
 use crate::error::ProxyError;
-use crate::tunnel::http1::{build_get_request, parse_response};
+use crate::tunnel::http1::{build_get_request, parse_response, ClientProfile};
 use crate::tunnel::stack::WarpTunnel;
 use crate::tunnel::tls::request_https;
 use serde::Deserialize;
@@ -67,7 +67,11 @@ pub fn resolve(
     }
 
     let path = format!("/dns-query?name={host}&type=A");
-    let request = build_get_request(DOH_HOST, &path, "application/dns-json", &[]);
+    // A protocol call, not a page load: presenting Chrome's client hints to a
+    // resolver would claim a browser is asking, which is both false and, for
+    // a JSON DNS endpoint, no help at all.
+    let profile = ClientProfile::api("Letterbox-DoH", "application/dns-json");
+    let request = build_get_request(DOH_HOST, &path, &profile, &[]);
 
     let raw = request_https(
         tunnel,

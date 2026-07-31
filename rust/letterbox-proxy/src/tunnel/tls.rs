@@ -28,13 +28,22 @@ fn client_config() -> Arc<ClientConfig> {
             let mut roots = RootCertStore::empty();
             roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-            let config = ClientConfig::builder_with_provider(Arc::new(
+            let mut config = ClientConfig::builder_with_provider(Arc::new(
                 rustls::crypto::ring::default_provider(),
             ))
             .with_safe_default_protocol_versions()
             .expect("ring provider supports the default protocol versions")
             .with_root_certificates(roots)
             .with_no_client_auth();
+
+            // Offering no ALPN at all is a browser tell in its own right: every
+            // one negotiates it, so its absence is visible in the ClientHello
+            // before a single byte of HTTP is sent, and bot-management services
+            // read exactly that. Only `http/1.1` is offered because it is the
+            // only protocol this client speaks — advertising `h2` alongside
+            // Chrome's user agent would look more convincing right up to the
+            // point a server selected it and the connection failed.
+            config.alpn_protocols = vec![b"http/1.1".to_vec()];
 
             Arc::new(config)
         })

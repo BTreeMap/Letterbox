@@ -58,6 +58,19 @@ pub enum ProxyError {
         content_type: String,
     },
 
+    /// The response was executable content, which a message is never served.
+    ///
+    /// Distinct from [`ProxyError::InvalidContentType`] on purpose: that one
+    /// says a caller asked for a picture and got something else, which is
+    /// ordinary and often the server's doing. This one says a mail server
+    /// answered a subresource request with code, which is a security event and
+    /// should read as one in the diagnostics screen.
+    #[error("Refused executable content: {content_type}")]
+    ActiveContentRefused {
+        /// The refused content type
+        content_type: String,
+    },
+
     /// The response is too large.
     #[error("Response too large: {size} bytes (max: {max_size})")]
     ResponseTooLarge {

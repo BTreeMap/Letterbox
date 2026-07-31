@@ -69,6 +69,18 @@ serde_json = "1.0"
 # URL parsing
 url = "2.5"
 
+# Content-Encoding for tunnelled fetches.
+#
+# Not a bandwidth optimisation: a client that advertises `Accept-Encoding:
+# identity` is marked as automation before any other header is read, and the
+# 403s that follow are what kept remote images from loading. Advertising
+# compression means being able to undo it.
+#
+# `default-features = false` plus `rust_backend` keeps this pure Rust
+# (miniz_oxide). The zlib backends would add a C dependency to a library that is
+# cross-compiled for three Android ABIs.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+
 # Logging
 log = "0.4"
 env_logger = "0.11"

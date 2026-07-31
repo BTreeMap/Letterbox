@@ -1,15 +1,17 @@
-//! Image/URL fetching over the WARP tunnel.
+//! Subresource/URL fetching over the WARP tunnel.
 //!
 //! Every request is resolved via DoH and carried over the tunnel — there is no
 //! direct (non-tunnelled) network path, so the user's real IP is never exposed
-//! to image servers or the update endpoint. The module exposes a generic
-//! [`fetch`] used both for images and for the GitHub update check, plus pure
-//! magic-byte helpers for content sniffing/validation.
+//! to the servers a message references or to the update endpoint. The module
+//! exposes a generic [`fetch`] serving page subresources of every type, the
+//! GitHub update check and the trace probe alike, plus pure predicates over a
+//! response's content type: [`is_active_content`], which is a security rule, and
+//! the magic-byte helpers, which are sniffing aids.
 
 use crate::config::FetchLimits;
 use crate::error::ProxyError;
 use crate::tunnel::dns::resolve;
-use crate::tunnel::http1::{build_get_request, parse_response};
+use crate::tunnel::http1::{build_get_request, parse_response, ClientProfile, ContentCoding};
 use crate::tunnel::stack::WarpTunnel;
 use crate::tunnel::tls::request_https;
 use std::io::{Read, Write};
@@ -35,13 +37,15 @@ type Headers = [(String, String)];
 /// Fetch `url` through the tunnel, following up to `limits.max_redirects`.
 ///
 /// Content-type *filtering* is intentionally left to the caller so this can
-/// serve both image fetches (image/* only) and the JSON update check.
+/// serve page subresources of any type, the JSON update check and the trace
+/// probe alike. What a fetch is *for* decides which types are acceptable; the
+/// transport has no opinion.
 pub fn fetch(
     tunnel: &mut WarpTunnel,
     url: &str,
     headers: &Headers,
     limits: &FetchLimits,
-    accept: &str,
+    profile: &ClientProfile,
 ) -> Result<FetchOutcome, ProxyError> {
     let timeout = Duration::from_secs(limits.timeout_seconds as u64);
     let mut current = parse_and_validate(url)?;
@@ -60,7 +64,7 @@ pub fn fetch(
         let path = path_with_query(&current);
 
         let ip = resolve(tunnel, &host, timeout)?;
-        let request = build_get_request(&host, &path, accept, headers);
+        let request = build_get_request(&host, &path, profile, headers);
         let read_cap = limits.max_size as usize + 64 * 1024;
 
         let raw = if is_https {
@@ -94,22 +98,32 @@ pub fn fetch(
             });
         }
 
-        if response.body.len() as u64 > limits.max_size {
-            return Err(ProxyError::ResponseTooLarge {
-                size: response.body.len() as u64,
-                max_size: limits.max_size,
-            });
-        }
-
         let mime_type = response
             .header("content-type")
             .map(normalize_mime)
             .unwrap_or_else(|| "application/octet-stream".to_string());
 
+        // Decode before measuring: `max_size` bounds what this client will hold,
+        // and after a `Content-Encoding` the compressed length says nothing
+        // about that. `ContentCoding::decode` therefore enforces the same
+        // ceiling on the way out, and the check below covers the identity case.
+        //
+        // Both headers are read before the body moves — reading either borrows
+        // the response the body is being taken out of.
+        let coding = ContentCoding::parse(response.header("content-encoding").unwrap_or(""))?;
+        let body = coding.decode(response.body, limits.max_size as usize)?;
+
+        if body.len() as u64 > limits.max_size {
+            return Err(ProxyError::ResponseTooLarge {
+                size: body.len() as u64,
+                max_size: limits.max_size,
+            });
+        }
+
         return Ok(FetchOutcome {
             status: response.status,
             mime_type,
-            body: response.body,
+            body,
             final_url: current.to_string(),
         });
     }
@@ -201,6 +215,44 @@ fn request_plain(
     })();
     tunnel.close_tcp(handle);
     result
+}
+
+/// Whether a MIME type names content a renderer would *execute* rather than
+/// display.
+///
+/// Email has no business running code, and the consensus across mail clients is
+/// that it never gets to: scripting is off, so the renderer will not ask for a
+/// script and would not run one if handed it. This is the second lock. The
+/// WebView's request is untrusted in exactly one respect — the URL comes from
+/// the message — and a server is free to answer any URL with anything, so
+/// "nobody will ask for a script" is an assumption about the renderer rather
+/// than a property of the response. Refusing the type makes it a property of the
+/// response.
+///
+/// Deliberately a denylist over a small closed set rather than an allowlist of
+/// renderable types: mail contains image, font and stylesheet types nobody
+/// enumerated in advance, and refusing an unknown-but-inert type would break
+/// display for no gain. Everything genuinely dangerous here is executable, and
+/// executable types are the enumerable ones.
+pub fn is_active_content(mime: &str) -> bool {
+    const ACTIVE: &[&str] = &[
+        "text/javascript",
+        "application/javascript",
+        "application/x-javascript",
+        "application/ecmascript",
+        "text/ecmascript",
+        "application/wasm",
+        "text/vbscript",
+        "application/x-shockwave-flash",
+    ];
+    // Case-folded by comparison rather than by building a lowercased copy. The
+    // callers pass a type `normalize_mime` has already lowercased, so the copy
+    // would usually have been identical to its input — but this is a security
+    // predicate and must not depend on its caller having normalised first.
+    let mime = mime.trim();
+    ACTIVE
+        .iter()
+        .any(|active| mime.eq_ignore_ascii_case(active))
 }
 
 /// Guess the MIME type from file magic bytes.
@@ -326,6 +378,47 @@ mod tests {
             &[0x89, 0x50, 0x4E, 0x47, 0x0D],
             "image/png"
         ));
+    }
+
+    /// The types a renderer would execute, which a message never gets to send.
+    #[test]
+    fn scripts_and_wasm_are_active_content() {
+        for mime in [
+            "text/javascript",
+            "application/javascript",
+            "APPLICATION/JavaScript",
+            "  application/wasm  ",
+            "text/vbscript",
+        ] {
+            assert!(is_active_content(mime), "{mime} should be refused");
+        }
+    }
+
+    /// Everything a page legitimately needs, including the stylesheet and font
+    /// types whose refusal was the bug. The list is a denylist precisely so an
+    /// unfamiliar-but-inert type renders rather than vanishing.
+    #[test]
+    fn everything_inert_is_served() {
+        for mime in [
+            "image/png",
+            "image/svg+xml",
+            "text/css",
+            "font/woff2",
+            "application/font-woff",
+            "application/octet-stream",
+            "text/html",
+            "application/json",
+        ] {
+            assert!(!is_active_content(mime), "{mime} should be served");
+        }
+    }
+
+    /// `text/javascript` is refused; `text/` in general is not. A prefix test
+    /// would have taken the stylesheet with it.
+    #[test]
+    fn active_content_is_matched_whole_not_by_prefix() {
+        assert!(!is_active_content("text/javascript-ish"));
+        assert!(!is_active_content("text/"));
     }
 
     #[test]

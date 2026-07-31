@@ -3,12 +3,22 @@
 //! These are plain data carriers; behaviour lives in [`crate`]. They are kept in
 //! a dedicated module so `lib.rs` stays focused on the proxy logic.
 
-/// Result of a successful image fetch operation.
+/// A subresource fetched through the tunnel.
+///
+/// Named for what it carries rather than for what asked for it. This was
+/// `ImageResponse`, and the name was load-bearing in the wrong direction: it
+/// made "is this an image?" look like a question about the *transport*, so the
+/// only path the renderer had to the tunnel refused a stylesheet and a font as
+/// firmly as it would have refused an executable. A page needs all three, the
+/// user consented to all three at once, and none of that is the fetch's
+/// business — so the type says only that some bytes arrived and what they claim
+/// to be.
 #[derive(Clone, Debug, uniffi::Record)]
-pub struct ImageResponse {
-    /// MIME type of the image (e.g., "image/png", "image/svg+xml").
+pub struct FetchedResource {
+    /// MIME type as the server declared it, lowercased and stripped of
+    /// parameters (e.g. `image/png`, `text/css`, `font/woff2`).
     pub mime_type: String,
-    /// Raw image bytes.
+    /// Raw response bytes.
     pub data: Vec<u8>,
     /// Whether this response was served from cache.
     pub from_cache: bool,
@@ -16,7 +26,11 @@ pub struct ImageResponse {
     pub final_url: String,
 }
 
-/// Result of a generic tunnelled fetch (non-image content).
+/// Result of a generic tunnelled fetch.
+///
+/// Distinct from [`FetchedResource`] because it reports the HTTP `status` and is
+/// not cached: its callers are the update check and the trace probe, which care
+/// what the server answered and must never be served a stale answer.
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct HttpFetchResponse {
     /// HTTP status code of the final response.
@@ -29,7 +43,7 @@ pub struct HttpFetchResponse {
     pub final_url: String,
 }
 
-/// Status of the image proxy.
+/// Status of the proxy.
 ///
 /// The `Default` is the pre-initialization status: nothing ready, nothing
 /// connected, nothing cached.
@@ -45,7 +59,7 @@ pub struct ProxyStatus {
     pub endpoint: Option<String>,
     /// Last error message (if any).
     pub last_error: Option<String>,
-    /// Number of cached images.
+    /// Number of cached subresources.
     pub cache_size: u32,
 }
 
@@ -166,14 +180,14 @@ pub struct BatchImageResult {
     /// Whether the fetch was successful.
     pub success: bool,
     /// Image response if successful.
-    pub response: Option<ImageResponse>,
+    pub response: Option<FetchedResource>,
     /// Error message if failed.
     pub error: Option<String>,
 }
 
 impl BatchImageResult {
     /// Flatten one URL's outcome into the FFI record.
-    pub(crate) fn new(url: String, outcome: Result<ImageResponse, crate::ProxyError>) -> Self {
+    pub(crate) fn new(url: String, outcome: Result<FetchedResource, crate::ProxyError>) -> Self {
         match outcome {
             Ok(response) => Self {
                 url,

@@ -20,6 +20,7 @@
 //!
 //! - [`proxy_init`] / [`proxy_shutdown`] — lifecycle.
 //! - [`proxy_status`] / [`proxy_diagnostics`] — observability.
+//! - [`proxy_fetch_subresource`] — anything a rendered message asks for.
 //! - [`proxy_fetch_image`] / [`proxy_fetch_images_batch`] — image fetching.
 //! - [`proxy_fetch_url`] — generic tunnelled fetch.
 //! - [`proxy_check_for_update`] — GitHub release check over the tunnel.
@@ -42,12 +43,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub use config::ProxyConfig;
 pub use error::ProxyError;
 pub use types::{
-    BatchImageResult, HttpFetchResponse, ImageResponse, ProxyStatus, UpdateResult, WarpDiagnostics,
-    WarpStoredConfig,
+    BatchImageResult, FetchedResource, HttpFetchResponse, ProxyStatus, UpdateResult,
+    WarpDiagnostics, WarpStoredConfig,
 };
 
 use config::{FetchLimits, WarpConfig};
 use provisioning::WarpProvisioner;
+use tunnel::http1::ClientProfile;
 use tunnel::{TunnelDiagnostics, TunnelManager};
 
 uniffi::setup_scaffolding!();
@@ -83,7 +85,7 @@ pub(crate) struct ProxyState {
     /// Shared so a fetch can run without holding the global lock. The `Arc` is
     /// genuine cross-section sharing (lock -> network -> lock), not a borrow hack.
     pub(crate) manager: Option<Arc<TunnelManager>>,
-    cache: lru::LruCache<String, ImageResponse>,
+    cache: lru::LruCache<String, FetchedResource>,
     pub(crate) last_error: Option<String>,
 }
 
@@ -266,22 +268,90 @@ pub fn proxy_status() -> Result<ProxyStatus, ProxyError> {
     ))
 }
 
+/// Fetch a page subresource — image, stylesheet, font, anything a renderer
+/// asks for — through the WARP tunnel.
+///
+/// This is the entry point the email renderer uses, and it takes the renderer's
+/// own `Accept` rather than imposing one. The predicate it *does* apply is
+/// [`http::is_active_content`]: everything inert is served, everything
+/// executable is refused.
+///
+/// Splitting the type check off from the fetch is the whole correction here.
+/// The renderer's only route to the tunnel used to be [`proxy_fetch_image`],
+/// which asks for `image/*` and rejects anything else — so every stylesheet and
+/// web font in every message failed with "expected image, got text/css", and a
+/// user who had consented to remote content got a page that had fetched none of
+/// its layout. Consent is about contacting a third party, which a font does as
+/// much as a picture does; it was never about MIME types.
+#[uniffi::export]
+pub fn proxy_fetch_subresource(
+    url: String,
+    accept: String,
+    headers: Option<HashMap<String, String>>,
+) -> Result<FetchedResource, ProxyError> {
+    fetch_resource(&url, ClientProfile::browser(accept), headers)
+        .and_then(
+            |resource| match http::is_active_content(&resource.mime_type) {
+                true => Err(ProxyError::ActiveContentRefused {
+                    content_type: resource.mime_type,
+                }),
+                false => Ok(resource),
+            },
+        )
+        .inspect_err(|e| record_error(&e.to_string()))
+}
+
 /// Fetch a single image through the WARP tunnel.
+///
+/// [`proxy_fetch_subresource`] with the image predicate reapplied, for callers
+/// that genuinely want an image and nothing else — the batch prefetch below and
+/// the instrumented end-to-end test. `image/*` is both what it asks for and
+/// what it insists on receiving.
 #[uniffi::export]
 pub fn proxy_fetch_image(
     url: String,
     headers: Option<HashMap<String, String>>,
-) -> Result<ImageResponse, ProxyError> {
+) -> Result<FetchedResource, ProxyError> {
     fetch_image(&url, headers).inspect_err(|e| {
         record_error(&e.to_string());
     })
 }
 
-/// Internal image fetch: cache-aware, tunnelled, content-validated.
+/// [`proxy_fetch_image`] without the error recording, so the batch path does not
+/// overwrite `last_error` once per URL.
 fn fetch_image(
     url: &str,
     headers: Option<HashMap<String, String>>,
-) -> Result<ImageResponse, ProxyError> {
+) -> Result<FetchedResource, ProxyError> {
+    let resource = fetch_resource(url, ClientProfile::browser("image/*"), headers)?;
+    if !resource.mime_type.starts_with("image/") {
+        return Err(ProxyError::InvalidContentType {
+            content_type: resource.mime_type,
+        });
+    }
+    Ok(resource)
+}
+
+/// Cache-aware tunnelled fetch, with no opinion about content type.
+///
+/// The one place a subresource is fetched, so the cache is one cache and the
+/// scheme is validated once. Every notion of "acceptable" is applied by the
+/// caller to the value this returns — including caching a response the caller
+/// then rejects, which is deliberate: the cache records what the server said,
+/// and a second caller with a different predicate should not have to ask again
+/// to find out.
+///
+/// The cache is keyed on the URL alone, so `Vary: Accept` is not modelled: two
+/// callers asking for the same URL with different `Accept` headers share one
+/// entry. Content negotiation on a mail subresource would mean an image server
+/// returning genuinely different bytes to the renderer than to the prefetcher,
+/// which is not a thing image hosts do — but it is an assumption, and this is
+/// where it would break.
+fn fetch_resource(
+    url: &str,
+    profile: ClientProfile,
+    headers: Option<HashMap<String, String>>,
+) -> Result<FetchedResource, ProxyError> {
     // Reject unsupported schemes before touching the cache or the tunnel, using
     // the same parser the fetch itself will use so the two cannot disagree.
     http::parse_and_validate(url)?;
@@ -291,7 +361,7 @@ fn fetch_image(
         let mut guard = lock_state();
         let state = guard.as_mut().ok_or(ProxyError::NotInitialized)?;
         if let Some(cached) = state.cache.get(url) {
-            return Ok(ImageResponse {
+            return Ok(FetchedResource {
                 from_cache: true,
                 ..cached.clone()
             });
@@ -299,20 +369,9 @@ fn fetch_image(
     }
 
     let (manager, limits) = acquire_manager()?;
-    let outcome = manager.fetch(
-        url.to_string(),
-        header_pairs(headers),
-        "image/*".to_string(),
-        limits,
-    )?;
+    let outcome = manager.fetch(url.to_string(), header_pairs(headers), profile, limits)?;
 
-    if !outcome.mime_type.starts_with("image/") {
-        return Err(ProxyError::InvalidContentType {
-            content_type: outcome.mime_type,
-        });
-    }
-
-    let response = ImageResponse {
+    let response = FetchedResource {
         mime_type: outcome.mime_type,
         data: outcome.body,
         from_cache: false,
@@ -358,7 +417,12 @@ pub fn proxy_fetch_url(
 ) -> Result<HttpFetchResponse, ProxyError> {
     let (manager, limits) = acquire_manager()?;
     let outcome = manager
-        .fetch(url, header_pairs(headers), "*/*".to_string(), limits)
+        .fetch(
+            url,
+            header_pairs(headers),
+            ClientProfile::browser("*/*"),
+            limits,
+        )
         .inspect_err(|e| {
             record_error(&e.to_string());
         })?;
@@ -464,6 +528,27 @@ mod tests {
 
     // URL admission is tested where it is decided, in `http::parse_and_validate`.
 
+    /// The subresource entry point shares one admission gate with the image
+    /// one, and shares it *before* touching the cache or the tunnel — so an
+    /// unsupported scheme is refused identically whichever door it arrives at,
+    /// and neither can be initialised into accepting one the other rejects.
+    #[test]
+    fn a_subresource_url_faces_the_same_scheme_gate_as_an_image() {
+        for url in ["javascript:alert(1)", "file:///etc/passwd", "not-a-url"] {
+            assert!(
+                matches!(
+                    proxy_fetch_subresource(url.to_string(), "*/*".to_string(), None),
+                    Err(ProxyError::InvalidUrl { .. })
+                ),
+                "{url} should be refused as a subresource"
+            );
+            assert!(matches!(
+                proxy_fetch_image(url.to_string(), None),
+                Err(ProxyError::InvalidUrl { .. })
+            ));
+        }
+    }
+
     #[test]
     fn header_pairs_handles_none_and_some() {
         assert!(header_pairs(None).is_empty());
@@ -479,7 +564,7 @@ mod tests {
     fn batch_result_correlates_its_outcome_fields() {
         let ok = BatchImageResult::new(
             "https://example.com/a.png".to_string(),
-            Ok(ImageResponse {
+            Ok(FetchedResource {
                 mime_type: "image/png".to_string(),
                 data: vec![1, 2, 3, 4],
                 from_cache: false,
@@ -512,7 +597,7 @@ mod tests {
 
     #[test]
     fn image_response_clone_preserves_fields() {
-        let response = ImageResponse {
+        let response = FetchedResource {
             mime_type: "image/png".to_string(),
             data: vec![0x89, 0x50, 0x4E, 0x47],
             from_cache: false,

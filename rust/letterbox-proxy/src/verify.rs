@@ -12,6 +12,7 @@
 //! view of who is asking.
 
 use crate::error::ProxyError;
+use crate::tunnel::http1::ClientProfile;
 use crate::tunnel::TunnelManager;
 
 /// Where the check points. Any Cloudflare host serves this path; using the
@@ -101,10 +102,13 @@ pub fn verify_tunnel(manager: &TunnelManager) -> Result<TunnelVerification, Prox
     // Sampled either side of the fetch so the result reports what *this* request
     // moved, not what the session has moved since it came up.
     let before = manager.diagnostics()?;
+    // The browser persona on purpose: this probe exists to describe the path a
+    // remote image will take, and a request that presents differently is not
+    // measuring that path.
     let outcome = manager.fetch(
         TRACE_URL.to_string(),
         Vec::new(),
-        "text/plain".to_string(),
+        ClientProfile::browser("text/plain"),
         limits,
     )?;
     let after = manager.diagnostics()?;

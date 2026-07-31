@@ -9,6 +9,7 @@
 use crate::config::{FetchLimits, WarpConfig};
 use crate::error::ProxyError;
 use crate::http::{self, FetchOutcome};
+use crate::tunnel::http1::ClientProfile;
 use crate::tunnel::stack::WarpTunnel;
 use crate::tunnel::stats::TunnelStats;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -82,7 +83,7 @@ enum Command {
     Fetch {
         url: String,
         headers: Vec<(String, String)>,
-        accept: String,
+        profile: ClientProfile,
         limits: FetchLimits,
         reply: Sender<Result<FetchOutcome, ProxyError>>,
     },
@@ -133,7 +134,7 @@ impl TunnelManager {
         &self,
         url: String,
         headers: Vec<(String, String)>,
-        accept: String,
+        profile: ClientProfile,
         limits: FetchLimits,
     ) -> Result<FetchOutcome, ProxyError> {
         let (reply, reply_rx) = channel();
@@ -141,7 +142,7 @@ impl TunnelManager {
             .send(Command::Fetch {
                 url,
                 headers,
-                accept,
+                profile,
                 limits,
                 reply,
             })
@@ -209,12 +210,12 @@ fn worker_loop(
             Command::Fetch {
                 url,
                 headers,
-                accept,
+                profile,
                 limits,
                 reply,
             } => {
                 let result = ensure_connected(&mut tunnel)
-                    .and_then(|()| http::fetch(&mut tunnel, &url, &headers, &limits, &accept));
+                    .and_then(|()| http::fetch(&mut tunnel, &url, &headers, &limits, &profile));
                 let _ = reply.send(result);
             }
             Command::Diagnostics { reply } => {

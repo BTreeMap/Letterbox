@@ -682,6 +682,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch(
     ): Int
+    external fun uniffi_letterbox_proxy_checksum_func_proxy_fetch_subresource(
+    ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_fetch_url(
     ): Int
     external fun uniffi_letterbox_proxy_checksum_func_proxy_init(
@@ -720,6 +722,8 @@ internal object UniffiLib {
     external fun uniffi_letterbox_proxy_fn_func_proxy_fetch_image(`url`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_proxy_fn_func_proxy_fetch_images_batch(`urls`: RustBuffer.ByValue,`maxConcurrent`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_letterbox_proxy_fn_func_proxy_fetch_subresource(`url`: RustBuffer.ByValue,`accept`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_letterbox_proxy_fn_func_proxy_fetch_url(`url`: RustBuffer.ByValue,`headers`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -865,10 +869,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_diagnostics() != 42476) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 23362) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 58250) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 23587) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_subresource() != 18444) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_url() != 47834) {
@@ -1209,7 +1216,7 @@ data class BatchImageResult (
     /**
      * Image response if successful.
      */
-    var `response`: ImageResponse?
+    var `response`: FetchedResource?
     , 
     /**
      * Error message if failed.
@@ -1233,7 +1240,7 @@ public object FfiConverterTypeBatchImageResult: FfiConverterRustBuffer<BatchImag
         return BatchImageResult(
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
-            FfiConverterOptionalTypeImageResponse.read(buf),
+            FfiConverterOptionalTypeFetchedResource.read(buf),
             FfiConverterOptionalString.read(buf),
         )
     }
@@ -1241,14 +1248,14 @@ public object FfiConverterTypeBatchImageResult: FfiConverterRustBuffer<BatchImag
     override fun allocationSize(value: BatchImageResult) = (
             FfiConverterString.allocationSize(value.`url`) +
             FfiConverterBoolean.allocationSize(value.`success`) +
-            FfiConverterOptionalTypeImageResponse.allocationSize(value.`response`) +
+            FfiConverterOptionalTypeFetchedResource.allocationSize(value.`response`) +
             FfiConverterOptionalString.allocationSize(value.`error`)
     )
 
     override fun write(value: BatchImageResult, buf: ByteBuffer) {
             FfiConverterString.write(value.`url`, buf)
             FfiConverterBoolean.write(value.`success`, buf)
-            FfiConverterOptionalTypeImageResponse.write(value.`response`, buf)
+            FfiConverterOptionalTypeFetchedResource.write(value.`response`, buf)
             FfiConverterOptionalString.write(value.`error`, buf)
     }
 }
@@ -1256,7 +1263,84 @@ public object FfiConverterTypeBatchImageResult: FfiConverterRustBuffer<BatchImag
 
 
 /**
- * Result of a generic tunnelled fetch (non-image content).
+ * A subresource fetched through the tunnel.
+ *
+ * Named for what it carries rather than for what asked for it. This was
+ * `ImageResponse`, and the name was load-bearing in the wrong direction: it
+ * made "is this an image?" look like a question about the *transport*, so the
+ * only path the renderer had to the tunnel refused a stylesheet and a font as
+ * firmly as it would have refused an executable. A page needs all three, the
+ * user consented to all three at once, and none of that is the fetch's
+ * business — so the type says only that some bytes arrived and what they claim
+ * to be.
+ */
+data class FetchedResource (
+    /**
+     * MIME type as the server declared it, lowercased and stripped of
+     * parameters (e.g. `image/png`, `text/css`, `font/woff2`).
+     */
+    var `mimeType`: kotlin.String
+    , 
+    /**
+     * Raw response bytes.
+     */
+    var `data`: kotlin.ByteArray
+    , 
+    /**
+     * Whether this response was served from cache.
+     */
+    var `fromCache`: kotlin.Boolean
+    , 
+    /**
+     * Final URL after redirects (if any).
+     */
+    var `finalUrl`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFetchedResource: FfiConverterRustBuffer<FetchedResource> {
+    override fun read(buf: ByteBuffer): FetchedResource {
+        return FetchedResource(
+            FfiConverterString.read(buf),
+            FfiConverterByteArray.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FetchedResource) = (
+            FfiConverterString.allocationSize(value.`mimeType`) +
+            FfiConverterByteArray.allocationSize(value.`data`) +
+            FfiConverterBoolean.allocationSize(value.`fromCache`) +
+            FfiConverterString.allocationSize(value.`finalUrl`)
+    )
+
+    override fun write(value: FetchedResource, buf: ByteBuffer) {
+            FfiConverterString.write(value.`mimeType`, buf)
+            FfiConverterByteArray.write(value.`data`, buf)
+            FfiConverterBoolean.write(value.`fromCache`, buf)
+            FfiConverterString.write(value.`finalUrl`, buf)
+    }
+}
+
+
+
+/**
+ * Result of a generic tunnelled fetch.
+ *
+ * Distinct from [`FetchedResource`] because it reports the HTTP `status` and is
+ * not cached: its callers are the update check and the trace probe, which care
+ * what the server answered and must never be served a stale answer.
  */
 data class HttpFetchResponse (
     /**
@@ -1319,70 +1403,7 @@ public object FfiConverterTypeHttpFetchResponse: FfiConverterRustBuffer<HttpFetc
 
 
 /**
- * Result of a successful image fetch operation.
- */
-data class ImageResponse (
-    /**
-     * MIME type of the image (e.g., "image/png", "image/svg+xml").
-     */
-    var `mimeType`: kotlin.String
-    , 
-    /**
-     * Raw image bytes.
-     */
-    var `data`: kotlin.ByteArray
-    , 
-    /**
-     * Whether this response was served from cache.
-     */
-    var `fromCache`: kotlin.Boolean
-    , 
-    /**
-     * Final URL after redirects (if any).
-     */
-    var `finalUrl`: kotlin.String
-    
-){
-    
-
-    
-
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeImageResponse: FfiConverterRustBuffer<ImageResponse> {
-    override fun read(buf: ByteBuffer): ImageResponse {
-        return ImageResponse(
-            FfiConverterString.read(buf),
-            FfiConverterByteArray.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterString.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: ImageResponse) = (
-            FfiConverterString.allocationSize(value.`mimeType`) +
-            FfiConverterByteArray.allocationSize(value.`data`) +
-            FfiConverterBoolean.allocationSize(value.`fromCache`) +
-            FfiConverterString.allocationSize(value.`finalUrl`)
-    )
-
-    override fun write(value: ImageResponse, buf: ByteBuffer) {
-            FfiConverterString.write(value.`mimeType`, buf)
-            FfiConverterByteArray.write(value.`data`, buf)
-            FfiConverterBoolean.write(value.`fromCache`, buf)
-            FfiConverterString.write(value.`finalUrl`, buf)
-    }
-}
-
-
-
-/**
- * Status of the image proxy.
+ * Status of the proxy.
  *
  * The `Default` is the pre-initialization status: nothing ready, nothing
  * connected, nothing cached.
@@ -1414,7 +1435,7 @@ data class ProxyStatus (
     var `lastError`: kotlin.String?
     , 
     /**
-     * Number of cached images.
+     * Number of cached subresources.
      */
     var `cacheSize`: kotlin.UInt
     
@@ -1994,6 +2015,26 @@ sealed class ProxyException: kotlin.Exception() {
     }
     
     /**
+     * The response was executable content, which a message is never served.
+     *
+     * Distinct from [`ProxyError::InvalidContentType`] on purpose: that one
+     * says a caller asked for a picture and got something else, which is
+     * ordinary and often the server's doing. This one says a mail server
+     * answered a subresource request with code, which is a security event and
+     * should read as one in the diagnostics screen.
+     */
+    class ActiveContentRefused(
+        
+        /**
+         * The refused content type
+         */
+        val `contentType`: kotlin.String
+        ) : ProxyException() {
+        override val message
+            get() = "contentType=${ `contentType` }"
+    }
+    
+    /**
      * The response is too large.
      */
     class ResponseTooLarge(
@@ -2160,31 +2201,34 @@ public object FfiConverterTypeProxyError : FfiConverterRustBuffer<ProxyException
             7 -> ProxyException.InvalidContentType(
                 FfiConverterString.read(buf),
                 )
-            8 -> ProxyException.ResponseTooLarge(
+            8 -> ProxyException.ActiveContentRefused(
+                FfiConverterString.read(buf),
+                )
+            9 -> ProxyException.ResponseTooLarge(
                 FfiConverterULong.read(buf),
                 FfiConverterULong.read(buf),
                 )
-            9 -> ProxyException.TooManyRedirects(
+            10 -> ProxyException.TooManyRedirects(
                 FfiConverterUInt.read(buf),
                 FfiConverterUInt.read(buf),
                 )
-            10 -> ProxyException.Timeout(
+            11 -> ProxyException.Timeout(
                 FfiConverterUInt.read(buf),
                 )
-            11 -> ProxyException.DnsException(
+            12 -> ProxyException.DnsException(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            12 -> ProxyException.TlsException(
+            13 -> ProxyException.TlsException(
                 FfiConverterString.read(buf),
                 )
-            13 -> ProxyException.StorageException(
+            14 -> ProxyException.StorageException(
                 FfiConverterString.read(buf),
                 )
-            14 -> ProxyException.CryptoException(
+            15 -> ProxyException.CryptoException(
                 FfiConverterString.read(buf),
                 )
-            15 -> ProxyException.NetworkUnavailable(
+            16 -> ProxyException.NetworkUnavailable(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
@@ -2225,6 +2269,11 @@ public object FfiConverterTypeProxyError : FfiConverterRustBuffer<ProxyException
                 + FfiConverterString.allocationSize(value.`details`)
             )
             is ProxyException.InvalidContentType -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`contentType`)
+            )
+            is ProxyException.ActiveContentRefused -> (
                 // Add the size for the Int that specifies the variant plus the size needed for all fields
                 4UL
                 + FfiConverterString.allocationSize(value.`contentType`)
@@ -2313,46 +2362,51 @@ public object FfiConverterTypeProxyError : FfiConverterRustBuffer<ProxyException
                 FfiConverterString.write(value.`contentType`, buf)
                 Unit
             }
-            is ProxyException.ResponseTooLarge -> {
+            is ProxyException.ActiveContentRefused -> {
                 buf.putInt(8)
+                FfiConverterString.write(value.`contentType`, buf)
+                Unit
+            }
+            is ProxyException.ResponseTooLarge -> {
+                buf.putInt(9)
                 FfiConverterULong.write(value.`size`, buf)
                 FfiConverterULong.write(value.`maxSize`, buf)
                 Unit
             }
             is ProxyException.TooManyRedirects -> {
-                buf.putInt(9)
+                buf.putInt(10)
                 FfiConverterUInt.write(value.`count`, buf)
                 FfiConverterUInt.write(value.`maxCount`, buf)
                 Unit
             }
             is ProxyException.Timeout -> {
-                buf.putInt(10)
+                buf.putInt(11)
                 FfiConverterUInt.write(value.`seconds`, buf)
                 Unit
             }
             is ProxyException.DnsException -> {
-                buf.putInt(11)
+                buf.putInt(12)
                 FfiConverterString.write(value.`host`, buf)
                 FfiConverterString.write(value.`details`, buf)
                 Unit
             }
             is ProxyException.TlsException -> {
-                buf.putInt(12)
-                FfiConverterString.write(value.`details`, buf)
-                Unit
-            }
-            is ProxyException.StorageException -> {
                 buf.putInt(13)
                 FfiConverterString.write(value.`details`, buf)
                 Unit
             }
-            is ProxyException.CryptoException -> {
+            is ProxyException.StorageException -> {
                 buf.putInt(14)
                 FfiConverterString.write(value.`details`, buf)
                 Unit
             }
-            is ProxyException.NetworkUnavailable -> {
+            is ProxyException.CryptoException -> {
                 buf.putInt(15)
+                FfiConverterString.write(value.`details`, buf)
+                Unit
+            }
+            is ProxyException.NetworkUnavailable -> {
+                buf.putInt(16)
                 FfiConverterString.write(value.`details`, buf)
                 Unit
             }
@@ -2546,28 +2600,28 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
 /**
  * @suppress
  */
-public object FfiConverterOptionalTypeImageResponse: FfiConverterRustBuffer<ImageResponse?> {
-    override fun read(buf: ByteBuffer): ImageResponse? {
+public object FfiConverterOptionalTypeFetchedResource: FfiConverterRustBuffer<FetchedResource?> {
+    override fun read(buf: ByteBuffer): FetchedResource? {
         if (buf.get().toInt() == 0) {
             return null
         }
-        return FfiConverterTypeImageResponse.read(buf)
+        return FfiConverterTypeFetchedResource.read(buf)
     }
 
-    override fun allocationSize(value: ImageResponse?): ULong {
+    override fun allocationSize(value: FetchedResource?): ULong {
         if (value == null) {
             return 1UL
         } else {
-            return 1UL + FfiConverterTypeImageResponse.allocationSize(value)
+            return 1UL + FfiConverterTypeFetchedResource.allocationSize(value)
         }
     }
 
-    override fun write(value: ImageResponse?, buf: ByteBuffer) {
+    override fun write(value: FetchedResource?, buf: ByteBuffer) {
         if (value == null) {
             buf.put(0)
         } else {
             buf.put(1)
-            FfiConverterTypeImageResponse.write(value, buf)
+            FfiConverterTypeFetchedResource.write(value, buf)
         }
     }
 }
@@ -2746,9 +2800,14 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
 
         /**
          * Fetch a single image through the WARP tunnel.
+         *
+         * [`proxy_fetch_subresource`] with the image predicate reapplied, for callers
+         * that genuinely want an image and nothing else — the batch prefetch below and
+         * the instrumented end-to-end test. `image/*` is both what it asks for and
+         * what it insists on receiving.
          */
-    @Throws(ProxyException::class) fun `proxyFetchImage`(`url`: kotlin.String, `headers`: Map<kotlin.String, kotlin.String>?): ImageResponse {
-            return FfiConverterTypeImageResponse.lift(
+    @Throws(ProxyException::class) fun `proxyFetchImage`(`url`: kotlin.String, `headers`: Map<kotlin.String, kotlin.String>?): FetchedResource {
+            return FfiConverterTypeFetchedResource.lift(
     uniffiRustCallWithError(ProxyException) { _status ->
     UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_fetch_image(
     
@@ -2774,6 +2833,37 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
         
         FfiConverterSequenceString.lower(`urls`),
         FfiConverterUInt.lower(`maxConcurrent`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Fetch a page subresource — image, stylesheet, font, anything a renderer
+         * asks for — through the WARP tunnel.
+         *
+         * This is the entry point the email renderer uses, and it takes the renderer's
+         * own `Accept` rather than imposing one. The predicate it *does* apply is
+         * [`http::is_active_content`]: everything inert is served, everything
+         * executable is refused.
+         *
+         * Splitting the type check off from the fetch is the whole correction here.
+         * The renderer's only route to the tunnel used to be [`proxy_fetch_image`],
+         * which asks for `image/*` and rejects anything else — so every stylesheet and
+         * web font in every message failed with "expected image, got text/css", and a
+         * user who had consented to remote content got a page that had fetched none of
+         * its layout. Consent is about contacting a third party, which a font does as
+         * much as a picture does; it was never about MIME types.
+         */
+    @Throws(ProxyException::class) fun `proxyFetchSubresource`(`url`: kotlin.String, `accept`: kotlin.String, `headers`: Map<kotlin.String, kotlin.String>?): FetchedResource {
+            return FfiConverterTypeFetchedResource.lift(
+    uniffiRustCallWithError(ProxyException) { _status ->
+    UniffiLib.uniffi_letterbox_proxy_fn_func_proxy_fetch_subresource(
+    
+        
+        FfiConverterString.lower(`url`),
+        FfiConverterString.lower(`accept`),
+        FfiConverterOptionalMapStringString.lower(`headers`),_status)
 }
     )
     }

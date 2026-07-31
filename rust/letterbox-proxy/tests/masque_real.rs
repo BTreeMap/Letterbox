@@ -78,7 +78,7 @@ fn real_masque_tunnel_fetches_image() {
             .fetch(
                 TEST_IMAGE_URL.to_string(),
                 Vec::new(),
-                "image/*".to_string(),
+                letterbox_proxy::tunnel::http1::ClientProfile::browser("image/*"),
                 FetchLimits::default(),
             )
             .expect("fetch image through MASQUE tunnel");

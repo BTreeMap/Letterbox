@@ -8,6 +8,7 @@
 use crate::config::FetchLimits;
 use crate::error::ProxyError;
 use crate::http::FetchOutcome;
+use crate::tunnel::http1::ClientProfile;
 use crate::tunnel::TunnelManager;
 use serde::Deserialize;
 
@@ -81,22 +82,20 @@ pub fn check_for_update(
     repo: &str,
 ) -> Result<UpdateInfo, ProxyError> {
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let headers = vec![
-        (
-            "User-Agent".to_string(),
-            "Letterbox-UpdateChecker".to_string(),
-        ),
-        ("X-GitHub-Api-Version".to_string(), "2022-11-28".to_string()),
-    ];
+    let headers = vec![("X-GitHub-Api-Version".to_string(), "2022-11-28".to_string())];
     let limits = FetchLimits {
         max_size: 1024 * 1024, // release JSON is small
         ..FetchLimits::default()
     };
 
+    // The API persona: GitHub refuses a request with no `User-Agent` outright
+    // and asks callers to name themselves. Claiming to be Chrome here would be
+    // both a lie and a worse one than the truth, since nothing else about the
+    // request looks like a page load.
     let outcome: FetchOutcome = manager.fetch(
         url,
         headers,
-        "application/vnd.github+json".to_string(),
+        ClientProfile::api("Letterbox-UpdateChecker", "application/vnd.github+json"),
         limits,
     )?;
 
