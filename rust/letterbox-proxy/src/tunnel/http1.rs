@@ -180,9 +180,9 @@ impl ClientProfile {
 /// automation tells there is.
 ///
 /// The derivation is deliberately partial in one direction: Chrome requests
-/// fonts and `fetch()` bodies alike with `Accept: */*`, so both land on `empty`.
-/// That is a truthful description of what this client knows, and `empty` with
-/// `*/*` is exactly what a real `fetch()` looks like.
+/// fonts and `fetch()` bodies alike with a wildcard `Accept`, so both land on
+/// `empty`. That is a truthful description of what this client knows, and
+/// `empty` beside a wildcard is exactly what a real `fetch()` looks like.
 fn sec_fetch_dest(accept: &str) -> &'static str {
     let accept = accept.trim_start().as_bytes();
     // Byte-wise so that folding case costs nothing: the alternative allocates a

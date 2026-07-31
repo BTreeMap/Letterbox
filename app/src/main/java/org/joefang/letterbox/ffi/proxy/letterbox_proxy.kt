@@ -869,13 +869,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_diagnostics() != 42476) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 58250) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 27433) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 23587) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_subresource() != 18444) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_subresource() != 48947) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_url() != 47834) {
@@ -2803,8 +2803,8 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
          *
          * [`proxy_fetch_subresource`] with the image predicate reapplied, for callers
          * that genuinely want an image and nothing else — the batch prefetch below and
-         * the instrumented end-to-end test. `image/*` is both what it asks for and
-         * what it insists on receiving.
+         * the instrumented end-to-end test. An image is both what it asks for and what
+         * it insists on receiving.
          */
     @Throws(ProxyException::class) fun `proxyFetchImage`(`url`: kotlin.String, `headers`: Map<kotlin.String, kotlin.String>?): FetchedResource {
             return FfiConverterTypeFetchedResource.lift(
@@ -2849,8 +2849,9 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
          *
          * Splitting the type check off from the fetch is the whole correction here.
          * The renderer's only route to the tunnel used to be [`proxy_fetch_image`],
-         * which asks for `image/*` and rejects anything else — so every stylesheet and
-         * web font in every message failed with "expected image, got text/css", and a
+         * which asks only for images and refuses every other type — so every
+         * stylesheet and web font in a message failed with "expected image, got
+         * text/css", and a
          * user who had consented to remote content got a page that had fetched none of
          * its layout. Consent is about contacting a third party, which a font does as
          * much as a picture does; it was never about MIME types.

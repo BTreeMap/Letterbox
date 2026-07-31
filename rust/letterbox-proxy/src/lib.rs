@@ -278,8 +278,9 @@ pub fn proxy_status() -> Result<ProxyStatus, ProxyError> {
 ///
 /// Splitting the type check off from the fetch is the whole correction here.
 /// The renderer's only route to the tunnel used to be [`proxy_fetch_image`],
-/// which asks for `image/*` and rejects anything else — so every stylesheet and
-/// web font in every message failed with "expected image, got text/css", and a
+/// which asks only for images and refuses every other type — so every
+/// stylesheet and web font in a message failed with "expected image, got
+/// text/css", and a
 /// user who had consented to remote content got a page that had fetched none of
 /// its layout. Consent is about contacting a third party, which a font does as
 /// much as a picture does; it was never about MIME types.
@@ -305,8 +306,8 @@ pub fn proxy_fetch_subresource(
 ///
 /// [`proxy_fetch_subresource`] with the image predicate reapplied, for callers
 /// that genuinely want an image and nothing else — the batch prefetch below and
-/// the instrumented end-to-end test. `image/*` is both what it asks for and
-/// what it insists on receiving.
+/// the instrumented end-to-end test. An image is both what it asks for and what
+/// it insists on receiving.
 #[uniffi::export]
 pub fn proxy_fetch_image(
     url: String,
