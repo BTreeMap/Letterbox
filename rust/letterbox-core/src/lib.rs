@@ -280,8 +280,12 @@ pub fn parse_eml(data: Vec<u8>) -> Result<Arc<EmailHandle>, ParseError> {
             reply_to: message.reply_to().map(format_addresses).unwrap_or_default(),
             message_id: message.message_id().map(str::to_string).unwrap_or_default(),
             date: message.date().map(|d| d.to_rfc3339()).unwrap_or_default(),
-            // Milliseconds, matching the JVM epoch convention the Kotlin side sorts on.
-            date_timestamp: message.date().map_or(0, |d| d.to_timestamp() * 1000),
+            // Milliseconds, matching the JVM epoch convention the Kotlin side
+            // sorts on. Saturating because the header is attacker-controlled and
+            // an unchecked multiply is the one arithmetic panic in this file.
+            date_timestamp: message
+                .date()
+                .map_or(0, |d| d.to_timestamp().saturating_mul(1000)),
             body_html,
             body_text,
             inline_assets,

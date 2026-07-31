@@ -1,5 +1,6 @@
 package org.joefang.letterbox
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -49,13 +50,15 @@ data class EmailUiState(
     val isSearchActive: Boolean = false
 )
 
+private const val TAG = "EmailViewModel"
+
 /**
  * Outcome of parsing raw email bytes: the renderable [content] when parsing
  * succeeded, together with the [metadata] used to index the message for search.
  *
- * The metadata is not nullable because it is always produced — a failed parse
- * still yields fallback values — and naming the two fields keeps callers from
- * having to remember which position of a `Pair` meant which.
+ * A failed parse yields a null [content] and empty metadata, never invented
+ * values: whatever is indexed here persists, so guessing would outlive the
+ * failure that caused it.
  */
 private data class ParsedEmail(
     val content: EmailContent?,
@@ -368,8 +371,7 @@ class EmailViewModel(
      * - Inline asset extraction for cid: URLs
      * - Memory-efficient opaque handle pattern
      *
-     * Falls back to the Kotlin parser when the native library is unavailable or
-     * rejects the input; metadata is produced either way.
+     * A message that will not parse yields no content and no metadata.
      */
     private suspend fun parseEmailBytesWithMetadata(bytes: ByteArray): ParsedEmail {
         return withContext(Dispatchers.Default) {
@@ -428,60 +430,27 @@ class EmailViewModel(
                 
                 ParsedEmail(content, metadata)
             } catch (e: ParseException) {
-                // Rust parser returned a parse error - fall back to Kotlin parser
-                kotlinFallback(bytes)
+                unparsed(e)
             } catch (e: UnsatisfiedLinkError) {
-                // Native library not available - fall back to Kotlin parser
-                kotlinFallback(bytes)
+                unparsed(e)
             } catch (e: ExceptionInInitializerError) {
-                // Library initialization failed - fall back to Kotlin parser
-                kotlinFallback(bytes)
+                unparsed(e)
             }
         }
     }
 
-    /** Parse and index [bytes] with the pure-Kotlin parser. */
-    private fun kotlinFallback(bytes: ByteArray): ParsedEmail =
-        ParsedEmail(parseEmailBytesKotlin(bytes), extractMetadataFallback(bytes))
-    
     /**
-     * Extract metadata using fallback Kotlin parser.
+     * What a message that would not parse yields: nothing.
+     *
+     * This replaced a second, hand-written Kotlin parser. It ran whenever the
+     * real one reported an error and rebuilt the message from a naive header
+     * split — no date, no attachments, no inline images — then wrote that into
+     * the search index, where it stayed. A transient failure became permanent
+     * mis-indexing, and the user was never told.
      */
-    private fun extractMetadataFallback(bytes: ByteArray): EmailMetadata {
-        return try {
-            val text = String(bytes, Charsets.UTF_8)
-            val headers = parseHeaders(text)
-            val body = extractBody(text)
-            
-            val from = headers["from"] ?: ""
-            val (senderEmail, senderName) = parseAddressField(from)
-            
-            EmailMetadata(
-                subject = headers["subject"] ?: "Untitled",
-                senderEmail = senderEmail,
-                senderName = senderName,
-                recipientEmails = headers["to"] ?: "",
-                recipientNames = "",
-                emailDate = 0, // Fallback parser doesn't parse dates
-                hasAttachments = false, // Fallback parser doesn't detect attachments
-                bodyPreview = body.take(500)
-            )
-        } catch (e: Exception) {
-            EmailMetadata()
-        }
-    }
-    
-    /**
-     * Parse an address field to extract email and name.
-     * Handles formats like "John Doe <john@example.com>" and "john@example.com"
-     */
-    private fun parseAddressField(address: String): Pair<String, String> {
-        val angleMatch = Regex("""(.+?)\s*<(.+?)>""").find(address.trim())
-        return if (angleMatch != null) {
-            Pair(angleMatch.groupValues[2].trim(), angleMatch.groupValues[1].trim())
-        } else {
-            Pair(address.trim(), "")
-        }
+    private fun unparsed(cause: Throwable): ParsedEmail {
+        Log.w(TAG, "Could not parse message", cause)
+        return ParsedEmail(null, EmailMetadata())
     }
 
     /**
@@ -519,107 +488,15 @@ class EmailViewModel(
                     getAttachmentContent = { index -> handle.getAttachmentContent(index.toUInt()) }
                 )
             } catch (e: ParseException) {
-                // Rust parser returned a parse error - fall back to Kotlin parser
-                parseEmailBytesKotlin(file.readBytes())
+                unparsed(e).content
             } catch (e: UnsatisfiedLinkError) {
-                // Native library not available - fall back to Kotlin parser
-                parseEmailBytesKotlin(file.readBytes())
+                unparsed(e).content
             } catch (e: ExceptionInInitializerError) {
-                // Library initialization failed - fall back to Kotlin parser
-                parseEmailBytesKotlin(file.readBytes())
+                unparsed(e).content
             }
         }
     }
 
-    /**
-     * Fallback Kotlin parser for cases where the native library is not available.
-     */
-    private fun parseEmailBytesKotlin(bytes: ByteArray): EmailContent? {
-        return try {
-            val text = String(bytes, Charsets.UTF_8)
-            val headers = parseHeaders(text)
-            val body = extractBody(text)
-            
-            val subject = headers["subject"] ?: "Untitled"
-            val from = headers["from"] ?: ""
-            val to = headers["to"] ?: ""
-            val cc = headers["cc"] ?: ""
-            val replyTo = headers["reply-to"] ?: ""
-            val messageId = headers["message-id"] ?: ""
-            val date = headers["date"] ?: ""
-            
-            // Convert plain text to basic HTML if needed
-            val bodyHtml = if (body.startsWith("<")) {
-                body
-            } else {
-                "<html><body><pre style=\"white-space: pre-wrap; font-family: sans-serif;\">${htmlEscape(body)}</pre></body></html>"
-            }
-            
-            EmailContent(
-                subject = subject,
-                from = from,
-                to = to,
-                cc = cc,
-                replyTo = replyTo,
-                messageId = messageId,
-                date = date,
-                bodyHtml = bodyHtml,
-                attachments = emptyList(), // Fallback parser doesn't extract attachments
-                getResource = { _ -> null },
-                getAttachmentContent = { _ -> null }
-            )
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun parseHeaders(text: String): Map<String, String> {
-        val headers = mutableMapOf<String, String>()
-        val headerSection = text.substringBefore("\n\n").substringBefore("\r\n\r\n")
-        
-        var currentKey = ""
-        var currentValue = StringBuilder()
-        
-        for (line in headerSection.lines()) {
-            if (line.startsWith(" ") || line.startsWith("\t")) {
-                // Continuation of previous header
-                currentValue.append(" ").append(line.trim())
-            } else if (line.contains(":")) {
-                // Save previous header
-                if (currentKey.isNotEmpty()) {
-                    headers[currentKey.lowercase()] = currentValue.toString().trim()
-                }
-                // Start new header
-                val colonIndex = line.indexOf(':')
-                currentKey = line.substring(0, colonIndex)
-                currentValue = StringBuilder(line.substring(colonIndex + 1).trim())
-            }
-        }
-        
-        // Save last header
-        if (currentKey.isNotEmpty()) {
-            headers[currentKey.lowercase()] = currentValue.toString().trim()
-        }
-        
-        return headers
-    }
-
-    private fun extractBody(text: String): String {
-        val body = if (text.contains("\r\n\r\n")) {
-            text.substringAfter("\r\n\r\n")
-        } else {
-            text.substringAfter("\n\n")
-        }
-        return body.trim()
-    }
-
-    private fun htmlEscape(s: String): String {
-        return s.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("'", "&#39;")
-    }
 }
 
 class EmailViewModelFactory(
