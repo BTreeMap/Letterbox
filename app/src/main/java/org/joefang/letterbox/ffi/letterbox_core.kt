@@ -2238,6 +2238,10 @@ public object FfiConverterTypeRemoteImage: FfiConverterRustBuffer<RemoteImage> {
 
 
 
+/**
+ * Inline resource metadata for batch queries, so Kotlin can map `cid:` URLs
+ * without probing Rust repeatedly.
+ */
 data class ResourceMeta (
     /**
      * Content-ID (without angle brackets)
