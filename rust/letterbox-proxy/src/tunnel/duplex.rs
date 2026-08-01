@@ -21,11 +21,11 @@
 
 use std::io;
 use std::pin::Pin;
-use std::sync::mpsc::{SyncSender, TrySendError};
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::{Receiver, Sender};
 
 /// How many packets may queue in either direction before we start dropping.
 ///
@@ -41,13 +41,17 @@ pub struct PacketDuplex {
     /// Outbound: stack → tunnel. Read by the session loop.
     outbound: Receiver<Vec<u8>>,
     /// Inbound: tunnel → stack. Written by the session loop.
-    inbound: SyncSender<Vec<u8>>,
+    ///
+    /// A tokio sender even though this side never awaits it: `try_send` needs no
+    /// runtime, and the *receiving* end is the tunnel driver, which must be able
+    /// to await a packet rather than block a thread on it.
+    inbound: Sender<Vec<u8>>,
 }
 
 impl PacketDuplex {
     /// Build the session end of the bridge from its two channel halves.
     #[must_use]
-    pub fn new(outbound: Receiver<Vec<u8>>, inbound: SyncSender<Vec<u8>>) -> Self {
+    pub fn new(outbound: Receiver<Vec<u8>>, inbound: Sender<Vec<u8>>) -> Self {
         Self { outbound, inbound }
     }
 }
@@ -105,7 +109,7 @@ impl AsyncWrite for PacketDuplex {
                 log::trace!("inbound packet queue full, dropping {} bytes", buf.len());
                 Poll::Ready(Ok(buf.len()))
             }
-            Err(TrySendError::Disconnected(_)) => Poll::Ready(Err(io::Error::new(
+            Err(TrySendError::Closed(_)) => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "tunnel consumer dropped",
             ))),
@@ -125,16 +129,11 @@ impl AsyncWrite for PacketDuplex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::sync_channel;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    fn bridge() -> (
-        tokio::sync::mpsc::Sender<Vec<u8>>,
-        PacketDuplex,
-        std::sync::mpsc::Receiver<Vec<u8>>,
-    ) {
+    fn bridge() -> (Sender<Vec<u8>>, PacketDuplex, Receiver<Vec<u8>>) {
         let (out_tx, out_rx) = tokio::sync::mpsc::channel(PACKET_QUEUE_DEPTH);
-        let (in_tx, in_rx) = sync_channel(PACKET_QUEUE_DEPTH);
+        let (in_tx, in_rx) = tokio::sync::mpsc::channel(PACKET_QUEUE_DEPTH);
         (out_tx, PacketDuplex::new(out_rx, in_tx), in_rx)
     }
 
@@ -169,20 +168,20 @@ mod tests {
 
     #[tokio::test]
     async fn writes_arrive_as_discrete_packets() {
-        let (_out_tx, mut duplex, in_rx) = bridge();
+        let (_out_tx, mut duplex, mut in_rx) = bridge();
 
         duplex.write_all(&[9, 9, 9]).await.expect("write first");
         duplex.write_all(&[7]).await.expect("write second");
 
-        assert_eq!(in_rx.recv().expect("first"), vec![9, 9, 9]);
-        assert_eq!(in_rx.recv().expect("second"), vec![7]);
+        assert_eq!(in_rx.try_recv().expect("first"), vec![9, 9, 9]);
+        assert_eq!(in_rx.try_recv().expect("second"), vec![7]);
     }
 
     /// Overflow drops rather than blocking or erroring, so a stalled consumer
     /// cannot deadlock the session loop that also drives QUIC timers.
     #[tokio::test]
     async fn inbound_overflow_drops_without_failing_the_session() {
-        let (_out_tx, mut duplex, in_rx) = bridge();
+        let (_out_tx, mut duplex, mut in_rx) = bridge();
 
         for _ in 0..(PACKET_QUEUE_DEPTH + 16) {
             duplex.write_all(&[1]).await.expect("write must not fail");

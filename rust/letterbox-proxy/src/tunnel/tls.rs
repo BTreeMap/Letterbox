@@ -1,18 +1,19 @@
 //! TLS termination for tunnelled connections using [`rustls`].
 //!
-//! HTTPS requests ride a [`TunnelTcpStream`] wrapped in a rustls
-//! [`Stream`](rustls::Stream). Certificates are verified against the
-//! `webpki-roots` trust anchors, so a compromised or malicious WARP exit cannot
-//! transparently intercept the user's image/update traffic.
+//! HTTPS requests ride a [`TunnelSocket`] wrapped by `tokio-rustls`.
+//! Certificates are verified against the `webpki-roots` trust anchors, so a
+//! compromised or malicious WARP exit cannot transparently intercept the user's
+//! image/update traffic.
 
 use crate::error::ProxyError;
-use crate::tunnel::stack::WarpTunnel;
+use crate::tunnel::stack::Tunnel;
 use rustls::pki_types::ServerName;
-use rustls::{ClientConfig, ClientConnection, RootCertStore};
+use rustls::{ClientConfig, RootCertStore};
 use smoltcp::wire::IpAddress;
-use std::io::{Read, Write};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_rustls::TlsConnector;
 
 /// Hard ceiling on a single response body to bound memory use.
 const ABSOLUTE_MAX_RESPONSE: usize = 32 * 1024 * 1024;
@@ -50,14 +51,57 @@ fn client_config() -> Arc<ClientConfig> {
         .clone()
 }
 
+/// Write one request and read the reply to EOF, refusing to exceed `cap`.
+///
+/// Generic over the stream because that is the *only* difference between a
+/// plaintext exchange and a TLS one — writing it twice is how the two drift.
+/// `on_io` names which failure the caller considers an I/O error to be, since a
+/// broken TLS stream and a broken socket are not the same finding.
+pub(crate) async fn exchange<S>(
+    stream: &mut S,
+    request: &[u8],
+    cap: usize,
+    on_io: fn(std::io::Error) -> ProxyError,
+) -> Result<Vec<u8>, ProxyError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    stream.write_all(request).await.map_err(on_io)?;
+    stream.flush().await.map_err(on_io)?;
+
+    let mut buf = Vec::with_capacity(16 * 1024);
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        let read = match stream.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            // A peer that closes without `close_notify` is common enough on the
+            // open web that treating it as truncation would fail more responses
+            // than it protected.
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(on_io(e)),
+        };
+        buf.extend_from_slice(&chunk[..read]);
+        if buf.len() > cap {
+            return Err(ProxyError::ResponseTooLarge {
+                size: buf.len() as u64,
+                max_size: cap as u64,
+            });
+        }
+    }
+    Ok(buf)
+}
+
 /// Perform a single HTTPS request/response over the tunnel.
 ///
 /// `request` is the already-serialised HTTP/1.1 request (which must include
 /// `Connection: close` so the peer closes the stream after the response). The
 /// full response — headers and body — is returned as raw bytes, capped at
 /// `max_body` plus generous header headroom.
-pub fn request_https(
-    tunnel: &mut WarpTunnel,
+///
+/// The socket closes when it drops, on every path out of here.
+pub async fn request_https(
+    tunnel: &Tunnel,
     ip: IpAddress,
     port: u16,
     sni: &str,
@@ -68,57 +112,24 @@ pub fn request_https(
     let server_name = ServerName::try_from(sni.to_string()).map_err(|e| ProxyError::TlsError {
         details: format!("Invalid server name '{sni}': {e}"),
     })?;
-    let mut connection =
-        ClientConnection::new(client_config(), server_name).map_err(|e| ProxyError::TlsError {
-            details: format!("Failed to start TLS session: {e}"),
+
+    let socket = tunnel.connect(ip, port, timeout).await?;
+    let mut tls = TlsConnector::from(client_config())
+        .connect(server_name, socket)
+        .await
+        .map_err(|e| ProxyError::TlsError {
+            details: format!("TLS handshake failed: {e}"),
         })?;
 
-    let handle = tunnel.open_tcp(ip, port, timeout)?;
-    let cap = max_body.min(ABSOLUTE_MAX_RESPONSE);
-
-    let result = (|| -> Result<Vec<u8>, ProxyError> {
-        let mut adapter = tunnel.stream(handle, timeout);
-        let mut tls = rustls::Stream::new(&mut connection, &mut adapter);
-
-        tls.write_all(request).map_err(|e| ProxyError::TlsError {
-            details: format!("TLS write failed: {e}"),
-        })?;
-        tls.flush().map_err(|e| ProxyError::TlsError {
-            details: format!("TLS flush failed: {e}"),
-        })?;
-
-        read_to_end(&mut tls, cap)
-    })();
-
-    tunnel.close_tcp(handle);
-    result
-}
-
-/// Read a TLS stream until EOF, enforcing a size ceiling.
-fn read_to_end<S: Read>(stream: &mut S, cap: usize) -> Result<Vec<u8>, ProxyError> {
-    let mut buf = Vec::with_capacity(16 * 1024);
-    let mut chunk = [0u8; 16 * 1024];
-    loop {
-        match stream.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.len() > cap {
-                    return Err(ProxyError::ResponseTooLarge {
-                        size: buf.len() as u64,
-                        max_size: cap as u64,
-                    });
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => {
-                return Err(ProxyError::TlsError {
-                    details: format!("TLS read failed: {e}"),
-                });
-            }
-        }
-    }
-    Ok(buf)
+    exchange(
+        &mut tls,
+        request,
+        max_body.min(ABSOLUTE_MAX_RESPONSE),
+        |e| ProxyError::TlsError {
+            details: format!("TLS transfer failed: {e}"),
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -137,5 +148,43 @@ mod tests {
         // Build a tunnel-less smoke test of name validation by constructing a
         // ServerName directly; an empty name must fail.
         assert!(ServerName::try_from(String::new()).is_err());
+    }
+
+    /// The size ceiling is enforced while reading, not after, so an oversized
+    /// body is refused without being fully buffered first.
+    #[tokio::test]
+    async fn oversized_response_is_refused_mid_read() {
+        // One chunk-sized read that already exceeds the cap: the refusal must
+        // land on the first read, not after the whole body is buffered.
+        let body = vec![b'x'; 2048];
+        let mut stream = tokio_test::io::Builder::new()
+            .write(b"GET / HTTP/1.1\r\n\r\n")
+            .read(&body)
+            .build();
+
+        let refused = exchange(&mut stream, b"GET / HTTP/1.1\r\n\r\n", 1024, |e| {
+            ProxyError::TlsError {
+                details: e.to_string(),
+            }
+        })
+        .await
+        .expect_err("must refuse");
+
+        assert!(matches!(refused, ProxyError::ResponseTooLarge { .. }));
+    }
+
+    #[tokio::test]
+    async fn a_reply_within_the_cap_is_returned_whole() {
+        let mut stream = tokio_test::io::Builder::new()
+            .write(b"PING")
+            .read(b"PONG")
+            .build();
+
+        let reply = exchange(&mut stream, b"PING", 1024, |e| ProxyError::TlsError {
+            details: e.to_string(),
+        })
+        .await
+        .expect("must succeed");
+        assert_eq!(reply, b"PONG");
     }
 }

@@ -7,7 +7,7 @@
 //!   this blocking one.
 //! * [`device`] — a smoltcp [`Device`](smoltcp::phy::Device) bridging IP packets
 //!   to the transport.
-//! * [`stack`] — the smoltcp TCP/IP interface and a blocking TCP stream adapter.
+//! * [`stack`] — the smoltcp interface, its driver, and an async TCP socket.
 //! * [`tls`] — rustls over the tunnelled TCP stream.
 //! * [`http1`] — a pure HTTP/1.1 request/response codec.
 //! * [`dns`] — DNS-over-HTTPS resolution through the tunnel.
@@ -26,5 +26,5 @@ pub mod stats;
 pub mod tls;
 
 pub use fault::Fault;
-pub use manager::{ConnectionState, FetchRequest, TunnelDiagnostics, TunnelManager};
-pub use stack::WarpTunnel;
+pub use manager::{ConnectionState, FetchRequest, Pending, TunnelDiagnostics, TunnelManager};
+pub use stack::{Driver, Tunnel, TunnelSocket};

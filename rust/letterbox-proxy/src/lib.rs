@@ -50,7 +50,7 @@ pub use types::{
 use config::{FetchLimits, WarpConfig};
 use provisioning::WarpProvisioner;
 use tunnel::http1::ClientProfile;
-use tunnel::{Fault, FetchRequest, TunnelDiagnostics, TunnelManager};
+use tunnel::{Fault, FetchRequest, Pending, TunnelDiagnostics, TunnelManager};
 
 uniffi::setup_scaffolding!();
 
@@ -328,8 +328,7 @@ pub fn proxy_fetch_image(
     })
 }
 
-/// [`proxy_fetch_image`] without the error recording, so the batch path does not
-/// overwrite `last_error` once per URL.
+/// [`proxy_fetch_image`] without the error recording.
 fn fetch_image(
     url: &str,
     headers: Option<HashMap<String, String>>,
@@ -368,57 +367,116 @@ fn fetch_resource(
     http::parse_and_validate(url)?;
 
     // Fast path: serve from cache without touching the network or the tunnel.
-    {
-        let mut guard = lock_state();
-        let state = guard.as_mut().ok_or(ProxyError::NotInitialized)?;
-        if let Some(cached) = state.cache.get(url) {
-            return Ok(FetchedResource {
-                from_cache: true,
-                ..cached.clone()
-            });
-        }
+    if let Some(cached) = cached_resource(url) {
+        return Ok(cached);
     }
 
     let (manager, limits) = acquire_manager()?;
     let outcome = manager
         .fetch(FetchRequest::new(url, profile, limits).with_headers(header_pairs(headers)))?;
 
-    let response = FetchedResource {
+    Ok(remember(url, outcome))
+}
+
+/// A cached copy of `url`, already marked as having come from the cache.
+fn cached_resource(url: &str) -> Option<FetchedResource> {
+    lock_state()
+        .as_mut()?
+        .cache
+        .get(url)
+        .map(|cached| FetchedResource {
+            from_cache: true,
+            ..cached.clone()
+        })
+}
+
+/// Record a fetch outcome under `url` and return it as a resource.
+fn remember(url: &str, outcome: crate::http::FetchOutcome) -> FetchedResource {
+    let resource = FetchedResource {
         mime_type: outcome.mime_type,
         data: outcome.body,
         from_cache: false,
         final_url: outcome.final_url,
     };
-
-    {
-        let mut guard = lock_state();
-        if let Some(state) = guard.as_mut() {
-            state.cache.put(url.to_string(), response.clone());
-        }
+    if let Some(state) = lock_state().as_mut() {
+        state.cache.put(url.to_string(), resource.clone());
     }
-
-    Ok(response)
+    resource
 }
 
-/// Fetch multiple images through the tunnel.
+/// Fetch multiple images through the tunnel, concurrently.
 ///
-/// Requests are serviced by the single shared tunnel, so they are processed in
-/// order; `max_concurrent` is accepted for API stability but currently advisory.
+/// `max_concurrent` bounds how many are in flight at once. It used to be
+/// accepted and ignored; honouring it matters now that the tunnel can actually
+/// carry several at a time, because unbounded fan-out would open a socket per
+/// URL in a message we did not write.
 #[uniffi::export]
 pub fn proxy_fetch_images_batch(
     urls: Vec<String>,
-    _max_concurrent: u32,
+    max_concurrent: u32,
 ) -> Result<Vec<BatchImageResult>, ProxyError> {
-    // Each element's outcome is independent, so a failure is a value in the
-    // result list rather than a short-circuit: one broken image must not hide
-    // the rest.
-    Ok(urls
-        .into_iter()
-        .map(|url| {
-            let outcome = fetch_image(&url, None);
-            BatchImageResult::new(url, outcome)
-        })
-        .collect())
+    let window = (max_concurrent as usize).max(1);
+    Ok(urls.chunks(window).flat_map(fetch_concurrently).collect())
+}
+
+/// A batch entry that has been started but not yet resolved.
+///
+/// A cache hit is already an answer, so it is a different thing from a fetch in
+/// flight — modelling both as "maybe a `Pending`" would have made a hit
+/// indistinguishable from a failure to start one.
+enum Started {
+    Cached(FetchedResource),
+    InFlight(Pending),
+    Refused(ProxyError),
+}
+
+/// Run one window of URLs: start them all, then collect them all.
+///
+/// The two phases are the point. Each element's outcome is independent, so a
+/// failure is a value in the result list rather than a short-circuit: one broken
+/// image must not hide the rest.
+fn fetch_concurrently(urls: &[String]) -> Vec<BatchImageResult> {
+    let started: Vec<_> = urls.iter().map(|url| start_image(url)).collect();
+    urls.iter()
+        .zip(started)
+        .map(|(url, started)| BatchImageResult::new(url.clone(), collect_image(url, started)))
+        .collect()
+}
+
+/// Begin one image fetch, answering from the cache when it can.
+fn start_image(url: &str) -> Started {
+    // Same order as the single-fetch path: validate, then cache, then network.
+    if let Err(e) = http::parse_and_validate(url) {
+        return Started::Refused(e);
+    }
+    if let Some(hit) = cached_resource(url) {
+        return Started::Cached(hit);
+    }
+    match acquire_manager() {
+        Err(e) => Started::Refused(e),
+        Ok((manager, limits)) => manager
+            .submit(FetchRequest::new(
+                url,
+                ClientProfile::browser("image/*"),
+                limits,
+            ))
+            .map_or_else(Started::Refused, Started::InFlight),
+    }
+}
+
+/// Resolve one started image, applying the cache and the image predicate.
+fn collect_image(url: &str, started: Started) -> Result<FetchedResource, ProxyError> {
+    let resource = match started {
+        Started::Cached(hit) => hit,
+        Started::Refused(e) => return Err(e),
+        Started::InFlight(pending) => remember(url, pending.wait()?),
+    };
+    match resource.mime_type.starts_with("image/") {
+        true => Ok(resource),
+        false => Err(ProxyError::InvalidContentType {
+            content_type: resource.mime_type,
+        }),
+    }
 }
 
 /// Fetch an arbitrary URL through the tunnel (non-image content allowed).

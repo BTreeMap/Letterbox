@@ -1,27 +1,43 @@
 //! WARP tunnel: a smoltcp TCP/IP stack riding the MASQUE transport.
 //!
-//! [`WarpTunnel`] owns every piece of the userspace network stack for the whole
-//! lifetime of the tunnel, so all storage is plain owned [`Vec`]s — there is no
-//! `Box::leak` and no `'static` smuggling. A single worker thread owns the
-//! tunnel; callers obtain a [`TunnelTcpStream`] that implements [`Read`]/[`Write`]
-//! by repeatedly driving the poll loop until the requested I/O can make progress.
-//!
 //! ```text
-//! TLS / HTTP  <->  TunnelTcpStream  <->  smoltcp TCP  <->  MASQUE  <->  UDP
+//! TLS / HTTP  <->  TunnelSocket  <->  smoltcp TCP  <->  MASQUE  <->  UDP
 //! ```
+//!
+//! # Ownership
+//!
+//! `Interface::poll` needs `&mut` over the interface *and* the socket set, and
+//! every concurrent fetch needs its own socket in that same set. An `async fn`
+//! cannot carry a `&mut` across a suspension point, so the two owners are
+//! reconciled the only way single-threaded async allows: one [`Rc`] over one
+//! [`RefCell`]. Exactly one cell, holding exactly what has more than one
+//! reader — the device, the transport and the packet source stay owned outright
+//! by the [`Driver`], because nothing else touches them.
+//!
+//! The hazard of a `RefCell` in async code is a borrow held across `.await`,
+//! which panics. Here that is unrepresentable rather than merely avoided: every
+//! borrow of [`Netif`] happens inside a `poll_*` body, and `poll` is not a
+//! coroutine — there is no `.await` to hold it across.
 
 use crate::config::WarpConfig;
 use crate::error::ProxyError;
 use crate::tunnel::device::VirtualDevice;
 use crate::tunnel::dns::DnsCache;
-use crate::tunnel::masque::MasqueTransport;
+use crate::tunnel::masque::{MasqueTransport, PacketSource, TransportStatus};
 use crate::tunnel::stats::TunnelStats;
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer, State as TcpState};
 use smoltcp::time::Instant as SmoltcpInstant;
 use smoltcp::wire::{HardwareAddress, IpAddress, IpCidr, Ipv4Address};
-use std::io::{self, Read, Write};
+use std::cell::{Cell, RefCell};
+use std::future::poll_fn;
+use std::io;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::sync::Notify;
 
 /// Per-direction TCP buffer size (64 KiB).
 const TCP_BUFFER_SIZE: usize = 65_535;
@@ -29,8 +45,16 @@ const TCP_BUFFER_SIZE: usize = 65_535;
 /// Cloudflare WARP's tunnel-side default gateway.
 const WARP_GATEWAY: Ipv4Address = Ipv4Address::new(172, 16, 0, 1);
 
-/// Granularity of a single poll iteration while waiting on socket readiness.
-const POLL_SLICE: Duration = Duration::from_millis(20);
+/// Longest the driver sleeps when smoltcp has no deadline of its own.
+///
+/// A ceiling, not a schedule: an inbound packet or an egress notification wakes
+/// the driver sooner, so this only bounds how stale a purely internal timer can
+/// get.
+const MAX_IDLE_SLICE: Duration = Duration::from_millis(100);
+
+/// Ephemeral port range, per IANA.
+const EPHEMERAL_FIRST: u16 = 49_152;
+const EPHEMERAL_LAST: u16 = 65_535;
 
 /// Monotonic smoltcp clock anchored at first use.
 fn smoltcp_now() -> SmoltcpInstant {
@@ -57,25 +81,49 @@ fn parse_ipv4_octets(addr: &str) -> Result<[u8; 4], ProxyError> {
         })
 }
 
-/// A MASQUE-backed userspace TCP/IP stack to Cloudflare WARP.
-pub struct WarpTunnel {
-    transport: MasqueTransport,
+/// The routable half of the stack: what `Interface::poll` needs together.
+///
+/// One struct because smoltcp requires both at once; splitting them into two
+/// cells would only invite borrowing one without the other.
+struct Netif {
     interface: Interface,
     sockets: SocketSet<'static>,
-    device: VirtualDevice,
-    local_ipv4: [u8; 4],
-    next_local_port: u16,
-    /// Resolver answers, kept here because the worker owning the tunnel is also
-    /// the only thing that resolves — co-located ownership, no lock. Answers
-    /// outlive a rebuilt session: which address a name has is not the tunnel's
-    /// business.
-    names: DnsCache,
 }
 
-impl WarpTunnel {
-    /// Build a tunnel from provisioned WARP configuration (no I/O yet).
-    pub fn new(config: &WarpConfig) -> Result<Self, ProxyError> {
-        let transport = MasqueTransport::new(config)?;
+/// Everything more than one task touches, and nothing else.
+pub struct Shared {
+    net: RefCell<Netif>,
+    /// Resolver answers. Not in [`Netif`]: name resolution has nothing to do
+    /// with routing, and a fetch looking a name up must not block the driver's
+    /// poll. It carries its own cell, so no borrow guard escapes to a caller.
+    names: DnsCache,
+    /// Replaced wholesale when the session is rebuilt, so readers always see
+    /// the live session's counters rather than a dead one's.
+    status: RefCell<TransportStatus>,
+    /// Rung by a socket that has queued bytes the driver must put on the wire.
+    egress: Notify,
+    /// Rung by the driver whenever the session's connectedness may have changed.
+    liveness: Notify,
+    /// Ephemeral port cursor. A [`Cell`] because a `u16` is `Copy` — a
+    /// `RefCell` here would buy a runtime borrow check for nothing.
+    next_port: Cell<u16>,
+    local_ipv4: [u8; 4],
+}
+
+/// A tunnel: a handle onto the shared stack, cloneable by every fetch.
+#[derive(Clone)]
+pub struct Tunnel {
+    shared: Rc<Shared>,
+}
+
+impl Tunnel {
+    /// Build the stack and the driver that will run it. No I/O yet.
+    ///
+    /// Returns the handle callers fetch through and the future that must be
+    /// spawned for any of it to work — separated so that "I have a tunnel" and
+    /// "something is pumping it" cannot silently diverge.
+    pub fn new(config: &WarpConfig) -> Result<(Self, Driver), ProxyError> {
+        let (transport, source) = MasqueTransport::new(config)?;
         let local_ipv4 = parse_ipv4_octets(&config.interface.address_ipv4)?;
 
         let mut device = VirtualDevice::new();
@@ -94,32 +142,45 @@ impl WarpTunnel {
                 details: "Failed to install default route".to_string(),
             })?;
 
-        Ok(Self {
-            transport,
-            interface,
-            sockets: SocketSet::new(Vec::new()),
-            device,
-            local_ipv4,
-            next_local_port: 49_152,
+        let shared = Rc::new(Shared {
+            net: RefCell::new(Netif {
+                interface,
+                sockets: SocketSet::new(Vec::new()),
+            }),
             names: DnsCache::new(),
-        })
+            status: RefCell::new(transport.status()),
+            egress: Notify::new(),
+            liveness: Notify::new(),
+            next_port: Cell::new(EPHEMERAL_FIRST),
+            local_ipv4,
+        });
+
+        let driver = Driver {
+            shared: Rc::clone(&shared),
+            config: config.clone(),
+            device,
+            transport,
+            source,
+        };
+        Ok((Self { shared }, driver))
     }
 
-    /// The resolver-answer cache this tunnel resolves against.
-    pub fn names(&mut self) -> &mut DnsCache {
-        &mut self.names
+    /// Whether the session is up right now.
+    pub fn is_connected(&self) -> bool {
+        self.shared.status.borrow().is_connected()
+    }
+
+    /// Live transport statistics.
+    pub fn stats(&self) -> TunnelStats {
+        self.shared.status.borrow().stats()
     }
 
     /// The WARP endpoint this tunnel targets.
     pub fn endpoint(&self) -> std::net::SocketAddr {
-        self.transport.endpoint()
+        self.shared.status.borrow().endpoint()
     }
 
     /// Which transport is carrying this tunnel.
-    ///
-    /// Constant now that MASQUE is the only one, but kept because the
-    /// diagnostics screen and the on-device test both assert on it — and a
-    /// future second transport should not have to reintroduce the plumbing.
     pub fn protocol(&self) -> &'static str {
         MasqueTransport::PROTOCOL
     }
@@ -129,220 +190,351 @@ impl WarpTunnel {
         MasqueTransport::SNI
     }
 
-    /// Whether the tunnel is ready to carry packets.
-    pub fn is_connected(&self) -> bool {
-        self.transport.is_connected()
+    /// The tunnel's local IPv4 address octets.
+    pub fn local_ipv4(&self) -> [u8; 4] {
+        self.shared.local_ipv4
     }
 
-    /// Live transport statistics.
-    pub fn stats(&self) -> TunnelStats {
-        self.transport.stats()
+    /// The resolver-answer cache.
+    pub fn names(&self) -> &DnsCache {
+        &self.shared.names
     }
 
-    /// Run one poll iteration, blocking up to `wait` for inbound datagrams.
-    fn poll_once(&mut self, wait: Duration) -> Result<(), ProxyError> {
-        for packet in self.transport.poll_incoming(wait)? {
-            self.device.push_inbound(packet);
+    /// Wait until the session is up, or `timeout` elapses.
+    ///
+    /// The driver rebuilds on its own; this is how a fetch waits for that to
+    /// finish instead of racing it with a rebuild of its own.
+    pub async fn ready(&self, timeout: Duration) -> Result<(), ProxyError> {
+        let deadline = Instant::now() + timeout;
+        while !self.is_connected() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ProxyError::Timeout {
+                    seconds: timeout.as_secs() as u32,
+                });
+            }
+            // Subscribing before the check would be the correct order for a
+            // pure edge signal; `Notify` stores one permit, so a wake that
+            // lands between the check and the await is not lost.
+            let _ = tokio::time::timeout(remaining, self.shared.liveness.notified()).await;
         }
-        self.interface
-            .poll(smoltcp_now(), &mut self.device, &mut self.sockets);
-        while let Some(packet) = self.device.pop_outbound() {
-            self.transport.send_ip(&packet)?;
-        }
-        self.transport.tick()?;
         Ok(())
     }
 
-    /// Initiate the handshake and pump the loop until connected or timed out.
-    pub fn connect(&mut self, timeout: Duration) -> Result<(), ProxyError> {
-        self.transport.initiate_handshake()?;
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            self.poll_once(POLL_SLICE)?;
-            if self.transport.is_connected() {
-                return Ok(());
-            }
-        }
-        Err(ProxyError::Timeout {
-            seconds: timeout.as_secs() as u32,
-        })
-    }
-
-    /// Allocate the next ephemeral local TCP port (wraps within 49152-65535).
-    fn allocate_local_port(&mut self) -> u16 {
-        let port = self.next_local_port;
-        self.next_local_port = if port == 65_535 { 49_152 } else { port + 1 };
-        port
-    }
-
-    /// Open a TCP connection through the tunnel and wait until it is established.
-    pub fn open_tcp(
-        &mut self,
+    /// Open a TCP connection through the tunnel.
+    pub async fn connect(
+        &self,
         remote: IpAddress,
         remote_port: u16,
         timeout: Duration,
+    ) -> Result<TunnelSocket, ProxyError> {
+        let handle = self.start_connect(remote, remote_port)?;
+        let socket = TunnelSocket {
+            shared: Rc::clone(&self.shared),
+            handle,
+        };
+        self.shared.egress.notify_one();
+
+        match tokio::time::timeout(timeout, socket.established()).await {
+            Ok(Ok(())) => Ok(socket),
+            Ok(Err(e)) => Err(e),
+            // `socket` drops here, which closes and removes it — the timeout
+            // path leaks nothing precisely because cleanup is `Drop`, not a
+            // step someone has to remember on every exit.
+            Err(_) => Err(ProxyError::Timeout {
+                seconds: timeout.as_secs() as u32,
+            }),
+        }
+    }
+
+    /// Add a socket and start its handshake. Synchronous: one borrow, no await.
+    fn start_connect(
+        &self,
+        remote: IpAddress,
+        remote_port: u16,
     ) -> Result<SocketHandle, ProxyError> {
+        let mut net = self.shared.net.borrow_mut();
+        let local_port = self.allocate_local_port(&net.sockets)?;
+
         let rx = SocketBuffer::new(vec![0u8; TCP_BUFFER_SIZE]);
         let tx = SocketBuffer::new(vec![0u8; TCP_BUFFER_SIZE]);
-        let socket = TcpSocket::new(rx, tx);
-        let handle = self.sockets.add(socket);
+        let handle = net.sockets.add(TcpSocket::new(rx, tx));
 
-        let local_port = self.allocate_local_port();
-        {
-            let socket = self.sockets.get_mut::<TcpSocket>(handle);
-            socket
-                .connect(self.interface.context(), (remote, remote_port), local_port)
-                .map_err(|e| ProxyError::TunnelError {
+        let Netif { interface, sockets } = &mut *net;
+        sockets
+            .get_mut::<TcpSocket>(handle)
+            .connect(interface.context(), (remote, remote_port), local_port)
+            .map_err(|e| {
+                sockets.remove(handle);
+                ProxyError::TunnelError {
                     details: format!("TCP connect failed: {e}"),
-                })?;
-        }
-
-        let deadline = Instant::now() + timeout;
-        loop {
-            self.poll_once(POLL_SLICE)?;
-            let state = self.sockets.get::<TcpSocket>(handle).state();
-            match state {
-                TcpState::Established => return Ok(handle),
-                TcpState::Closed => {
-                    self.sockets.remove(handle);
-                    return Err(ProxyError::TunnelError {
-                        details: "TCP connection refused".to_string(),
-                    });
                 }
-                _ if Instant::now() >= deadline => {
-                    self.sockets.remove(handle);
-                    return Err(ProxyError::Timeout {
-                        seconds: timeout.as_secs() as u32,
-                    });
-                }
-                _ => {}
-            }
-        }
+            })?;
+        Ok(handle)
     }
 
-    /// Gracefully close and drop a TCP socket.
-    pub fn close_tcp(&mut self, handle: SocketHandle) {
-        {
-            let socket = self.sockets.get_mut::<TcpSocket>(handle);
-            socket.close();
-        }
-        // Give the FIN a chance to flush.
-        for _ in 0..16 {
-            if self.poll_once(Duration::from_millis(5)).is_err() {
-                break;
-            }
-            if self.sockets.get::<TcpSocket>(handle).state() == TcpState::Closed {
-                break;
-            }
-        }
-        self.sockets.remove(handle);
-    }
-
-    /// Borrow a TCP socket as a blocking [`Read`]/[`Write`] stream.
-    pub fn stream(&mut self, handle: SocketHandle, timeout: Duration) -> TunnelTcpStream<'_> {
-        TunnelTcpStream {
-            tunnel: self,
-            handle,
-            timeout,
-        }
-    }
-
-    /// The tunnel's local IPv4 address octets.
-    pub fn local_ipv4(&self) -> [u8; 4] {
-        self.local_ipv4
+    /// Claim an ephemeral port no live socket is already bound to.
+    ///
+    /// The cursor alone was enough while one fetch ran at a time. With several
+    /// in flight it can wrap onto a port still in use, so the set is consulted:
+    /// linear in open sockets, of which there are a handful.
+    fn allocate_local_port(&self, sockets: &SocketSet<'static>) -> Result<u16, ProxyError> {
+        let span = usize::from(EPHEMERAL_LAST - EPHEMERAL_FIRST) + 1;
+        (0..span)
+            .map(|_| {
+                let port = self.shared.next_port.get();
+                self.shared.next_port.set(if port == EPHEMERAL_LAST {
+                    EPHEMERAL_FIRST
+                } else {
+                    port + 1
+                });
+                port
+            })
+            .find(|port| !port_in_use(sockets, *port))
+            .ok_or_else(|| ProxyError::TunnelError {
+                details: "No free ephemeral port".to_string(),
+            })
     }
 }
 
-/// Blocking byte stream over a tunnelled TCP socket.
+/// Whether any live socket already holds `port` locally.
+fn port_in_use(sockets: &SocketSet<'static>, port: u16) -> bool {
+    sockets.iter().any(|(_, socket)| {
+        // Irrefutable: `socket-tcp` is the only socket feature compiled in, so
+        // the variant set is closed here by the manifest, not by a wildcard
+        // that would silently absorb a second kind if one were ever enabled.
+        let smoltcp::socket::Socket::Tcp(tcp) = socket;
+        tcp.local_endpoint().is_some_and(|end| end.port == port)
+    })
+}
+
+/// Owns the transport and pumps packets between it and the stack.
 ///
-/// Each [`read`](Read::read)/[`write`](Write::write) drives the smoltcp poll loop
-/// until the socket can make progress or the per-stream timeout elapses, turning
-/// smoltcp's event model into the synchronous interface rustls expects.
-pub struct TunnelTcpStream<'t> {
-    tunnel: &'t mut WarpTunnel,
+/// Separate from [`Tunnel`] because these three are single-owner: nothing else
+/// reads the device, the transport or the packet source, so nothing else needs
+/// them shared.
+pub struct Driver {
+    shared: Rc<Shared>,
+    config: WarpConfig,
+    device: VirtualDevice,
+    transport: MasqueTransport,
+    source: PacketSource,
+}
+
+impl Driver {
+    /// Run until the tunnel handle is dropped.
+    ///
+    /// Reconnection lives here rather than in a fetch: a fetch that rebuilt the
+    /// session would tear down every *other* fetch's socket to fix its own.
+    pub async fn run(mut self, handshake_timeout: Duration) {
+        loop {
+            if let Err(e) = self.transport.initiate_handshake() {
+                log::warn!("MASQUE handshake could not start: {e}");
+                return;
+            }
+            self.shared.liveness.notify_waiters();
+
+            self.pump(handshake_timeout).await;
+
+            // The session is gone and cannot be restarted — `initiate_handshake`
+            // consumed what it needed. A rebuilt transport is the only honest
+            // reconnection, and swapping the status handle is what makes
+            // diagnostics report the new session rather than the dead one.
+            log::warn!("MASQUE session ended; rebuilding");
+            match MasqueTransport::new(&self.config) {
+                Ok((transport, source)) => {
+                    *self.shared.status.borrow_mut() = transport.status();
+                    self.transport = transport;
+                    self.source = source;
+                    self.shared.liveness.notify_waiters();
+                }
+                Err(e) => {
+                    log::error!("cannot rebuild MASQUE transport: {e}");
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Move packets in both directions until the session ends.
+    async fn pump(&mut self, handshake_timeout: Duration) {
+        let started = Instant::now();
+        let mut was_connected = false;
+
+        loop {
+            let delay = self.poll_once();
+
+            let connected = self.transport.is_connected();
+            if connected != was_connected {
+                was_connected = connected;
+                self.shared.liveness.notify_waiters();
+            }
+            if !connected && started.elapsed() > handshake_timeout {
+                return;
+            }
+
+            tokio::select! {
+                packet = self.source.recv() => match packet {
+                    Some(packet) => self.device.push_inbound(packet),
+                    // Every sender is gone: the session thread has exited.
+                    None => return,
+                },
+                () = self.shared.egress.notified() => {}
+                () = tokio::time::sleep(delay) => {}
+            }
+        }
+    }
+
+    /// One synchronous turn of the stack, returning how long it may now sleep.
+    ///
+    /// Deliberately not `async`: the [`Netif`] borrow lives and dies inside it,
+    /// so no borrow can reach an `.await`.
+    fn poll_once(&mut self) -> Duration {
+        while let Some(packet) = self.source.try_recv() {
+            self.device.push_inbound(packet);
+        }
+
+        let now = smoltcp_now();
+        let delay = {
+            let mut net = self.shared.net.borrow_mut();
+            let Netif { interface, sockets } = &mut *net;
+            interface.poll(now, &mut self.device, sockets);
+            interface.poll_delay(now, sockets)
+        };
+
+        while let Some(packet) = self.device.pop_outbound() {
+            if let Err(e) = self.transport.send_ip(&packet) {
+                log::debug!("dropping outbound packet: {e}");
+            }
+        }
+
+        delay.map_or(MAX_IDLE_SLICE, |d| {
+            Duration::from_micros(d.total_micros()).min(MAX_IDLE_SLICE)
+        })
+    }
+}
+
+/// One tunnelled TCP connection.
+///
+/// Closing is [`Drop`], so every exit path — success, error, timeout,
+/// cancellation — releases the socket without a caller remembering to.
+pub struct TunnelSocket {
+    shared: Rc<Shared>,
     handle: SocketHandle,
-    timeout: Duration,
 }
 
-impl Read for TunnelTcpStream<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let deadline = Instant::now() + self.timeout;
-        loop {
-            self.tunnel
-                .poll_once(POLL_SLICE)
-                .map_err(io::Error::other)?;
+impl TunnelSocket {
+    /// Resolve once the handshake completes, or fail if the peer refused.
+    async fn established(&self) -> Result<(), ProxyError> {
+        poll_fn(|cx| {
+            let mut net = self.shared.net.borrow_mut();
+            let socket = net.sockets.get_mut::<TcpSocket>(self.handle);
+            match socket.state() {
+                TcpState::Established => Poll::Ready(Ok(())),
+                TcpState::Closed => Poll::Ready(Err(ProxyError::TunnelError {
+                    details: "TCP connection refused".to_string(),
+                })),
+                _ => {
+                    // Both, because smoltcp wakes whichever direction the state
+                    // change made ready and a handshake is neither read nor
+                    // write until it completes.
+                    socket.register_recv_waker(cx.waker());
+                    socket.register_send_waker(cx.waker());
+                    Poll::Pending
+                }
+            }
+        })
+        .await
+    }
+}
 
-            let socket = self.tunnel.sockets.get_mut::<TcpSocket>(self.handle);
-            if socket.can_recv() {
-                return socket.recv_slice(buf).map_err(io::Error::other);
-            }
-            if !socket.may_recv() {
-                // Peer closed the read half and no buffered data remains: EOF.
-                return Ok(0);
-            }
-            if Instant::now() >= deadline {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "tunnel read timed out",
-                ));
-            }
+impl Drop for TunnelSocket {
+    /// Send a FIN and drop the socket.
+    ///
+    /// The FIN goes out on the driver's next turn, which the notification
+    /// schedules; waiting for it here would mean blocking a `Drop`, and the
+    /// peer's view of a connection we have already abandoned is not worth that.
+    fn drop(&mut self) {
+        let mut net = self.shared.net.borrow_mut();
+        net.sockets.get_mut::<TcpSocket>(self.handle).close();
+        net.sockets.remove(self.handle);
+        drop(net);
+        self.shared.egress.notify_one();
+    }
+}
+
+impl AsyncRead for TunnelSocket {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let mut net = self.shared.net.borrow_mut();
+        let socket = net.sockets.get_mut::<TcpSocket>(self.handle);
+
+        if socket.can_recv() {
+            let taken = socket
+                .recv_slice(buf.initialize_unfilled())
+                .map_err(io::Error::other)?;
+            buf.advance(taken);
+            return Poll::Ready(Ok(()));
         }
-    }
-}
-
-impl Write for TunnelTcpStream<'_> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.write_bytes(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        let deadline = Instant::now() + self.timeout;
-        loop {
-            self.tunnel
-                .poll_once(POLL_SLICE)
-                .map_err(io::Error::other)?;
-            let socket = self.tunnel.sockets.get::<TcpSocket>(self.handle);
-            if socket.send_queue() == 0 {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "tunnel flush timed out",
-                ));
-            }
+        if !socket.may_recv() {
+            // Peer closed the read half and nothing is buffered: EOF, which
+            // `ReadBuf` expresses as a successful read of zero bytes.
+            return Poll::Ready(Ok(()));
         }
+        socket.register_recv_waker(cx.waker());
+        Poll::Pending
     }
 }
 
-impl TunnelTcpStream<'_> {
-    fn write_bytes(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let deadline = Instant::now() + self.timeout;
-        loop {
-            self.tunnel
-                .poll_once(POLL_SLICE)
-                .map_err(io::Error::other)?;
+impl AsyncWrite for TunnelSocket {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let queued = {
+            let mut net = self.shared.net.borrow_mut();
+            let socket = net.sockets.get_mut::<TcpSocket>(self.handle);
 
-            let socket = self.tunnel.sockets.get_mut::<TcpSocket>(self.handle);
             if !socket.may_send() {
-                return Err(io::Error::new(
+                return Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "tunnel connection closed",
-                ));
+                )));
             }
-            if socket.can_send() {
-                let written = socket.send_slice(buf).map_err(io::Error::other)?;
-                if written > 0 {
-                    return Ok(written);
+            match socket.send_slice(buf) {
+                Ok(0) => {
+                    socket.register_send_waker(cx.waker());
+                    return Poll::Pending;
                 }
+                Ok(written) => written,
+                Err(e) => return Poll::Ready(Err(io::Error::other(e))),
             }
-            if Instant::now() >= deadline {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "tunnel write timed out",
-                ));
-            }
+        };
+        // Outside the borrow: waking the driver while holding the cell it needs
+        // would be correct only by accident of scheduling order.
+        self.shared.egress.notify_one();
+        Poll::Ready(Ok(queued))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        let mut net = self.shared.net.borrow_mut();
+        let socket = net.sockets.get_mut::<TcpSocket>(self.handle);
+        if socket.send_queue() == 0 {
+            return Poll::Ready(Ok(()));
         }
+        socket.register_send_waker(cx.waker());
+        drop(net);
+        self.shared.egress.notify_one();
+        Poll::Pending
+    }
+
+    /// Shutdown is [`Drop`]'s job; a socket is never half-closed on purpose.
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -391,12 +583,12 @@ mod tests {
 
     #[test]
     fn tunnel_creation_succeeds() {
-        assert!(WarpTunnel::new(&test_config()).is_ok());
+        assert!(Tunnel::new(&test_config()).is_ok());
     }
 
     #[test]
     fn tunnel_not_connected_initially() {
-        let tunnel = WarpTunnel::new(&test_config()).unwrap();
+        let (tunnel, _driver) = Tunnel::new(&test_config()).expect("build tunnel");
         assert!(!tunnel.is_connected());
     }
 
@@ -421,9 +613,41 @@ mod tests {
 
     #[test]
     fn local_port_allocation_wraps() {
-        let mut tunnel = WarpTunnel::new(&test_config()).unwrap();
-        tunnel.next_local_port = 65_535;
-        assert_eq!(tunnel.allocate_local_port(), 65_535);
-        assert_eq!(tunnel.allocate_local_port(), 49_152);
+        let (tunnel, _driver) = Tunnel::new(&test_config()).expect("build tunnel");
+        let sockets = SocketSet::new(Vec::new());
+        tunnel.shared.next_port.set(EPHEMERAL_LAST);
+        assert_eq!(
+            tunnel.allocate_local_port(&sockets).unwrap(),
+            EPHEMERAL_LAST
+        );
+        assert_eq!(
+            tunnel.allocate_local_port(&sockets).unwrap(),
+            EPHEMERAL_FIRST
+        );
+    }
+
+    /// Concurrency made this reachable: the cursor alone would hand the same
+    /// port to a second fetch once it wrapped onto a live one.
+    #[test]
+    fn a_port_held_by_a_live_socket_is_skipped() {
+        let (tunnel, _driver) = Tunnel::new(&test_config()).expect("build tunnel");
+        let first = tunnel
+            .start_connect(IpAddress::v4(1, 1, 1, 1), 443)
+            .expect("open first");
+
+        let net = tunnel.shared.net.borrow();
+        let taken = net
+            .sockets
+            .get::<TcpSocket>(first)
+            .local_endpoint()
+            .expect("connected socket has a local endpoint")
+            .port;
+
+        // Rewind the cursor onto the port already in use.
+        tunnel.shared.next_port.set(taken);
+        let next = tunnel
+            .allocate_local_port(&net.sockets)
+            .expect("a free port exists");
+        assert_ne!(next, taken, "must not reuse a live socket's port");
     }
 }

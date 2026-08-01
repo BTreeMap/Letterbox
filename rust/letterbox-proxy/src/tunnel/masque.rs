@@ -21,10 +21,11 @@
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use usque_core::tunnel::{Stats, TunnelConfig};
 use usque_core::{AtomicBool, TunnelIdentity};
@@ -77,102 +78,64 @@ const TUNNEL_MTU: u32 = 1280;
 ///
 /// Owns the session thread; dropping it tears the session down.
 pub struct MasqueTransport {
-    endpoint: SocketAddr,
     /// Outbound packets, stack → session.
-    outbound: tokio::sync::mpsc::Sender<Vec<u8>>,
-    /// Inbound packets, session → stack.
-    inbound: Receiver<Vec<u8>>,
-    stats: Arc<Stats>,
-    established: Arc<AtomicBool>,
-    /// Set when the session ends, so `is_connected` cannot report a live tunnel
-    /// after the thread has exited.
-    finished: Arc<StdAtomicBool>,
-    /// When the tunnel was first seen connected. `OnceLock` because it is
-    /// written once, lazily, from `&self` in [`MasqueTransport::stats`].
-    connected_at: OnceLock<Instant>,
+    outbound: Sender<Vec<u8>>,
+    status: TransportStatus,
     /// Everything the session needs, held until [`initiate_handshake`] consumes
     /// it. `Some` means "not yet started"; taking it is what makes starting
     /// idempotent without a separate flag that could disagree with reality.
+    ///
+    /// A started transport can never start again — reconnecting means building
+    /// a new one, which is the only honest reading of a session whose thread has
+    /// exited.
     ///
     /// [`initiate_handshake`]: MasqueTransport::initiate_handshake
     pending: Option<PendingSession>,
     session: Option<JoinHandle<()>>,
 }
 
-/// The half of a transport that only exists before the session starts.
-struct PendingSession {
-    identity: TunnelIdentity,
-    outbound: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    inbound: SyncSender<Vec<u8>>,
+/// Packets arriving from the tunnel.
+///
+/// Split from the transport rather than held inside it because the two have
+/// different owners: the driver task awaits this, while `send_ip` and the
+/// status are reached from elsewhere. Keeping them together would have forced
+/// the whole transport behind a cell to await one field.
+pub struct PacketSource {
+    inbound: Receiver<Vec<u8>>,
 }
 
-impl MasqueTransport {
-    /// Name reported by diagnostics and asserted by the on-device test.
-    pub const PROTOCOL: &'static str = "masque";
-
-    /// The name this transport puts in the TLS ClientHello.
-    ///
-    /// Surfaced for diagnostics because it, the address and the port together
-    /// are what a bug report needs about *where the session went* — and none of
-    /// the three come from the account: the registration API only ever returns
-    /// WireGuard endpoints, so the MASQUE data plane is a constant here.
-    pub const SNI: &'static str = MASQUE_SNI;
-
-    /// Build a transport for the provisioned account, **without connecting**.
-    ///
-    /// Construction is pure: it validates and decodes credentials and nothing
-    /// else. The session thread starts at
-    /// [`initiate_handshake`](Self::initiate_handshake), so constructing a
-    /// transport never touches the network — which is what lets the stack be
-    /// unit-tested offline, and keeps "I have a transport" from meaning "I am
-    /// dialling Cloudflare".
-    ///
-    /// # Errors
-    ///
-    /// Fails if the account carries no MASQUE credentials or they do not decode.
-    pub fn new(config: &WarpConfig) -> Result<Self, ProxyError> {
-        let credentials = config
-            .masque
-            .as_ref()
-            .ok_or_else(|| ProxyError::TunnelError {
-                details: "Account has no MASQUE credentials; re-provisioning required".to_string(),
-            })?;
-
-        let identity = TunnelIdentity::new(
-            credentials.decode_private_key()?,
-            credentials.decode_endpoint_key()?,
-        )
-        .map_err(|e| ProxyError::TunnelError {
-            details: format!("Invalid MASQUE identity: {e}"),
-        })?;
-
-        let endpoint: SocketAddr = format!("{MASQUE_ENDPOINT_IPV4}:{MASQUE_ENDPOINT_PORT}")
-            .parse()
-            .map_err(|e| ProxyError::TunnelError {
-                details: format!("Invalid MASQUE endpoint: {e}"),
-            })?;
-
-        let (out_tx, out_rx) = tokio::sync::mpsc::channel(PACKET_QUEUE_DEPTH);
-        let (in_tx, in_rx) = sync_channel(PACKET_QUEUE_DEPTH);
-
-        Ok(Self {
-            endpoint,
-            outbound: out_tx,
-            inbound: in_rx,
-            stats: Arc::new(Stats::default()),
-            established: Arc::new(AtomicBool::new(false)),
-            finished: Arc::new(StdAtomicBool::new(false)),
-            connected_at: OnceLock::new(),
-            pending: Some(PendingSession {
-                identity,
-                outbound: out_rx,
-                inbound: in_tx,
-            }),
-            session: None,
-        })
+impl PacketSource {
+    /// The next packet from the tunnel, or `None` once the session has ended.
+    pub async fn recv(&mut self) -> Option<Vec<u8>> {
+        self.inbound.recv().await
     }
 
-    /// The MASQUE endpoint this transport targets.
+    /// A packet already queued, without waiting for one.
+    pub fn try_recv(&mut self) -> Option<Vec<u8>> {
+        self.inbound.try_recv().ok()
+    }
+}
+
+/// A cheap, cloneable view of a session's liveness and counters.
+///
+/// Every field is an atomic behind an `Arc`, so this is shared without a lock
+/// or a cell: readers observe, they never mutate. That is what lets diagnostics
+/// answer while the driver is mid-poll.
+#[derive(Clone)]
+pub struct TransportStatus {
+    endpoint: SocketAddr,
+    stats: Arc<Stats>,
+    established: Arc<AtomicBool>,
+    /// Set when the session ends, so `is_connected` cannot report a live tunnel
+    /// after the thread has exited.
+    finished: Arc<StdAtomicBool>,
+    /// When the tunnel was first seen connected. `OnceLock` because it is
+    /// written once, lazily, from `&self` in [`TransportStatus::stats`].
+    connected_at: Arc<OnceLock<Instant>>,
+}
+
+impl TransportStatus {
+    /// The MASQUE endpoint this session targets.
     #[must_use]
     pub fn endpoint(&self) -> SocketAddr {
         self.endpoint
@@ -204,6 +167,96 @@ impl MasqueTransport {
             rx_bytes: snapshot.rx_bytes,
         }
     }
+}
+
+/// The half of a transport that only exists before the session starts.
+struct PendingSession {
+    identity: TunnelIdentity,
+    outbound: Receiver<Vec<u8>>,
+    inbound: Sender<Vec<u8>>,
+}
+
+impl MasqueTransport {
+    /// Name reported by diagnostics and asserted by the on-device test.
+    pub const PROTOCOL: &'static str = "masque";
+
+    /// The name this transport puts in the TLS ClientHello.
+    ///
+    /// Surfaced for diagnostics because it, the address and the port together
+    /// are what a bug report needs about *where the session went* — and none of
+    /// the three come from the account: the registration API only ever returns
+    /// WireGuard endpoints, so the MASQUE data plane is a constant here.
+    pub const SNI: &'static str = MASQUE_SNI;
+
+    /// Build a transport for the provisioned account, **without connecting**.
+    ///
+    /// Construction is pure: it validates and decodes credentials and nothing
+    /// else. The session thread starts at
+    /// [`initiate_handshake`](Self::initiate_handshake), so constructing a
+    /// transport never touches the network — which is what lets the stack be
+    /// unit-tested offline, and keeps "I have a transport" from meaning "I am
+    /// dialling Cloudflare".
+    ///
+    /// # Errors
+    ///
+    /// Fails if the account carries no MASQUE credentials or they do not decode.
+    pub fn new(config: &WarpConfig) -> Result<(Self, PacketSource), ProxyError> {
+        let credentials = config
+            .masque
+            .as_ref()
+            .ok_or_else(|| ProxyError::TunnelError {
+                details: "Account has no MASQUE credentials; re-provisioning required".to_string(),
+            })?;
+
+        let identity = TunnelIdentity::new(
+            credentials.decode_private_key()?,
+            credentials.decode_endpoint_key()?,
+        )
+        .map_err(|e| ProxyError::TunnelError {
+            details: format!("Invalid MASQUE identity: {e}"),
+        })?;
+
+        let endpoint: SocketAddr = format!("{MASQUE_ENDPOINT_IPV4}:{MASQUE_ENDPOINT_PORT}")
+            .parse()
+            .map_err(|e| ProxyError::TunnelError {
+                details: format!("Invalid MASQUE endpoint: {e}"),
+            })?;
+
+        let (out_tx, out_rx) = tokio::sync::mpsc::channel(PACKET_QUEUE_DEPTH);
+        let (in_tx, in_rx) = tokio::sync::mpsc::channel(PACKET_QUEUE_DEPTH);
+
+        Ok((
+            Self {
+                outbound: out_tx,
+                status: TransportStatus {
+                    endpoint,
+                    stats: Arc::new(Stats::default()),
+                    established: Arc::new(AtomicBool::new(false)),
+                    finished: Arc::new(StdAtomicBool::new(false)),
+                    connected_at: Arc::new(OnceLock::new()),
+                },
+                pending: Some(PendingSession {
+                    identity,
+                    outbound: out_rx,
+                    inbound: in_tx,
+                }),
+                session: None,
+            },
+            PacketSource { inbound: in_rx },
+        ))
+    }
+
+    /// A cheap handle to this session's liveness and counters.
+    #[must_use]
+    pub fn status(&self) -> TransportStatus {
+        self.status.clone()
+    }
+
+    /// Whether the CONNECT-IP flow is open *and* the session is still running.
+    #[must_use]
+    pub fn is_connected(&self) -> bool {
+        self.status.is_connected()
+    }
 
     /// Start the session thread, which begins connecting immediately.
     ///
@@ -220,10 +273,10 @@ impl MasqueTransport {
             return Ok(());
         };
 
-        let endpoint = self.endpoint;
-        let stats = Arc::clone(&self.stats);
-        let established = Arc::clone(&self.established);
-        let finished = Arc::clone(&self.finished);
+        let endpoint = self.status.endpoint;
+        let stats = Arc::clone(&self.status.stats);
+        let established = Arc::clone(&self.status.established);
+        let finished = Arc::clone(&self.status.finished);
 
         self.session = Some(
             std::thread::Builder::new()
@@ -248,27 +301,6 @@ impl MasqueTransport {
         Ok(())
     }
 
-    /// Collect packets that arrived from the tunnel, waiting up to `timeout`.
-    ///
-    /// Blocks for the first packet only, then drains without blocking, so a busy
-    /// tunnel is not rate-limited to one packet per call.
-    pub fn poll_incoming(&mut self, timeout: Duration) -> Result<Vec<Vec<u8>>, ProxyError> {
-        let mut packets = Vec::new();
-
-        match self.inbound.recv_timeout(timeout) {
-            Ok(packet) => packets.push(packet),
-            Err(RecvTimeoutError::Timeout) => return Ok(packets),
-            Err(RecvTimeoutError::Disconnected) => {
-                return Err(ProxyError::TunnelError {
-                    details: "MASQUE session ended".to_string(),
-                })
-            }
-        }
-        packets.extend(std::iter::from_fn(|| self.inbound.try_recv().ok()));
-
-        Ok(packets)
-    }
-
     /// Queue one IP packet for the tunnel.
     ///
     /// Drops when the queue is full rather than blocking — see [`PacketDuplex`]
@@ -286,14 +318,6 @@ impl MasqueTransport {
                 })
             }
         }
-    }
-
-    /// No-op: QUIC timers live inside the session loop.
-    ///
-    /// quiche's timers are driven by `conn.timeout()` in the session's own
-    /// `select!`, so there is nothing for the poll loop to advance.
-    pub fn tick(&mut self) -> Result<(), ProxyError> {
-        Ok(())
     }
 }
 

@@ -12,9 +12,8 @@ use crate::config::FetchLimits;
 use crate::error::{ProxyError, NO_HTTP_RESPONSE};
 use crate::tunnel::dns::resolve;
 use crate::tunnel::http1::{build_get_request, parse_response, ClientProfile, ContentCoding};
-use crate::tunnel::stack::WarpTunnel;
-use crate::tunnel::tls::request_https;
-use std::io::{Read, Write};
+use crate::tunnel::stack::Tunnel;
+use crate::tunnel::tls::{exchange, request_https};
 use std::time::Duration;
 use url::Url;
 
@@ -84,8 +83,8 @@ enum Step {
 /// the request bytes and the whole response policy decided by pure functions
 /// either side of it. That is what lets redirect handling, status rules, size
 /// ceilings and content decoding be tested without a tunnel.
-pub fn fetch(
-    tunnel: &mut WarpTunnel,
+pub async fn fetch(
+    tunnel: &Tunnel,
     url: &str,
     headers: &Headers,
     limits: &FetchLimits,
@@ -100,7 +99,7 @@ pub fn fetch(
         let target = Target::of(&current)?;
         let request = build_get_request(&target.host, &target.path, profile, headers);
 
-        let raw = send(tunnel, &target, &request, read_cap, timeout)?;
+        let raw = send(tunnel, &target, &request, read_cap, timeout).await?;
 
         match interpret(parse_response(&raw)?, &current, redirects, limits)? {
             Step::Done(outcome) => return Ok(outcome),
@@ -113,14 +112,14 @@ pub fn fetch(
 }
 
 /// The one effect in a fetch: resolve, connect, write, read.
-fn send(
-    tunnel: &mut WarpTunnel,
+async fn send(
+    tunnel: &Tunnel,
     target: &Target,
     request: &[u8],
     read_cap: usize,
     timeout: Duration,
 ) -> Result<Vec<u8>, ProxyError> {
-    let ip = resolve(tunnel, &target.host, timeout)?;
+    let ip = resolve(tunnel, &target.host, timeout).await?;
     if target.https {
         request_https(
             tunnel,
@@ -131,8 +130,9 @@ fn send(
             read_cap,
             timeout,
         )
+        .await
     } else {
-        request_plain(tunnel, ip, target.port, request, read_cap, timeout)
+        request_plain(tunnel, ip, target.port, request, read_cap, timeout).await
     }
 }
 
@@ -233,55 +233,23 @@ fn normalize_mime(value: &str) -> String {
 }
 
 /// Send a plaintext HTTP/1.1 request over the tunnel and read the full response.
-fn request_plain(
-    tunnel: &mut WarpTunnel,
+///
+/// The exchange itself is [`exchange`]; only the stream and the name for an I/O
+/// failure differ from the TLS path. The socket closes when it drops.
+async fn request_plain(
+    tunnel: &Tunnel,
     ip: smoltcp::wire::IpAddress,
     port: u16,
     request: &[u8],
     max_body: usize,
     timeout: Duration,
 ) -> Result<Vec<u8>, ProxyError> {
-    let handle = tunnel.open_tcp(ip, port, timeout)?;
-    let result = (|| -> Result<Vec<u8>, ProxyError> {
-        let mut stream = tunnel.stream(handle, timeout);
-        stream
-            .write_all(request)
-            .map_err(|e| ProxyError::HttpError {
-                status_code: NO_HTTP_RESPONSE,
-                details: format!("Write failed: {e}"),
-            })?;
-        stream.flush().map_err(|e| ProxyError::HttpError {
-            status_code: NO_HTTP_RESPONSE,
-            details: format!("Flush failed: {e}"),
-        })?;
-
-        let mut buf = Vec::with_capacity(16 * 1024);
-        let mut chunk = [0u8; 16 * 1024];
-        loop {
-            match stream.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => {
-                    buf.extend_from_slice(&chunk[..n]);
-                    if buf.len() > max_body {
-                        return Err(ProxyError::ResponseTooLarge {
-                            size: buf.len() as u64,
-                            max_size: max_body as u64,
-                        });
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                Err(e) => {
-                    return Err(ProxyError::HttpError {
-                        status_code: NO_HTTP_RESPONSE,
-                        details: format!("Read failed: {e}"),
-                    })
-                }
-            }
-        }
-        Ok(buf)
-    })();
-    tunnel.close_tcp(handle);
-    result
+    let mut socket = tunnel.connect(ip, port, timeout).await?;
+    exchange(&mut socket, request, max_body, |e| ProxyError::HttpError {
+        status_code: NO_HTTP_RESPONSE,
+        details: format!("Transfer failed: {e}"),
+    })
+    .await
 }
 
 /// Whether a MIME type names content a renderer would *execute* rather than

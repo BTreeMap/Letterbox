@@ -15,11 +15,12 @@
 
 use crate::error::ProxyError;
 use crate::tunnel::http1::{build_get_request, parse_response, ClientProfile};
-use crate::tunnel::stack::WarpTunnel;
+use crate::tunnel::stack::Tunnel;
 use crate::tunnel::tls::request_https;
 use lru::LruCache;
 use serde::Deserialize;
 use smoltcp::wire::IpAddress;
+use std::cell::RefCell;
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
@@ -86,30 +87,35 @@ struct Entry {
 
 /// A bounded, TTL-respecting cache of resolver answers.
 ///
-/// Owned by the tunnel worker and touched only by it, so no lock is needed.
+/// Single-threaded by construction — one worker owns the tunnel — so the cell
+/// is a [`RefCell`], not a lock. It lives *inside* the cache rather than around
+/// it so no borrow guard can escape to a caller: every method takes `&self`,
+/// borrows, and drops before returning. That matters because callers are async,
+/// and a guard alive across `.await` is a panic waiting for the right schedule.
 pub struct DnsCache {
-    entries: LruCache<String, Entry>,
+    entries: RefCell<LruCache<String, Entry>>,
 }
 
 impl DnsCache {
     /// An empty cache.
     pub fn new() -> Self {
         Self {
-            entries: LruCache::new(
+            entries: RefCell::new(LruCache::new(
                 NonZeroUsize::new(CACHE_ENTRIES).expect("CACHE_ENTRIES is a non-zero literal"),
-            ),
+            )),
         }
     }
 
     /// The unexpired answer for `host`, if one is held.
-    fn get(&mut self, host: &str, now: Instant) -> Option<Answer> {
-        match self.entries.get(host) {
+    fn get(&self, host: &str, now: Instant) -> Option<Answer> {
+        let mut entries = self.entries.borrow_mut();
+        match entries.get(host) {
             Some(entry) if entry.expires > now => Some(entry.answer),
             // Expired entries are dropped on sight rather than left to age out
             // through eviction, so a stale answer cannot be served after a
             // later lookup refreshes its recency.
             Some(_) => {
-                self.entries.pop(host);
+                entries.pop(host);
                 None
             }
             None => None,
@@ -117,8 +123,8 @@ impl DnsCache {
     }
 
     /// Remember `resolved` for `host`.
-    fn put(&mut self, host: &str, resolved: Resolved, now: Instant) {
-        self.entries.put(
+    fn put(&self, host: &str, resolved: Resolved, now: Instant) {
+        self.entries.borrow_mut().put(
             host.to_string(),
             Entry {
                 answer: resolved.answer,
@@ -160,8 +166,8 @@ struct DohAnswer {
 ///
 /// [`ProxyError::DnsError`] when the resolver answered and the answer is
 /// unusable, or the query's own failure when it never completed.
-pub fn resolve(
-    tunnel: &mut WarpTunnel,
+pub async fn resolve(
+    tunnel: &Tunnel,
     host: &str,
     timeout: Duration,
 ) -> Result<IpAddress, ProxyError> {
@@ -181,7 +187,7 @@ pub fn resolve(
     let answer = match tunnel.names().get(host, now) {
         Some(cached) => cached,
         None => {
-            let resolved = query(tunnel, host, timeout)?;
+            let resolved = query(tunnel, host, timeout).await?;
             tunnel.names().put(host, resolved, now);
             resolved.answer
         }
@@ -200,7 +206,7 @@ pub fn resolve(
 ///
 /// Failures of the query itself propagate unchanged, which is what keeps them
 /// distinguishable from — and retryable unlike — an answer.
-fn query(tunnel: &mut WarpTunnel, host: &str, timeout: Duration) -> Result<Resolved, ProxyError> {
+async fn query(tunnel: &Tunnel, host: &str, timeout: Duration) -> Result<Resolved, ProxyError> {
     let path = format!("/dns-query?name={host}&type=A");
     // A protocol call, not a page load: presenting Chrome's client hints to a
     // resolver would claim a browser is asking, which is both false and, for
@@ -216,7 +222,8 @@ fn query(tunnel: &mut WarpTunnel, host: &str, timeout: Duration) -> Result<Resol
         &request,
         MAX_DOH_RESPONSE,
         timeout,
-    )?;
+    )
+    .await?;
 
     interpret(host, &raw)
 }
@@ -363,7 +370,7 @@ mod tests {
 
     #[test]
     fn cache_serves_within_ttl_and_forgets_after() {
-        let mut cache = DnsCache::new();
+        let cache = DnsCache::new();
         let now = Instant::now();
         let resolved = Resolved {
             answer: Answer::Address(ipv4(1, 2, 3, 4)),
@@ -385,7 +392,7 @@ mod tests {
     /// pixels on one dead host from paying for a round trip each.
     #[test]
     fn a_negative_answer_is_cached() {
-        let mut cache = DnsCache::new();
+        let cache = DnsCache::new();
         let now = Instant::now();
         cache.put(
             "pixel.example.net",
@@ -400,7 +407,7 @@ mod tests {
 
     #[test]
     fn cache_stays_bounded() {
-        let mut cache = DnsCache::new();
+        let cache = DnsCache::new();
         let now = Instant::now();
         for i in 0..(CACHE_ENTRIES + 50) {
             cache.put(
@@ -412,6 +419,6 @@ mod tests {
                 now,
             );
         }
-        assert_eq!(cache.entries.len(), CACHE_ENTRIES);
+        assert_eq!(cache.entries.borrow().len(), CACHE_ENTRIES);
     }
 }

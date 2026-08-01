@@ -11,11 +11,15 @@ use crate::error::ProxyError;
 use crate::http::{self, FetchOutcome};
 use crate::tunnel::fault::Fault;
 use crate::tunnel::http1::ClientProfile;
-use crate::tunnel::stack::WarpTunnel;
+use crate::tunnel::stack::Tunnel;
 use crate::tunnel::stats::TunnelStats;
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::cell::Cell;
+use std::rc::Rc;
+use std::sync::mpsc::{channel, Sender};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::task::{spawn_local, LocalSet};
 
 /// How long to wait for the initial (and any re-)handshake to complete.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -28,9 +32,16 @@ const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// How many times a transport failure is retried before the caller sees it.
 ///
-/// Small on purpose. Each retry costs a handshake, and a fault that survives two
-/// fresh tunnels is not the tunnel's.
+/// Small on purpose. A fault that survives two attempts against a tunnel the
+/// driver is independently repairing is not the tunnel's.
 const MAX_TRANSPORT_RETRIES: u32 = 2;
+
+/// Pause before repeating a request that failed on transport.
+///
+/// A fetch no longer rebuilds the tunnel — that is the driver's job, and a
+/// fetch that reconnected would tear every *other* in-flight fetch's socket out
+/// from under it. This is how long it yields for the driver to notice.
+const RETRY_PAUSE: Duration = Duration::from_millis(250);
 
 /// Whether the tunnel currently has a live session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,33 +148,27 @@ enum Command {
     },
 }
 
-/// What woke the worker.
+/// A fetch the worker has accepted but whose result has not been collected.
 ///
-/// The idle case is a first-class event rather than an error branch on `recv`:
-/// having nothing to do for [`HEALTH_INTERVAL`] is exactly when the tunnel needs
-/// checking, so the timeout *is* the schedule and no timer thread is needed.
-enum Wakeup {
-    /// Something asked for work.
-    Serve(Command),
-    /// Nobody asked for anything for a whole [`HEALTH_INTERVAL`].
-    Idle,
-    /// Every handle is gone; the worker is done.
-    ShutDown,
+/// `#[must_use]` because dropping one silently abandons work already in flight
+/// on the tunnel.
+#[must_use = "a submitted fetch is only useful once waited on"]
+pub struct Pending {
+    reply: std::sync::mpsc::Receiver<Result<FetchOutcome, ProxyError>>,
 }
 
-impl Wakeup {
-    fn receive(rx: &Receiver<Command>, within: Duration) -> Self {
-        match rx.recv_timeout(within) {
-            Ok(command) => Self::Serve(command),
-            Err(RecvTimeoutError::Timeout) => Self::Idle,
-            Err(RecvTimeoutError::Disconnected) => Self::ShutDown,
-        }
+impl Pending {
+    /// Block until this fetch finishes.
+    pub fn wait(self) -> Result<FetchOutcome, ProxyError> {
+        self.reply.recv().map_err(|_| ProxyError::TunnelError {
+            details: "Tunnel worker dropped the request".to_string(),
+        })?
     }
 }
 
 /// Owns the tunnel worker thread and dispatches commands to it.
 pub struct TunnelManager {
-    tx: Sender<Command>,
+    tx: UnboundedSender<Command>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -173,7 +178,7 @@ impl TunnelManager {
     /// `config` is the provisioned WARP configuration; the worker needs it to
     /// build the tunnel, not to answer diagnostics, which read the live tunnel.
     pub fn start(config: WarpConfig) -> Result<Self, ProxyError> {
-        let (tx, rx) = channel::<Command>();
+        let (tx, rx) = unbounded_channel::<Command>();
         let (ready_tx, ready_rx) = channel::<Result<(), ProxyError>>();
 
         let worker = std::thread::Builder::new()
@@ -198,17 +203,29 @@ impl TunnelManager {
         }
     }
 
-    /// Fetch a URL through the tunnel, retrying transport faults.
-    pub fn fetch(&self, request: FetchRequest) -> Result<FetchOutcome, ProxyError> {
+    /// Hand a fetch to the worker without waiting for it.
+    ///
+    /// Submission and collection are separate because the requests in a batch
+    /// are *independent*: launching them all and then joining is what makes
+    /// them concurrent, where one submit-and-wait per URL is a sequence no
+    /// amount of concurrency inside the worker can unpick.
+    pub fn submit(&self, request: FetchRequest) -> Result<Pending, ProxyError> {
         let (reply, reply_rx) = channel();
         self.tx
             .send(Command::Fetch { request, reply })
             .map_err(|_| ProxyError::TunnelError {
                 details: "Tunnel worker is no longer running".to_string(),
             })?;
-        reply_rx.recv().map_err(|_| ProxyError::TunnelError {
-            details: "Tunnel worker dropped the request".to_string(),
-        })?
+        Ok(Pending { reply: reply_rx })
+    }
+
+    /// Fetch a URL through the tunnel, retrying transport faults.
+    ///
+    /// Blocking to the caller and concurrent on the worker: the fetch runs as
+    /// its own task, so callers share one tunnel without queueing behind each
+    /// other.
+    pub fn fetch(&self, request: FetchRequest) -> Result<FetchOutcome, ProxyError> {
+        self.submit(request)?.wait()
     }
 
     /// Collect a diagnostics snapshot from the worker.
@@ -229,92 +246,120 @@ impl Drop for TunnelManager {
     fn drop(&mut self) {
         // Dropping the sender closes the channel; the worker loop then exits.
         if let Some(worker) = self.worker.take() {
-            // Detach: we cannot block indefinitely in Drop, but closing the
-            // channel above guarantees the loop terminates promptly.
-            drop(std::mem::replace(&mut self.tx, channel().0));
+            // Closing the channel is what ends the worker's receive loop, which
+            // drops the runtime and with it every in-flight fetch.
+            drop(std::mem::replace(&mut self.tx, unbounded_channel().0));
             let _ = worker.join();
         }
     }
 }
 
-/// The worker thread body: own the tunnel and service commands until the
-/// command channel closes.
+/// The worker thread body: run the tunnel and its fetches on one runtime.
+///
+/// A current-thread runtime with a [`LocalSet`], because the stack is `!Send`
+/// by design — `Rc` and `RefCell` are the right cost for state only this thread
+/// ever touches, and a work-stealing runtime would demand `Arc` and `Mutex` for
+/// concurrency it cannot actually use on a single smoltcp interface.
 fn worker_loop(
     config: WarpConfig,
-    rx: Receiver<Command>,
+    rx: UnboundedReceiver<Command>,
     ready_tx: Sender<Result<(), ProxyError>>,
 ) {
-    let mut tunnel = match WarpTunnel::new(&config) {
-        Ok(tunnel) => tunnel,
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            let _ = ready_tx.send(Err(ProxyError::InitializationFailed {
+                details: format!("Failed to create tunnel runtime: {e}"),
+            }));
+            return;
+        }
+    };
+
+    LocalSet::new().block_on(&runtime, serve(config, rx, ready_tx));
+}
+
+/// Bring the tunnel up, then dispatch commands until every handle is gone.
+async fn serve(
+    config: WarpConfig,
+    mut rx: UnboundedReceiver<Command>,
+    ready_tx: Sender<Result<(), ProxyError>>,
+) {
+    let (tunnel, driver) = match Tunnel::new(&config) {
+        Ok(pair) => pair,
         Err(e) => {
             let _ = ready_tx.send(Err(e));
             return;
         }
     };
 
-    match tunnel.connect(HANDSHAKE_TIMEOUT) {
-        Ok(()) => {
-            let _ = ready_tx.send(Ok(()));
-        }
-        Err(e) => {
-            let _ = ready_tx.send(Err(e));
-            return;
-        }
-    }
+    // The driver owns reconnection for the tunnel's whole life, so it starts
+    // before anything can ask for a fetch and outlives every one of them.
+    spawn_local(driver.run(HANDSHAKE_TIMEOUT));
 
-    loop {
-        match Wakeup::receive(&rx, HEALTH_INTERVAL) {
-            Wakeup::Serve(Command::Fetch { request, reply }) => {
-                let _ = reply.send(serve_fetch(&mut tunnel, &request));
+    if let Err(e) = tunnel.ready(HANDSHAKE_TIMEOUT).await {
+        let _ = ready_tx.send(Err(e));
+        return;
+    }
+    let _ = ready_tx.send(Ok(()));
+
+    let last_activity = Rc::new(Cell::new(Instant::now()));
+    spawn_local(watch_health(tunnel.clone(), Rc::clone(&last_activity)));
+
+    while let Some(command) = rx.recv().await {
+        match command {
+            Command::Fetch { request, reply } => {
+                let tunnel = tunnel.clone();
+                let activity = Rc::clone(&last_activity);
+                // Spawned rather than awaited: awaiting here is exactly the
+                // serialization this exists to remove.
+                spawn_local(async move {
+                    let outcome = serve_fetch(&tunnel, &request).await;
+                    activity.set(Instant::now());
+                    let _ = reply.send(outcome);
+                });
             }
-            Wakeup::Serve(Command::Diagnostics { reply }) => {
+            Command::Diagnostics { reply } => {
                 let _ = reply.send(build_diagnostics(&tunnel));
             }
-            Wakeup::Idle => check_health(&mut tunnel),
-            Wakeup::ShutDown => return,
         }
     }
 }
 
-/// Run `request`, rebuilding the tunnel and repeating it on a transport fault.
+/// Run `request`, repeating it on a transport fault.
 ///
 /// Safe to repeat because a [`FetchRequest`] is a description, not a session:
 /// it is a `GET` over a connection that closes afterwards, so it carries no
 /// progress that a second attempt would duplicate or resume. The retry is
 /// therefore a plain re-run, and the only question is whether it could help —
 /// which is what [`Fault`] answers.
-fn serve_fetch(
-    tunnel: &mut WarpTunnel,
-    request: &FetchRequest,
-) -> Result<FetchOutcome, ProxyError> {
+async fn serve_fetch(tunnel: &Tunnel, request: &FetchRequest) -> Result<FetchOutcome, ProxyError> {
     for attempt in 0..=MAX_TRANSPORT_RETRIES {
-        // A fault may have left the tunnel *believing* it is connected, so the
-        // first attempt asks and later ones rebuild unconditionally.
-        let ready = if attempt == 0 {
-            ensure_connected(tunnel)
-        } else {
-            tunnel.connect(HANDSHAKE_TIMEOUT)
-        };
+        tunnel.ready(HANDSHAKE_TIMEOUT).await?;
 
-        let outcome = ready.and_then(|()| {
-            http::fetch(
-                tunnel,
-                &request.url,
-                &request.headers,
-                &request.limits,
-                &request.profile,
-            )
-        });
+        let outcome = http::fetch(
+            tunnel,
+            &request.url,
+            &request.headers,
+            &request.limits,
+            &request.profile,
+        )
+        .await;
 
         match outcome.map_err(Fault::from) {
             Ok(outcome) => return Ok(outcome),
             Err(fault) if !fault.is_transport() => return Err(fault.into_error()),
             Err(fault) if attempt == MAX_TRANSPORT_RETRIES => return Err(fault.into_error()),
-            Err(fault) => log::warn!(
-                "transport fault on attempt {}, rebuilding tunnel: {}",
-                attempt + 1,
-                fault.into_error()
-            ),
+            Err(fault) => {
+                log::warn!(
+                    "transport fault on attempt {}: {}",
+                    attempt + 1,
+                    fault.into_error()
+                );
+                tokio::time::sleep(RETRY_PAUSE).await;
+            }
         }
     }
 
@@ -325,67 +370,52 @@ fn serve_fetch(
     })
 }
 
-/// Prove the tunnel still carries traffic, and rebuild it when it does not.
+/// Prove the tunnel still carries traffic while nothing else is asking it to.
 ///
 /// The probe is a real fetch through the tunnel rather than a look at local
 /// state: `is_connected` reports what the session *believes*, and the failure
-/// this exists to catch is exactly a session that believes wrongly.
-fn check_health(tunnel: &mut WarpTunnel) {
-    if !tunnel.is_connected() {
-        rebuild(tunnel, "session had lapsed while idle");
-        return;
-    }
+/// this exists to catch is exactly a session that believes wrongly. Only idle
+/// time counts, because a fetch that succeeded is a stronger liveness signal
+/// than any probe.
+async fn watch_health(tunnel: Tunnel, last_activity: Rc<Cell<Instant>>) {
+    loop {
+        tokio::time::sleep(HEALTH_INTERVAL).await;
+        if last_activity.get().elapsed() < HEALTH_INTERVAL {
+            continue;
+        }
 
-    let probe = crate::verify::trace_request();
-    let outcome = http::fetch(
-        tunnel,
-        &probe.url,
-        &probe.headers,
-        &probe.limits,
-        &probe.profile,
-    );
+        let probe = crate::verify::trace_request();
+        let outcome = http::fetch(
+            &tunnel,
+            &probe.url,
+            &probe.headers,
+            &probe.limits,
+            &probe.profile,
+        )
+        .await;
+        last_activity.set(Instant::now());
 
-    // An endpoint fault answers the question the probe asked: something at the
-    // far end replied, so the tunnel carried it. Rebuilding on a resolver
-    // verdict or a 503 from Cloudflare would tear down a working session for a
-    // condition it did not cause.
-    match outcome.map_err(Fault::from) {
-        Ok(_) => log::debug!("tunnel health probe succeeded"),
-        Err(fault) if fault.is_transport() => rebuild(
-            tunnel,
-            &format!("health probe failed: {}", fault.into_error()),
-        ),
-        Err(fault) => log::debug!(
-            "health probe reached the far end and was refused: {}",
-            fault.into_error()
-        ),
+        // An endpoint fault answers the question the probe asked: something at
+        // the far end replied, so the tunnel carried it. Only silence is a
+        // finding, and repairing it is the driver's job, not this task's.
+        match outcome.map_err(Fault::from) {
+            Ok(_) => log::debug!("tunnel health probe succeeded"),
+            Err(fault) if fault.is_transport() => {
+                log::warn!("tunnel health probe failed: {}", fault.into_error());
+            }
+            Err(fault) => log::debug!(
+                "health probe reached the far end and was refused: {}",
+                fault.into_error()
+            ),
+        }
     }
-}
-
-/// Re-handshake, logging why and whether it worked.
-fn rebuild(tunnel: &mut WarpTunnel, reason: &str) {
-    log::warn!("rebuilding tunnel: {reason}");
-    match tunnel.connect(HANDSHAKE_TIMEOUT) {
-        Ok(()) => log::info!("tunnel rebuilt"),
-        // Nothing to report to: the next fetch retries, and the next idle tick
-        // tries again.
-        Err(e) => log::warn!("tunnel rebuild failed: {e}"),
-    }
-}
-
-/// Ensure a live tunnel session, re-handshaking if it has lapsed.
-fn ensure_connected(tunnel: &mut WarpTunnel) -> Result<(), ProxyError> {
-    if tunnel.is_connected() {
-        return Ok(());
-    }
-    tunnel.connect(HANDSHAKE_TIMEOUT)
 }
 
 /// Assemble a [`TunnelDiagnostics`] snapshot.
 ///
 /// Every field is read from the live tunnel. Nothing is taken from the stored
 /// configuration, which is what keeps the two records from disagreeing.
-fn build_diagnostics(tunnel: &WarpTunnel) -> TunnelDiagnostics {
+fn build_diagnostics(tunnel: &Tunnel) -> TunnelDiagnostics {
     let stats: TunnelStats = tunnel.stats();
     let endpoint = tunnel.endpoint();
     TunnelDiagnostics {
