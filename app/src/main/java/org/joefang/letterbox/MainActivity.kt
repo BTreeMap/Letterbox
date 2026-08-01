@@ -12,6 +12,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,7 +58,6 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -660,7 +661,6 @@ private fun LetterboxScaffold(
     var showSortMenu by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val settingsSheetState = rememberModalBottomSheetState()
     val searchFocusRequester = remember { FocusRequester() }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -851,9 +851,14 @@ private fun LetterboxScaffold(
 
     // Settings bottom sheet
     if (showSettingsSheet) {
+        // No hoisted `sheetState`. It is drag state, and hoisting it made it
+        // outlive the sheet: a second presentation reused anchors and an
+        // in-flight settle from the previous one, which is what oscillated under
+        // a hard fling. Letting the sheet own it ties its lifetime to the
+        // sheet's, leaving `showSettingsSheet` as the only fact about whether
+        // the sheet is up. The link sheet always worked this way.
         ModalBottomSheet(
-            onDismissRequest = { showSettingsSheet = false },
-            sheetState = settingsSheetState
+            onDismissRequest = { showSettingsSheet = false }
         ) {
             SettingsContent(
                 cacheStats = cacheStats,
@@ -1003,9 +1008,13 @@ private fun SettingsContent(
     onCheckForUpdate: () -> Unit
 ) {
     val context = LocalContext.current
+    // Scrollable so a fling has somewhere to go. Without it the sheet is the
+    // only thing that can absorb one, and content taller than the sheet is
+    // simply unreachable.
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Text(
