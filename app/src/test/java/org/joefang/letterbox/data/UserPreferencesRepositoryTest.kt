@@ -83,27 +83,21 @@ class UserPreferencesRepositoryTest {
         val repository1 = UserPreferencesRepository(context)
         val repository2 = UserPreferencesRepository(context)
         
-        // Set value through first repository
         repository1.setAlwaysLoadRemoteImages(true)
         
-        // Read value through second repository
         assertTrue(repository2.alwaysLoadRemoteImages.first())
         
-        // Set value through second repository
         repository2.setEnablePrivacyProxy(false)
         
-        // Read value through first repository
         assertFalse(repository1.enablePrivacyProxy.first())
     }
 
     @Test
     fun `values persist across repository instances`() = runBlocking {
-        // Set values with first instance
         val repository1 = UserPreferencesRepository(context)
         repository1.setAlwaysLoadRemoteImages(true)
         repository1.setEnablePrivacyProxy(false)
         
-        // Create new instance and verify values
         val repository2 = UserPreferencesRepository(context)
         assertTrue(repository2.alwaysLoadRemoteImages.first())
         assertFalse(repository2.enablePrivacyProxy.first())
@@ -178,7 +172,6 @@ class UserPreferencesRepositoryTest {
 
     @Test
     fun `ProxyMode enum has expected values`() {
-        // Verify the enum has exactly the expected values
         val values = ProxyMode.entries
         
         assertEquals(2, values.size)

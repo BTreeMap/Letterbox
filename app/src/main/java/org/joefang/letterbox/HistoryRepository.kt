@@ -163,45 +163,27 @@ class HistoryRepository(
     }
 
     /**
-     * Ingest a new email file into the repository.
-     * - Computes SHA-256 hash of the content
-     * - Stores the file in CAS if not already present
-     * - Creates a history entry with email metadata
-     * 
-     * Emails are cached indefinitely until user explicitly clears them.
-     * 
-     * ## Deduplication
-     * 
-     * If an email with the same SHA-256 checksum already exists in history,
-     * the existing entry is updated (lastAccessed timestamp) rather than
-     * creating a duplicate. This ensures each unique EML file appears only
-     * once in the history.
-     * 
-     * @param bytes Raw email file content
-     * @param displayName Display name for the email (usually filename)
-     * @param originalUri Source URI for provenance tracking
-     * @param metadata Email metadata extracted from parsing for search/filter
-     * @return The existing or newly created history entry
+     * Ingest [bytes], deduplicating on SHA-256: a repeat checksum updates the
+     * existing entry's last-accessed time instead of creating a duplicate row.
+     * Cached indefinitely until the user clears history.
      */
     suspend fun ingest(
-        bytes: ByteArray, 
-        displayName: String, 
+        bytes: ByteArray,
+        displayName: String,
         originalUri: String?,
         metadata: EmailMetadata = EmailMetadata()
     ): HistoryEntry {
         return withContext(Dispatchers.IO) {
             val hash = sha256(bytes)
             val now = System.currentTimeMillis()
-            
-            // Check if history entry already exists for this blob (deduplication)
+
             val existingItem = historyItemDao.getFirstByBlobHash(hash)
             if (existingItem != null) {
-                // Email already in history - update last accessed timestamp and return
                 historyItemDao.updateLastAccessed(existingItem.id, now)
                 repairSearchText(existingItem)
                 return@withContext existingItem.copy(lastAccessed = now).toHistoryEntry()
             }
-            
+
             // New content: write the file and register its row as one unit, so a
             // concurrent sweep can never see the file without its row. A crash
             // between the two leaves an orphan the next sweep reclaims.
@@ -212,11 +194,10 @@ class HistoryRepository(
                 }
             }
 
-            // Create new history entry with metadata
-            val effectiveDisplayName = displayName.ifBlank { 
-                metadata.subject.ifBlank { "Untitled" } 
+            val effectiveDisplayName = displayName.ifBlank {
+                metadata.subject.ifBlank { "Untitled" }
             }
-            
+
             val entity = HistoryItemEntity(
                 blobHash = hash,
                 displayName = effectiveDisplayName,
@@ -262,18 +243,14 @@ class HistoryRepository(
     suspend fun delete(entryId: Long) {
         withContext(Dispatchers.IO) {
             val entry = historyItemDao.getById(entryId) ?: return@withContext
-            
-            // Delete history item
+
             historyItemDao.deleteById(entryId)
-            
-            // Check if blob is still referenced
+
             val refCount = historyItemDao.countByBlobHash(entry.blobHash)
             if (refCount == 0) {
-                // No more references - delete blob
                 blobDao.deleteByHash(entry.blobHash)
                 File(casDir, entry.blobHash).delete()
             } else {
-                // Update ref count
                 blobDao.decrementRefCount(entry.blobHash)
             }
         }
@@ -430,48 +407,39 @@ class InMemoryHistoryRepository(
     )
 
     /**
-     * Ingest an email file into the repository.
-     * 
-     * ## Deduplication
-     * 
-     * If an email with the same SHA-256 checksum already exists in history,
-     * the existing entry is updated (lastAccessed timestamp) rather than
-     * creating a duplicate. This ensures each unique EML file appears only
-     * once in the history.
+     * Ingest [bytes], deduplicating on SHA-256: a repeat checksum updates the
+     * existing entry's last-accessed time instead of creating a duplicate.
      */
     @Synchronized
     fun ingest(
-        bytes: ByteArray, 
-        displayName: String, 
+        bytes: ByteArray,
+        displayName: String,
         originalUri: String?,
         metadata: EmailMetadata = EmailMetadata()
     ): HistoryEntry {
         val hash = sha256(bytes)
         val blobFile = File(casDir, hash)
         val now = System.currentTimeMillis()
-        
-        // Check if blob already exists
+
         val existingMeta = blobs[hash]
         if (existingMeta == null) {
             blobFile.writeBytes(bytes)
             blobs[hash] = BlobMeta(hash, bytes.size.toLong(), 1)
         }
-        
-        // Check if history entry already exists for this blob (deduplication)
+
         val existingEntry = _items.value.find { it.blobHash == hash }
         if (existingEntry != null) {
-            // Email already in history - update last accessed timestamp and return
             val updatedEntry = existingEntry.copy(lastAccessed = now)
-            _items.value = _items.value.map { 
-                if (it.id == existingEntry.id) updatedEntry else it 
+            _items.value = _items.value.map {
+                if (it.id == existingEntry.id) updatedEntry else it
             }.sortedByDescending { it.lastAccessed }
             return updatedEntry
         }
 
-        val effectiveDisplayName = displayName.ifBlank { 
-            metadata.subject.ifBlank { "Untitled" } 
+        val effectiveDisplayName = displayName.ifBlank {
+            metadata.subject.ifBlank { "Untitled" }
         }
-        
+
         val id = nextId()
         val bodyPreviewText = metadata.bodyPreview.take(500)
         val newEntry = HistoryEntry(
@@ -513,8 +481,7 @@ class InMemoryHistoryRepository(
         val entry = _items.value.find { it.id == entryId } ?: return
         val remaining = _items.value.filter { it.id != entryId }
         _items.value = remaining
-        
-        // Check if blob is still referenced
+
         val remainingRefs = remaining.count { it.blobHash == entry.blobHash }
         if (remainingRefs == 0) {
             blobs.remove(entry.blobHash)
@@ -532,7 +499,6 @@ class InMemoryHistoryRepository(
     @Synchronized
     fun clearAll() {
         _items.value = emptyList()
-        // Delete all blob files
         blobs.keys.toList().forEach { hash ->
             File(casDir, hash).delete()
         }

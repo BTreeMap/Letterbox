@@ -73,9 +73,6 @@ import org.joefang.letterbox.data.ImageProxyService
 import java.io.ByteArrayInputStream
 import java.io.File
 
-/**
- * Attachment metadata for display.
- */
 data class AttachmentData(
     val name: String,
     val contentType: String,
@@ -83,9 +80,6 @@ data class AttachmentData(
     val index: Int
 )
 
-/**
- * Data class representing parsed email content for display.
- */
 data class EmailContent(
     val subject: String,
     val from: String,
@@ -100,9 +94,6 @@ data class EmailContent(
     val getAttachmentContent: (Int) -> ByteArray? = { null }
 )
 
-/**
- * Email detail screen that displays the email content using a secure WebView.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EmailDetailScreen(
@@ -449,29 +440,24 @@ private fun openAttachment(
     val content = getContent(attachment.index) ?: return
     
     try {
-        // Save attachment to cache directory
         val cacheDir = File(context.cacheDir, "attachments")
         cacheDir.mkdirs()
-        
-        // Sanitize filename to prevent path traversal attacks
+
         val safeFilename = sanitizeFilename(attachment.name)
         val file = File(cacheDir, safeFilename)
-        
-        // Verify the file is actually within the cache directory
+
         if (!file.canonicalPath.startsWith(cacheDir.canonicalPath)) {
             throw SecurityException("Invalid attachment filename")
         }
-        
+
         file.writeBytes(content)
-        
-        // Create content URI via FileProvider
+
         val uri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
             file
         )
-        
-        // Open with default app
+
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, attachment.contentType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -492,19 +478,14 @@ private fun openAttachment(
     }
 }
 
-/**
- * Sanitize filename to prevent path traversal attacks.
- * Removes path separators and other dangerous characters.
- */
+/** Filename derived from an attachment name, safe to use on any filesystem. */
 private fun sanitizeFilename(name: String): String {
-    // Remove path separators and null bytes
     val sanitized = name
         .replace("/", "_")
         .replace("\\", "_")
         .replace("\u0000", "")
         .trim()
-    
-    // If filename is empty or just dots, use a default name
+
     return if (sanitized.isBlank() || sanitized.all { it == '.' }) {
         "attachment"
     } else {
@@ -585,9 +566,6 @@ private fun EmailHeader(
 
 /**
  * Secure WebView that only loads content we provide.
- * - Disables file access and scripting for security
- * - Intercepts cid: URLs to load inline images from email attachments
- * - Optionally loads remote subresources through the WARP privacy proxy
  *
  * ## What the remote-content policy is about
  *
@@ -833,9 +811,6 @@ private fun blocked(status: Int, reason: String) = WebResourceResponse(
     ByteArrayInputStream(ByteArray(0))
 )
 
-/**
- * Guess MIME type based on Content-ID extension or file magic bytes.
- */
 private fun guessMimeType(cid: String, bytes: ByteArray): String {
     // Check extension first
     val extension = cid.substringAfterLast('.', "").lowercase()
@@ -873,9 +848,6 @@ private fun guessMimeType(cid: String, bytes: ByteArray): String {
     return "application/octet-stream"
 }
 
-/**
- * Open a URL in the default browser.
- */
 private fun openUrlInBrowser(context: Context, url: String) {
     try {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
@@ -887,9 +859,6 @@ private fun openUrlInBrowser(context: Context, url: String) {
     }
 }
 
-/**
- * Open a mailto: link in the default email client.
- */
 private fun openMailtoLink(context: Context, mailtoUrl: String) {
     try {
         val intent = Intent(Intent.ACTION_SENDTO, Uri.parse(mailtoUrl)).apply {
@@ -1001,11 +970,3 @@ private fun openUrlInCustomTabs(context: Context, uri: Uri) {
         })
     }
 }
-
-/**
- * Show a context menu for links with options to open or copy.
- * 
- * This provides conventional UX for long-pressing links:
- * - Open link in browser
- * - Copy link to clipboard
- */

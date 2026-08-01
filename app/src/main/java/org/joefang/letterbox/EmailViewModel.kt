@@ -164,14 +164,11 @@ class EmailViewModel(
             _uiState.update { it.copy(isLoading = true) }
 
             attempt {
-                // Parse the email to extract metadata for indexing
                 val (parsed, metadata) = parseEmailBytesWithMetadata(bytes)
                 val displayName = parsed?.subject?.takeIf { it.isNotBlank() } ?: filename
 
-                // Store in repository with metadata for search/filter
                 val entry = repository.ingest(bytes, displayName, uri, metadata)
 
-                // If successfully parsed, show the email
                 if (parsed != null) {
                     // Detected before the update: `update` retries its lambda on
                     // a lost compare-and-set, and this crosses the FFI boundary.
@@ -208,18 +205,13 @@ class EmailViewModel(
             _uiState.update { it.copy(isLoading = true) }
 
             attempt {
-                // Update last accessed time
                 repository.access(entry.id)
-                
-                // Load the file content
+
                 val file = repository.blobFor(entry.blobHash)
                 if (file != null && file.exists()) {
-                    // Use path-based parsing to avoid JVM heap allocation during parsing
                     val parsed = parseEmailFromPath(file)
-                    
+
                     if (parsed != null) {
-                        // Read bytes for sharing functionality
-                        // Note: This could be optimized to load lazily only when sharing
                         val bytes = file.readBytes()
                         val hasRemoteImages = detectRemoteImages(parsed.bodyHtml)
                         _uiState.update { it.copy(
@@ -362,23 +354,14 @@ class EmailViewModel(
         }
 
     /**
-     * Parse email bytes and extract metadata for search/filter indexing, using
-     * the Rust FFI via UniFFI bindings.
-     *
-     * Uses stalwart's mail-parser for robust RFC 5322 parsing:
-     * - Full MIME multipart support
-     * - Proper character encoding (non-UTF8 charsets)
-     * - Inline asset extraction for cid: URLs
-     * - Memory-efficient opaque handle pattern
-     *
-     * A message that will not parse yields no content and no metadata.
+     * Parse email bytes via the Rust FFI (UniFFI). A message that will not
+     * parse yields no content and no metadata.
      */
     private suspend fun parseEmailBytesWithMetadata(bytes: ByteArray): ParsedEmail {
         return withContext(Dispatchers.Default) {
             try {
                 val handle: EmailHandle = parseEml(bytes)
-                
-                // Convert FFI attachments to UI attachment data
+
                 val attachments = handle.getAttachments().mapIndexed { index, info ->
                     AttachmentData(
                         name = info.name,
@@ -387,22 +370,19 @@ class EmailViewModel(
                         index = index
                     )
                 }
-                
-                // Extract structured sender info
+
                 val senderInfo = try {
                     handle.senderInfo()
                 } catch (e: Exception) {
                     null
                 }
-                
-                // Extract recipient info for search
+
                 val recipientInfo = try {
                     handle.recipientInfo()
                 } catch (e: Exception) {
                     emptyList()
                 }
-                
-                // Build metadata for search indexing
+
                 val metadata = EmailMetadata(
                     subject = handle.subject(),
                     senderEmail = senderInfo?.email ?: "",
@@ -463,8 +443,7 @@ class EmailViewModel(
         return withContext(Dispatchers.Default) {
             try {
                 val handle: EmailHandle = parseEmlFromPath(file.absolutePath)
-                
-                // Convert FFI attachments to UI attachment data
+
                 val attachments = handle.getAttachments().mapIndexed { index, info ->
                     AttachmentData(
                         name = info.name,

@@ -1,15 +1,7 @@
-//! Cloudflare WARP provisioning module.
+//! Cloudflare WARP provisioning: creates and upgrades a device's WARP identity.
 //!
-//! This module handles the creation and management of WARP identities:
-//! - Generating WireGuard keypairs
-//! - Registering with Cloudflare's API
-//! - Fetching tunnel configuration
-//! - Enabling/disabling WARP
-//!
-//! ## API Reference
-//!
-//! The WARP client API is accessed at `api.cloudflareclient.com`.
-//! This is the same API used by the official WARP client and wgcf.
+//! The WARP client API is accessed at `api.cloudflareclient.com`, the same
+//! endpoint used by the official WARP client and wgcf.
 
 use crate::config::{
     MasqueCredentials, WarpAccountData, WarpConfig, WarpInterfaceConfig, WarpPeerConfig,

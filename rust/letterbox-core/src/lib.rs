@@ -111,11 +111,11 @@ pub struct AttachmentInfo {
     pub size: u64,
 }
 
-/// Inline resource metadata for batch queries.
-/// Allows Kotlin to efficiently map cid: URLs without probing Rust repeatedly.
-/// Size threshold constant for determining small vs large resources.
+/// Below this size, a resource is returned inline rather than via a file path.
 pub const SMALL_RESOURCE_THRESHOLD: u64 = 64 * 1024; // 64 KB
 
+/// Inline resource metadata for batch queries, so Kotlin can map `cid:` URLs
+/// without probing Rust repeatedly.
 #[derive(Clone, uniffi::Record)]
 pub struct ResourceMeta {
     /// Content-ID (without angle brackets)

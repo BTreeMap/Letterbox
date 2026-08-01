@@ -9,28 +9,14 @@ import kotlin.test.assertTrue
 import kotlin.test.assertFailsWith
 
 /**
- * Host-side integration tests for the Rust FFI boundary.
- * 
- * These tests load the Rust library compiled for the host OS (x86_64-unknown-linux-gnu)
- * and test the JNI/FFI boundary without requiring an Android emulator.
- * 
- * This validates that:
- * - Data passing (String, ByteArray) works correctly across the FFI boundary
- * - Error handling propagates correctly from Rust to Kotlin
- * - The opaque handle pattern works correctly
- *
- * Note: These tests require the native library (letterbox_core) to be built and
- * available via LD_LIBRARY_PATH. The CI workflow builds the library before running tests.
+ * Host-side integration tests for the Rust FFI boundary: loads the library
+ * compiled for the host OS (x86_64-unknown-linux-gnu) and exercises it via
+ * JNI without an Android emulator.
  */
 class RustFfiIntegrationTest {
 
     companion object {
-        /**
-         * Load the native library before running tests.
-         *
-         * The library should be available via LD_LIBRARY_PATH in CI.
-         * If this fails, the CI workflow needs to build the library first.
-         */
+        /** Requires letterbox_core built and on LD_LIBRARY_PATH; CI builds it first. */
         @JvmStatic
         @BeforeClass
         fun loadNativeLibrary() {

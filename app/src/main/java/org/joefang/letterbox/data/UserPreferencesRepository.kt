@@ -28,16 +28,7 @@ enum class ProxyMode {
 }
 
 /**
- * Repository for managing user preferences using Jetpack DataStore.
- * 
- * This class provides a safe wrapper around the DataStore singleton.
- * Multiple instances of this repository can be created safely as they all
- * share the same underlying DataStore instance.
- * 
- * Preferences:
- * - ALWAYS_LOAD_REMOTE_IMAGES: Whether to automatically load remote images (default: false)
- * - ENABLE_PRIVACY_PROXY: Whether to use privacy proxy for remote images (default: true)
- * - PROXY_MODE: Which proxy to use (default: WARP)
+ * Repository for user preferences, backed by Jetpack DataStore.
  *
  * There is deliberately no "terms accepted" preference. Loading remote images is
  * itself the opt-in — it is off by default and requires a per-message tap or an

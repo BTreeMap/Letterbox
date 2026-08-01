@@ -33,14 +33,11 @@ class HistoryRepositoryTest {
         val first = repository.ingest(bytes, "first", null)
         val second = repository.ingest(bytes, "second", null)
 
-        // Same content should return the same entry (same ID)
         assertEquals(first.id, second.id)
         assertEquals(first.blobHash, second.blobHash)
         
-        // Only one entry should exist
         assertEquals(1, repository.items.value.size)
         
-        // Blob should still exist
         val blobMeta = repository.blobMeta(first.blobHash)
         assertNotNull(blobMeta)
         assertEquals(1, blobMeta.refCount) // Only one reference, not incremented
@@ -53,17 +50,14 @@ class HistoryRepositoryTest {
         val first = repository.ingest(bytes, "first", null)
         val firstAccessed = first.lastAccessed
         
-        // Ingest same content again - should return existing entry with updated timestamp
         val second = repository.ingest(bytes, "second", null)
         
-        // Second ingest should return the same entry (same ID) with same or later timestamp
         assertEquals(first.id, second.id)
         assertTrue(second.lastAccessed >= firstAccessed)
     }
 
     @Test
     fun `caches items indefinitely without eviction`() {
-        // With no limit, all items should be retained
         val first = repository.ingest("One".toByteArray(), "one", null)
         val second = repository.ingest("Two".toByteArray(), "two", null)
         val third = repository.ingest("Three".toByteArray(), "three", null)
@@ -74,7 +68,6 @@ class HistoryRepositoryTest {
         assertTrue(items.any { it.displayName == "two" })
         assertTrue(items.any { it.displayName == "three" })
 
-        // All blobs should still exist
         assertNotNull(repository.blobMeta(first.blobHash))
         assertNotNull(repository.blobMeta(second.blobHash))
         assertNotNull(repository.blobMeta(third.blobHash))
@@ -85,15 +78,12 @@ class HistoryRepositoryTest {
         val entry = repository.ingest("Test content".toByteArray(), "test", null)
         val blobHash = entry.blobHash
         
-        // Verify entry exists
         assertEquals(1, repository.items.value.size)
         assertNotNull(repository.blobMeta(blobHash))
         assertTrue(repository.blobFor(blobHash)?.exists() == true)
         
-        // Delete the entry
         repository.delete(entry.id)
         
-        // Verify entry is removed
         assertEquals(0, repository.items.value.size)
         assertNull(repository.blobMeta(blobHash))
         assertFalse(repository.blobFor(blobHash)?.exists() == true)
@@ -106,15 +96,12 @@ class HistoryRepositoryTest {
         
         val blobHash = entry.blobHash
         
-        // Entry and blob exist
         assertEquals(1, repository.items.value.size)
         assertNotNull(repository.blobMeta(blobHash))
         assertTrue(repository.blobFor(blobHash)?.exists() == true)
         
-        // Delete the entry
         repository.delete(entry.id)
         
-        // Both entry and blob should be gone
         assertEquals(0, repository.items.value.size)
         assertNull(repository.blobMeta(blobHash))
         assertFalse(repository.blobFor(blobHash)?.exists() == true)
@@ -134,12 +121,10 @@ class HistoryRepositoryTest {
 
     @Test
     fun `getCacheStats returns correct entry count and size`() {
-        // Empty repository
         var stats = repository.getCacheStats()
         assertEquals(0, stats.entryCount)
         assertEquals(0L, stats.totalSizeBytes)
 
-        // Add some entries
         val bytes1 = "First email content".toByteArray()
         val bytes2 = "Second email content that is longer".toByteArray()
         repository.ingest(bytes1, "first", null)
@@ -154,10 +139,9 @@ class HistoryRepositoryTest {
     fun `getCacheStats with full deduplication`() {
         val bytes = "Shared email content".toByteArray()
         repository.ingest(bytes, "first", null)
-        repository.ingest(bytes, "second", null)  // Same content, should deduplicate
+        repository.ingest(bytes, "second", null)
 
         val stats = repository.getCacheStats()
-        // With proper deduplication, same content = one entry only
         assertEquals(1, stats.entryCount)
         assertEquals(bytes.size.toLong(), stats.totalSizeBytes)
     }

@@ -6,13 +6,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Tests for Rust-based HTML image processing functions.
- * 
- * These tests verify the extractRemoteImages FFI function which extracts
- * remote image URLs from HTML content for privacy analysis.
- * 
- * Note: These tests require the native library (letterbox_core) to be built and
- * available via LD_LIBRARY_PATH. The CI workflow builds the library before running tests.
+ * Tests for the extractRemoteImages FFI function, which extracts remote image
+ * URLs from HTML content for privacy analysis. Requires letterbox_core built
+ * and on LD_LIBRARY_PATH; CI builds it first.
  */
 class HtmlImageProcessingTest {
 
@@ -20,8 +16,6 @@ class HtmlImageProcessingTest {
         @JvmStatic
         @BeforeClass
         fun loadNativeLibrary() {
-            // The native library should be available via LD_LIBRARY_PATH in CI
-            // If this fails, the CI workflow needs to build the library first
             uniffiEnsureInitialized()
         }
     }

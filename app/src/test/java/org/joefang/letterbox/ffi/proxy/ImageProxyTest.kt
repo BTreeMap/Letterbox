@@ -8,27 +8,11 @@ import kotlin.test.assertTrue
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 
-/**
- * Host-side tests for the WARP image proxy Rust FFI.
- *
- * These tests verify the proxy API behavior without requiring network access.
- * They test:
- * - Proxy status reporting
- * - Error handling for invalid URLs
- * - Data structure correctness
- *
- * Note: These tests require the native library (letterbox_proxy) to be built and
- * available via LD_LIBRARY_PATH. The CI workflow builds the library before running tests.
- */
+/** Host-side tests for the WARP image proxy Rust FFI, without network access. */
 class ImageProxyTest {
 
     companion object {
-        /**
-         * Load the native library before running tests.
-         *
-         * The library should be available via LD_LIBRARY_PATH in CI.
-         * If this fails, the CI workflow needs to build the library first.
-         */
+        /** Requires letterbox_proxy built and on LD_LIBRARY_PATH; CI builds it first. */
         @JvmStatic
         @BeforeClass
         fun loadNativeLibrary() {

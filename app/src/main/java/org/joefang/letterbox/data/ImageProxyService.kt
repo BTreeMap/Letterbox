@@ -79,35 +79,8 @@ sealed class ResourceFetchResult {
 }
 
 /**
- * Service for fetching images through the privacy-preserving WARP proxy.
- * 
- * This service wraps the Rust FFI for the letterbox-proxy crate, providing:
- * - Initialization with storage path
- * - Single and batch image fetching
- * - Status monitoring
- * - Graceful shutdown
- *
- * ## Usage
- *
- * ```kotlin
- * val service = ImageProxyService.getInstance(context)
- * service.initialize()
- * 
- * val result = service.fetchImage("https://example.com/image.png")
- * when (result) {
- *     is ResourceFetchResult.Success -> {
- *         // Use result.data or result.toDataUri()
- *     }
- *     is ResourceFetchResult.Error -> {
- *         Log.e(TAG, "Failed: ${result.message}")
- *     }
- * }
- * ```
- *
- * ## Thread Safety
- *
- * All public methods are thread-safe and can be called from any thread.
- * Suspend functions should be called from a coroutine context.
+ * Fetches images and other subresources through the privacy-preserving WARP
+ * proxy, wrapping the Rust FFI for the letterbox-proxy crate.
  */
 class ImageProxyService private constructor(private val context: Context) {
 

@@ -24,49 +24,13 @@ data class BlobEntity(
 )
 
 /**
- * Represents a history item linking a user-facing name to a blob.
- * Each unique EML file (identified by SHA-256 checksum) has exactly one history entry.
- * 
- * ## Deduplication
- * 
- * The blob_hash field has a unique constraint to ensure each unique EML file
- * (identified by its SHA-256 checksum) appears only once in the history.
- * When the same file is ingested again, the existing entry's lastAccessed
- * timestamp is updated instead of creating a duplicate.
- * 
- * ## Email Metadata Fields
- * 
- * The following fields are extracted from the email during ingestion to support
- * search, filter, and sort functionality:
- * 
- * - **subject**: Email subject line (used for display and search)
- * - **senderEmail**: Email address of the sender (e.g., "sender@example.com")
- * - **senderName**: Display name of the sender if available (e.g., "John Doe")
- * - **recipientEmails**: Comma-separated list of recipient email addresses
- * - **recipientNames**: Comma-separated list of recipient display names
- * - **emailDate**: Timestamp parsed from the email's Date header (epoch millis, 0 if unparseable)
- * - **hasAttachments**: Whether the email has attachments
- * - **bodyPreview**: First 500 characters of body text for search purposes
- * 
- * ## Fallback Mechanisms
- * 
- * Since EML files may have missing or malformed fields:
- * - Missing subject: defaults to "Untitled"
- * - Missing sender: senderEmail and senderName will be empty strings
- * - Missing date: emailDate will be 0 (unparseable), UI should fall back to lastAccessed
- * - Missing body: bodyPreview will be empty string
- * 
- * ## Database Design Decisions
- * 
- * We chose to denormalize email metadata into the history_items table rather than
- * creating a separate normalized table for the following reasons:
- * 1. Simpler queries - no JOINs needed for common operations
- * 2. Better performance - single table scan for list display
- * 3. Pre-beta status - schema simplicity is more valuable than normalization
- * 
- * Search matches against the denormalized `search_text` column rather than a
- * separate index. An FTS4 virtual table (`email_fts`) existed until version 4 and
- * was never queried; see `docs/full-text-search.md`.
+ * A history item linking a user-facing name to a blob.
+ *
+ * `blob_hash` has a unique constraint, so re-ingesting the same SHA-256
+ * checksum updates the existing row's `lastAccessed` instead of duplicating
+ * it. Metadata is denormalized onto this table rather than normalized out,
+ * and search matches against the `search_text` column; the `email_fts` FTS4
+ * table it replaced was dropped in version 4 (see `docs/full-text-search.md`).
  */
 @Entity(
     tableName = "history_items",
