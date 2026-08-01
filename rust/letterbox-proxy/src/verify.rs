@@ -67,6 +67,67 @@ pub struct TunnelVerification {
     pub rx_bytes: u64,
 }
 
+impl TunnelVerification {
+    /// Why this is not proof of a healthy WARP path, or `None` when it is.
+    ///
+    /// Health is more than `warp_active`. A reply that cost the tunnel no bytes
+    /// did not come through it, and if the device itself is on WARP such a reply
+    /// still says `warp=on` — so the byte counters are checked first, being the
+    /// more damning of the two.
+    ///
+    /// Returned as a reason rather than a bool because every caller that fails
+    /// this needs to say what was wrong, and deriving that separately is how two
+    /// places come to disagree about what "healthy" means.
+    pub fn unhealthy_reason(&self) -> Option<String> {
+        if self.tx_bytes == 0 || self.rx_bytes == 0 {
+            return Some(format!(
+                "the tunnel carried no bytes for this check (tx {}, rx {}), so the reply did not come through it",
+                self.tx_bytes, self.rx_bytes
+            ));
+        }
+        if !self.warp_active {
+            return Some(format!(
+                "the edge reported warp={} and egress {}, which is not WARP",
+                if self.warp.is_empty() {
+                    "absent"
+                } else {
+                    &self.warp
+                },
+                if self.egress_ip.is_empty() {
+                    "unknown"
+                } else {
+                    &self.egress_ip
+                },
+            ));
+        }
+        None
+    }
+
+    /// Whether the exit confirmed WARP *and* the tunnel carried the bytes.
+    pub fn is_healthy(&self) -> bool {
+        self.unhealthy_reason().is_none()
+    }
+}
+
+/// Verify the tunnel and require the result to prove a healthy WARP path.
+///
+/// [`verify_tunnel`] reports what the edge said and leaves the judgement to the
+/// caller, which is right for a diagnostics screen that wants to show a red row.
+/// Every other caller — tests above all — only wants to proceed when the path is
+/// good, and would otherwise re-derive the predicate and drift from it.
+///
+/// # Errors
+///
+/// The fetch's own failure, or a [`ProxyError::TunnelError`] naming what the
+/// trace disproved.
+pub fn require_healthy(manager: &TunnelManager) -> Result<TunnelVerification, ProxyError> {
+    let verification = verify_tunnel(manager)?;
+    match verification.unhealthy_reason() {
+        None => Ok(verification),
+        Some(details) => Err(ProxyError::TunnelError { details }),
+    }
+}
+
 /// Read one `key=value` field out of a trace body.
 ///
 /// The format is line-oriented `key=value` with no escaping and no continuation,
@@ -171,6 +232,41 @@ mod tests {
         let v = interpret("garbage\n\nfuture_field=1\nwarp=plus\nip=9.9.9.9\n", 1, 1);
         assert!(v.warp_active);
         assert_eq!(v.egress_ip, "9.9.9.9");
+    }
+
+    fn verification(warp: &str, tx: u64, rx: u64) -> TunnelVerification {
+        interpret(&format!("warp={warp}\nip=1.2.3.4\ncolo=YYZ\n"), tx, rx)
+    }
+
+    #[test]
+    fn a_warp_reply_that_moved_bytes_is_healthy() {
+        for warp in ["on", "plus"] {
+            let v = verification(warp, 1200, 3400);
+            assert!(v.is_healthy(), "warp={warp} should be healthy");
+            assert_eq!(v.unhealthy_reason(), None);
+        }
+    }
+
+    #[test]
+    fn warp_off_is_not_healthy() {
+        for warp in ["off", "", "unknown"] {
+            let reason = verification(warp, 1200, 3400)
+                .unhealthy_reason()
+                .expect("must be refused");
+            assert!(reason.contains("not WARP"), "{reason}");
+        }
+    }
+
+    /// A reply the tunnel did not carry says nothing about the tunnel, even when
+    /// the edge reports WARP — which it will if the device itself is on WARP.
+    #[test]
+    fn a_reply_the_tunnel_did_not_carry_is_not_healthy() {
+        for (tx, rx) in [(0, 3400), (1200, 0), (0, 0)] {
+            let reason = verification("on", tx, rx)
+                .unhealthy_reason()
+                .expect("must be refused");
+            assert!(reason.contains("carried no bytes"), "{reason}");
+        }
     }
 
     /// A value containing `=` keeps everything after the first separator.

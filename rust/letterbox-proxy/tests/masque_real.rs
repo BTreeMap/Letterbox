@@ -89,6 +89,18 @@ fn real_masque_tunnel_fetches_image() {
         );
         assert!(!outcome.body.is_empty(), "image body should be non-empty");
 
+        // The counters prove bytes moved; only the edge can say whose address
+        // arrives at the far end. A tunnel that carries traffic to a server
+        // which still sees the user's own IP is the one failure the whole proxy
+        // exists to prevent, and every other assertion here would pass through
+        // it unnoticed.
+        let verification = letterbox_proxy::verify::require_healthy(&manager)
+            .expect("the edge must confirm WARP egress through the tunnel");
+        println!(
+            "edge reported warp={} egress={} colo={}",
+            verification.warp, verification.egress_ip, verification.colo
+        );
+
         let after = manager.diagnostics().expect("diagnostics");
         assert!(after.tx_bytes > 0, "should have transmitted");
         assert!(after.rx_bytes > 0, "should have received");
