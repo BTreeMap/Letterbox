@@ -10,7 +10,7 @@
 //! anybody has heard of is answered with 403 by every major bot-management
 //! service, and no amount of working tunnel underneath makes up for it.
 
-use crate::error::ProxyError;
+use crate::error::{ProxyError, NO_HTTP_RESPONSE};
 use std::io::Read;
 
 /// A parsed HTTP/1.1 response.
@@ -283,20 +283,20 @@ pub fn build_get_request(
 /// Parse a complete raw HTTP/1.1 response (headers + body).
 pub fn parse_response(raw: &[u8]) -> Result<HttpResponse, ProxyError> {
     let split = find_header_end(raw).ok_or_else(|| ProxyError::HttpError {
-        status_code: 0,
+        status_code: NO_HTTP_RESPONSE,
         details: "Malformed response: no header terminator".to_string(),
     })?;
     let (head, body_start) = raw.split_at(split);
     let body_bytes = &body_start[4..]; // skip the CRLFCRLF
 
     let head_str = std::str::from_utf8(head).map_err(|_| ProxyError::HttpError {
-        status_code: 0,
+        status_code: NO_HTTP_RESPONSE,
         details: "Response headers are not valid UTF-8".to_string(),
     })?;
 
     let mut lines = head_str.split("\r\n");
     let status_line = lines.next().ok_or_else(|| ProxyError::HttpError {
-        status_code: 0,
+        status_code: NO_HTTP_RESPONSE,
         details: "Empty response".to_string(),
     })?;
     let status = parse_status_line(status_line)?;
@@ -330,7 +330,7 @@ fn parse_status_line(line: &str) -> Result<u16, ProxyError> {
         .nth(1)
         .and_then(|code| code.parse::<u16>().ok())
         .ok_or_else(|| ProxyError::HttpError {
-            status_code: 0,
+            status_code: NO_HTTP_RESPONSE,
             details: format!("Invalid status line: {line}"),
         })
 }
@@ -362,13 +362,13 @@ fn decode_chunked(mut body: &[u8]) -> Result<Vec<u8>, ProxyError> {
             body.windows(2)
                 .position(|w| w == b"\r\n")
                 .ok_or_else(|| ProxyError::HttpError {
-                    status_code: 0,
+                    status_code: NO_HTTP_RESPONSE,
                     details: "Truncated chunk header".to_string(),
                 })?;
         let size_str = std::str::from_utf8(&body[..line_end]).unwrap_or("");
         let size_hex = size_str.split(';').next().unwrap_or("").trim();
         let size = usize::from_str_radix(size_hex, 16).map_err(|_| ProxyError::HttpError {
-            status_code: 0,
+            status_code: NO_HTTP_RESPONSE,
             details: format!("Invalid chunk size: {size_hex}"),
         })?;
         body = &body[line_end + 2..];
@@ -377,7 +377,7 @@ fn decode_chunked(mut body: &[u8]) -> Result<Vec<u8>, ProxyError> {
         }
         if body.len() < size {
             return Err(ProxyError::HttpError {
-                status_code: 0,
+                status_code: NO_HTTP_RESPONSE,
                 details: "Truncated chunk body".to_string(),
             });
         }
@@ -434,7 +434,7 @@ impl ContentCoding {
             Ok(Self::Deflate)
         } else {
             Err(ProxyError::HttpError {
-                status_code: 0,
+                status_code: NO_HTTP_RESPONSE,
                 details: format!("Unsupported Content-Encoding: {header}"),
             })
         }
@@ -512,7 +512,7 @@ impl ContentCoding {
             .take(max_size as u64 + 1)
             .read_to_end(&mut out)
             .map_err(|e| ProxyError::HttpError {
-                status_code: 0,
+                status_code: NO_HTTP_RESPONSE,
                 details: format!("Malformed {} body: {e}", self.name()),
             })?;
         if out.len() > max_size {

@@ -75,12 +75,11 @@ fn real_masque_tunnel_fetches_image() {
         );
 
         let outcome = manager
-            .fetch(
-                TEST_IMAGE_URL.to_string(),
-                Vec::new(),
+            .fetch(letterbox_proxy::tunnel::FetchRequest::new(
+                TEST_IMAGE_URL,
                 letterbox_proxy::tunnel::http1::ClientProfile::browser("image/*"),
                 FetchLimits::default(),
-            )
+            ))
             .expect("fetch image through MASQUE tunnel");
 
         assert!(

@@ -12,10 +12,12 @@
 //! * [`http1`] — a pure HTTP/1.1 request/response codec.
 //! * [`dns`] — DNS-over-HTTPS resolution through the tunnel.
 //! * [`manager`] — owns the tunnel on a worker thread and exposes a message API.
+//! * [`fault`] — whether a failure is the tunnel's, and so worth retrying.
 
 pub mod device;
 pub mod dns;
 pub mod duplex;
+pub mod fault;
 pub mod http1;
 pub mod manager;
 pub mod masque;
@@ -23,5 +25,6 @@ pub mod stack;
 pub mod stats;
 pub mod tls;
 
-pub use manager::{ConnectionState, TunnelDiagnostics, TunnelManager};
+pub use fault::Fault;
+pub use manager::{ConnectionState, FetchRequest, TunnelDiagnostics, TunnelManager};
 pub use stack::WarpTunnel;

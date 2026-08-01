@@ -9,15 +9,28 @@
 use crate::config::{FetchLimits, WarpConfig};
 use crate::error::ProxyError;
 use crate::http::{self, FetchOutcome};
+use crate::tunnel::fault::Fault;
 use crate::tunnel::http1::ClientProfile;
 use crate::tunnel::stack::WarpTunnel;
 use crate::tunnel::stats::TunnelStats;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 /// How long to wait for the initial (and any re-)handshake to complete.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long the worker may sit idle before it proves the tunnel still works.
+///
+/// Only *idle* time counts, because a fetch that succeeded is a stronger
+/// liveness signal than any probe: while traffic flows, this never fires.
+const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How many times a transport failure is retried before the caller sees it.
+///
+/// Small on purpose. Each retry costs a handshake, and a fault that survives two
+/// fresh tunnels is not the tunnel's.
+const MAX_TRANSPORT_RETRIES: u32 = 2;
 
 /// Whether the tunnel currently has a live session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,18 +91,74 @@ pub struct TunnelDiagnostics {
     pub rx_bytes: u64,
 }
 
+/// Everything one fetch needs, and nothing about the tunnel that will carry it.
+///
+/// A value rather than four parameters because retrying means running *the
+/// same* request: a struct says that once, where re-threading four arguments
+/// through a retry loop would say it at every call. Nothing here is consumed by
+/// running it, which is what makes a retry a repeat rather than a resume.
+#[derive(Debug, Clone)]
+pub struct FetchRequest {
+    /// Absolute `http(s)` URL to fetch.
+    pub url: String,
+    /// Extra headers, minus anything the profile owns.
+    pub headers: Vec<(String, String)>,
+    /// Who the request presents itself as.
+    pub profile: ClientProfile,
+    /// Size, redirect and timeout ceilings.
+    pub limits: FetchLimits,
+}
+
+impl FetchRequest {
+    /// A fetch of `url` with no extra headers.
+    pub fn new(url: impl Into<String>, profile: ClientProfile, limits: FetchLimits) -> Self {
+        Self {
+            url: url.into(),
+            headers: Vec::new(),
+            profile,
+            limits,
+        }
+    }
+
+    /// Add caller headers the profile does not already own.
+    pub fn with_headers(self, headers: Vec<(String, String)>) -> Self {
+        Self { headers, ..self }
+    }
+}
+
 /// A unit of work for the tunnel worker thread.
 enum Command {
     Fetch {
-        url: String,
-        headers: Vec<(String, String)>,
-        profile: ClientProfile,
-        limits: FetchLimits,
+        request: FetchRequest,
         reply: Sender<Result<FetchOutcome, ProxyError>>,
     },
     Diagnostics {
         reply: Sender<TunnelDiagnostics>,
     },
+}
+
+/// What woke the worker.
+///
+/// The idle case is a first-class event rather than an error branch on `recv`:
+/// having nothing to do for [`HEALTH_INTERVAL`] is exactly when the tunnel needs
+/// checking, so the timeout *is* the schedule and no timer thread is needed.
+enum Wakeup {
+    /// Something asked for work.
+    Serve(Command),
+    /// Nobody asked for anything for a whole [`HEALTH_INTERVAL`].
+    Idle,
+    /// Every handle is gone; the worker is done.
+    ShutDown,
+}
+
+impl Wakeup {
+    fn receive(rx: &Receiver<Command>, within: Duration) -> Self {
+        match rx.recv_timeout(within) {
+            Ok(command) => Self::Serve(command),
+            Err(RecvTimeoutError::Timeout) => Self::Idle,
+            Err(RecvTimeoutError::Disconnected) => Self::ShutDown,
+        }
+    }
 }
 
 /// Owns the tunnel worker thread and dispatches commands to it.
@@ -129,23 +198,11 @@ impl TunnelManager {
         }
     }
 
-    /// Fetch a URL through the tunnel.
-    pub fn fetch(
-        &self,
-        url: String,
-        headers: Vec<(String, String)>,
-        profile: ClientProfile,
-        limits: FetchLimits,
-    ) -> Result<FetchOutcome, ProxyError> {
+    /// Fetch a URL through the tunnel, retrying transport faults.
+    pub fn fetch(&self, request: FetchRequest) -> Result<FetchOutcome, ProxyError> {
         let (reply, reply_rx) = channel();
         self.tx
-            .send(Command::Fetch {
-                url,
-                headers,
-                profile,
-                limits,
-                reply,
-            })
+            .send(Command::Fetch { request, reply })
             .map_err(|_| ProxyError::TunnelError {
                 details: "Tunnel worker is no longer running".to_string(),
             })?;
@@ -205,23 +262,101 @@ fn worker_loop(
         }
     }
 
-    while let Ok(command) = rx.recv() {
-        match command {
-            Command::Fetch {
-                url,
-                headers,
-                profile,
-                limits,
-                reply,
-            } => {
-                let result = ensure_connected(&mut tunnel)
-                    .and_then(|()| http::fetch(&mut tunnel, &url, &headers, &limits, &profile));
-                let _ = reply.send(result);
+    loop {
+        match Wakeup::receive(&rx, HEALTH_INTERVAL) {
+            Wakeup::Serve(Command::Fetch { request, reply }) => {
+                let _ = reply.send(serve_fetch(&mut tunnel, &request));
             }
-            Command::Diagnostics { reply } => {
+            Wakeup::Serve(Command::Diagnostics { reply }) => {
                 let _ = reply.send(build_diagnostics(&tunnel));
             }
+            Wakeup::Idle => check_health(&mut tunnel),
+            Wakeup::ShutDown => return,
         }
+    }
+}
+
+/// Run `request`, rebuilding the tunnel and repeating it on a transport fault.
+///
+/// Safe to repeat because a [`FetchRequest`] is a description, not a session:
+/// it is a `GET` over a connection that closes afterwards, so it carries no
+/// progress that a second attempt would duplicate or resume. The retry is
+/// therefore a plain re-run, and the only question is whether it could help —
+/// which is what [`Fault`] answers.
+fn serve_fetch(
+    tunnel: &mut WarpTunnel,
+    request: &FetchRequest,
+) -> Result<FetchOutcome, ProxyError> {
+    for attempt in 0..=MAX_TRANSPORT_RETRIES {
+        // A fault may have left the tunnel *believing* it is connected, so the
+        // first attempt asks and later ones rebuild unconditionally.
+        let ready = if attempt == 0 {
+            ensure_connected(tunnel)
+        } else {
+            tunnel.connect(HANDSHAKE_TIMEOUT)
+        };
+
+        let outcome = ready.and_then(|()| {
+            http::fetch(
+                tunnel,
+                &request.url,
+                &request.headers,
+                &request.limits,
+                &request.profile,
+            )
+        });
+
+        match outcome.map_err(Fault::from) {
+            Ok(outcome) => return Ok(outcome),
+            Err(fault) if !fault.is_transport() => return Err(fault.into_error()),
+            Err(fault) if attempt == MAX_TRANSPORT_RETRIES => return Err(fault.into_error()),
+            Err(fault) => log::warn!(
+                "transport fault on attempt {}, rebuilding tunnel: {}",
+                attempt + 1,
+                fault.into_error()
+            ),
+        }
+    }
+
+    // `0..=MAX` always returns from inside the loop; this is unreachable without
+    // an empty range, which the type forbids.
+    Err(ProxyError::TunnelError {
+        details: "fetch retry loop ended without a verdict".to_string(),
+    })
+}
+
+/// Prove the tunnel still carries traffic, and rebuild it when it does not.
+///
+/// The probe is a real fetch through the tunnel rather than a look at local
+/// state: `is_connected` reports what the session *believes*, and the failure
+/// this exists to catch is exactly a session that believes wrongly.
+fn check_health(tunnel: &mut WarpTunnel) {
+    if !tunnel.is_connected() {
+        rebuild(tunnel, "session had lapsed while idle");
+        return;
+    }
+
+    let probe = crate::verify::trace_request();
+    match http::fetch(
+        tunnel,
+        &probe.url,
+        &probe.headers,
+        &probe.limits,
+        &probe.profile,
+    ) {
+        Ok(_) => log::debug!("tunnel health probe succeeded"),
+        Err(e) => rebuild(tunnel, &format!("health probe failed: {e}")),
+    }
+}
+
+/// Re-handshake, logging why and whether it worked.
+fn rebuild(tunnel: &mut WarpTunnel, reason: &str) {
+    log::warn!("rebuilding tunnel: {reason}");
+    match tunnel.connect(HANDSHAKE_TIMEOUT) {
+        Ok(()) => log::info!("tunnel rebuilt"),
+        // Nothing to report to: the next fetch retries, and the next idle tick
+        // tries again.
+        Err(e) => log::warn!("tunnel rebuild failed: {e}"),
     }
 }
 

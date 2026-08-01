@@ -13,7 +13,7 @@
 
 use crate::error::ProxyError;
 use crate::tunnel::http1::ClientProfile;
-use crate::tunnel::TunnelManager;
+use crate::tunnel::{FetchRequest, TunnelManager};
 
 /// Where the check points. Any Cloudflare host serves this path; using the
 /// apex keeps the request indistinguishable from ordinary browsing.
@@ -21,6 +21,23 @@ const TRACE_URL: &str = "https://cloudflare.com/cdn-cgi/trace";
 
 /// The trace response is a handful of short lines; anything larger is not it.
 const MAX_TRACE_BYTES: u64 = 64 * 1024;
+
+/// The request both the user-facing check and the idle health probe send.
+///
+/// One definition, because the probe exists to exercise the path an image
+/// takes: if the two drifted apart, a green check would stop meaning the tunnel
+/// the images use is healthy. The browser persona is part of that — a request
+/// that presents differently is measuring a different path.
+pub(crate) fn trace_request() -> FetchRequest {
+    FetchRequest::new(
+        TRACE_URL,
+        ClientProfile::browser("text/plain"),
+        crate::config::FetchLimits {
+            max_size: MAX_TRACE_BYTES,
+            ..crate::config::FetchLimits::default()
+        },
+    )
+}
 
 /// What the Cloudflare edge reported about the request the tunnel made.
 #[derive(Clone, Debug, uniffi::Record)]
@@ -94,23 +111,10 @@ fn interpret(body: &str, tx_bytes: u64, rx_bytes: u64) -> TunnelVerification {
 /// Returns whatever the fetch failed with. A failure here is the finding: it
 /// means the path the images take does not work, whatever the counters say.
 pub fn verify_tunnel(manager: &TunnelManager) -> Result<TunnelVerification, ProxyError> {
-    let limits = crate::config::FetchLimits {
-        max_size: MAX_TRACE_BYTES,
-        ..crate::config::FetchLimits::default()
-    };
-
     // Sampled either side of the fetch so the result reports what *this* request
     // moved, not what the session has moved since it came up.
     let before = manager.diagnostics()?;
-    // The browser persona on purpose: this probe exists to describe the path a
-    // remote image will take, and a request that presents differently is not
-    // measuring that path.
-    let outcome = manager.fetch(
-        TRACE_URL.to_string(),
-        Vec::new(),
-        ClientProfile::browser("text/plain"),
-        limits,
-    )?;
+    let outcome = manager.fetch(trace_request())?;
     let after = manager.diagnostics()?;
 
     let body = String::from_utf8_lossy(&outcome.body);

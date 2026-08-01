@@ -5,6 +5,15 @@
 
 use thiserror::Error;
 
+/// `status_code` for a [`ProxyError::HttpError`] raised before any response
+/// arrived — a refused connection, a dead tunnel, a malformed reply.
+///
+/// Load-bearing rather than cosmetic: it is what distinguishes "the transport
+/// failed" from "the server answered", and [`crate::tunnel::Fault`] retries only
+/// the former. A bare `0` at thirteen construction sites left that decision
+/// resting on a magic number.
+pub const NO_HTTP_RESPONSE: u16 = 0;
+
 /// Errors that can occur during proxy operations.
 #[derive(Debug, Error, Clone, PartialEq, Eq, uniffi::Error)]
 pub enum ProxyError {
@@ -165,7 +174,7 @@ impl From<reqwest::Error> for ProxyError {
             }
         } else {
             ProxyError::HttpError {
-                status_code: 0,
+                status_code: NO_HTTP_RESPONSE,
                 details: err.to_string(),
             }
         }

@@ -50,7 +50,7 @@ pub use types::{
 use config::{FetchLimits, WarpConfig};
 use provisioning::WarpProvisioner;
 use tunnel::http1::ClientProfile;
-use tunnel::{TunnelDiagnostics, TunnelManager};
+use tunnel::{FetchRequest, TunnelDiagnostics, TunnelManager};
 
 uniffi::setup_scaffolding!();
 
@@ -370,7 +370,8 @@ fn fetch_resource(
     }
 
     let (manager, limits) = acquire_manager()?;
-    let outcome = manager.fetch(url.to_string(), header_pairs(headers), profile, limits)?;
+    let outcome = manager
+        .fetch(FetchRequest::new(url, profile, limits).with_headers(header_pairs(headers)))?;
 
     let response = FetchedResource {
         mime_type: outcome.mime_type,
@@ -419,10 +420,8 @@ pub fn proxy_fetch_url(
     let (manager, limits) = acquire_manager()?;
     let outcome = manager
         .fetch(
-            url,
-            header_pairs(headers),
-            ClientProfile::browser("*/*"),
-            limits,
+            FetchRequest::new(url, ClientProfile::browser("*/*"), limits)
+                .with_headers(header_pairs(headers)),
         )
         .inspect_err(|e| {
             record_error(&e.to_string());

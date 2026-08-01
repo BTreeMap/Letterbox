@@ -9,7 +9,7 @@ use crate::config::FetchLimits;
 use crate::error::ProxyError;
 use crate::http::FetchOutcome;
 use crate::tunnel::http1::ClientProfile;
-use crate::tunnel::TunnelManager;
+use crate::tunnel::{FetchRequest, TunnelManager};
 use serde::Deserialize;
 
 /// Canonical GitHub repository slug for the official distribution channel.
@@ -93,10 +93,12 @@ pub fn check_for_update(
     // both a lie and a worse one than the truth, since nothing else about the
     // request looks like a page load.
     let outcome: FetchOutcome = manager.fetch(
-        url,
-        headers,
-        ClientProfile::api("Letterbox-UpdateChecker", "application/vnd.github+json"),
-        limits,
+        FetchRequest::new(
+            url,
+            ClientProfile::api("Letterbox-UpdateChecker", "application/vnd.github+json"),
+            limits,
+        )
+        .with_headers(headers),
     )?;
 
     let release: GithubRelease =
