@@ -50,7 +50,7 @@ pub use types::{
 use config::{FetchLimits, WarpConfig};
 use provisioning::WarpProvisioner;
 use tunnel::http1::ClientProfile;
-use tunnel::{FetchRequest, TunnelDiagnostics, TunnelManager};
+use tunnel::{Fault, FetchRequest, TunnelDiagnostics, TunnelManager};
 
 uniffi::setup_scaffolding!();
 
@@ -211,11 +211,21 @@ fn acquire_manager() -> Result<(Arc<TunnelManager>, FetchLimits), ProxyError> {
     Ok((manager, limits))
 }
 
-/// Record the most recent error for surfacing through [`proxy_status`].
-fn record_error(message: &str) {
+/// Record a failure of the *proxy* for surfacing through [`proxy_status`].
+///
+/// Only transport faults are recorded. A URL that does not resolve or answers
+/// 404 is a verdict on that URL, which the caller already receives as its own
+/// `Err`; parking it in a global status field made one dead tracking pixel read
+/// on the diagnostics screen as though the tunnel were broken. The same
+/// [`Fault`] split that decides whether to retry decides whether it is ours to
+/// report — one classification, so the two cannot drift apart.
+fn record_error(error: &ProxyError) {
+    if !Fault::from(error.clone()).is_transport() {
+        return;
+    }
     let mut guard = lock_state();
     if let Some(state) = guard.as_mut() {
-        state.last_error = Some(message.to_string());
+        state.last_error = Some(error.to_string());
     }
 }
 
@@ -299,7 +309,7 @@ pub fn proxy_fetch_subresource(
                 false => Ok(resource),
             },
         )
-        .inspect_err(|e| record_error(&e.to_string()))
+        .inspect_err(record_error)
 }
 
 /// Fetch a single image through the WARP tunnel.
@@ -314,7 +324,7 @@ pub fn proxy_fetch_image(
     headers: Option<HashMap<String, String>>,
 ) -> Result<FetchedResource, ProxyError> {
     fetch_image(&url, headers).inspect_err(|e| {
-        record_error(&e.to_string());
+        record_error(e);
     })
 }
 
@@ -424,7 +434,7 @@ pub fn proxy_fetch_url(
                 .with_headers(header_pairs(headers)),
         )
         .inspect_err(|e| {
-            record_error(&e.to_string());
+            record_error(e);
         })?;
     Ok(HttpFetchResponse {
         status: outcome.status,
@@ -475,7 +485,7 @@ pub fn proxy_check_for_update(
 
     let (manager, _) = acquire_manager()?;
     let info = update::check_for_update(&manager, &current_version, &repo).inspect_err(|e| {
-        record_error(&e.to_string());
+        record_error(e);
     })?;
 
     Ok(UpdateResult {
@@ -499,7 +509,7 @@ pub fn proxy_check_for_update(
 pub fn proxy_verify_tunnel() -> Result<verify::TunnelVerification, ProxyError> {
     let (manager, _) = acquire_manager()?;
     verify::verify_tunnel(&manager).inspect_err(|e| {
-        record_error(&e.to_string());
+        record_error(e);
     })
 }
 

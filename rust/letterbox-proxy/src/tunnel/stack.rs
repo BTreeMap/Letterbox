@@ -13,6 +13,7 @@
 use crate::config::WarpConfig;
 use crate::error::ProxyError;
 use crate::tunnel::device::VirtualDevice;
+use crate::tunnel::dns::DnsCache;
 use crate::tunnel::masque::MasqueTransport;
 use crate::tunnel::stats::TunnelStats;
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
@@ -64,6 +65,11 @@ pub struct WarpTunnel {
     device: VirtualDevice,
     local_ipv4: [u8; 4],
     next_local_port: u16,
+    /// Resolver answers, kept here because the worker owning the tunnel is also
+    /// the only thing that resolves — co-located ownership, no lock. Answers
+    /// outlive a rebuilt session: which address a name has is not the tunnel's
+    /// business.
+    names: DnsCache,
 }
 
 impl WarpTunnel {
@@ -95,7 +101,13 @@ impl WarpTunnel {
             device,
             local_ipv4,
             next_local_port: 49_152,
+            names: DnsCache::new(),
         })
+    }
+
+    /// The resolver-answer cache this tunnel resolves against.
+    pub fn names(&mut self) -> &mut DnsCache {
+        &mut self.names
     }
 
     /// The WARP endpoint this tunnel targets.

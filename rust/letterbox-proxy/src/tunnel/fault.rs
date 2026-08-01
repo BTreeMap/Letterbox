@@ -22,15 +22,13 @@ impl From<ProxyError> for Fault {
     /// error here rather than silently inheriting a retry policy nobody chose.
     fn from(error: ProxyError) -> Self {
         match error {
-            // The tunnel, or something that can only be reached through it.
-            // DNS runs over DoH inside the tunnel, and a TLS handshake truncated
-            // by a dead session is indistinguishable here from a bad
-            // certificate — retrying a genuine certificate failure merely fails
-            // again, whereas not retrying a tunnel-induced one is the bug this
-            // classification exists to fix.
+            // The tunnel, or something that can only be reached through it. A
+            // TLS handshake truncated by a dead session is indistinguishable
+            // here from a bad certificate — retrying a genuine certificate
+            // failure merely fails again, whereas not retrying a tunnel-induced
+            // one is the bug this classification exists to fix.
             ProxyError::TunnelError { .. }
             | ProxyError::Timeout { .. }
-            | ProxyError::DnsError { .. }
             | ProxyError::TlsError { .. }
             | ProxyError::NetworkUnavailable { .. } => Self::Transport(error),
 
@@ -43,7 +41,13 @@ impl From<ProxyError> for Fault {
 
             // A real status code means a server considered the request and
             // decided. Everything below it is a verdict on the request itself.
+            //
+            // `DnsError` belongs here because `dns::interpret` is the only thing
+            // that builds one, and it is pure: a DoH query that never completed
+            // fails as `TlsError`, `Timeout` or `TunnelError` instead. So this
+            // means the resolver spoke, and a fresh tunnel would hear the same.
             ProxyError::HttpError { .. }
+            | ProxyError::DnsError { .. }
             | ProxyError::NotInitialized
             | ProxyError::InitializationFailed { .. }
             | ProxyError::ProvisioningFailed { .. }
@@ -83,10 +87,6 @@ mod tests {
                 details: "session closed".into(),
             },
             ProxyError::Timeout { seconds: 15 },
-            ProxyError::DnsError {
-                host: "e.com".into(),
-                details: "no answer".into(),
-            },
             ProxyError::TlsError {
                 details: "handshake truncated".into(),
             },
@@ -120,6 +120,18 @@ mod tests {
                 "HTTP {status} is an answer, not a broken tunnel"
             );
         }
+    }
+
+    /// A name that does not resolve is the resolver's verdict, not the
+    /// tunnel's. Retrying it rebuilt the tunnel twice for every dead tracking
+    /// pixel in a message, which is the fault this distinction exists to stop.
+    #[test]
+    fn an_unresolvable_name_does_not_rebuild_the_tunnel() {
+        let unresolvable = ProxyError::DnsError {
+            host: "pixel.app.returnpath.net".into(),
+            details: "No A record in DoH response".into(),
+        };
+        assert!(!Fault::from(unresolvable).is_transport());
     }
 
     /// Retrying these reproduces them exactly, at the cost of the round trip.

@@ -337,15 +337,28 @@ fn check_health(tunnel: &mut WarpTunnel) {
     }
 
     let probe = crate::verify::trace_request();
-    match http::fetch(
+    let outcome = http::fetch(
         tunnel,
         &probe.url,
         &probe.headers,
         &probe.limits,
         &probe.profile,
-    ) {
+    );
+
+    // An endpoint fault answers the question the probe asked: something at the
+    // far end replied, so the tunnel carried it. Rebuilding on a resolver
+    // verdict or a 503 from Cloudflare would tear down a working session for a
+    // condition it did not cause.
+    match outcome.map_err(Fault::from) {
         Ok(_) => log::debug!("tunnel health probe succeeded"),
-        Err(e) => rebuild(tunnel, &format!("health probe failed: {e}")),
+        Err(fault) if fault.is_transport() => rebuild(
+            tunnel,
+            &format!("health probe failed: {}", fault.into_error()),
+        ),
+        Err(fault) => log::debug!(
+            "health probe reached the far end and was refused: {}",
+            fault.into_error()
+        ),
     }
 }
 
