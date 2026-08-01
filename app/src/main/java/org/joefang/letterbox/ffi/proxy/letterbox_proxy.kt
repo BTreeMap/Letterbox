@@ -872,7 +872,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_image() != 27433) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 23587) {
+    if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_images_batch() != 42863) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_letterbox_proxy_checksum_func_proxy_fetch_subresource() != 48947) {
@@ -2820,10 +2820,12 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     
 
         /**
-         * Fetch multiple images through the tunnel.
+         * Fetch multiple images through the tunnel, concurrently.
          *
-         * Requests are serviced by the single shared tunnel, so they are processed in
-         * order; `max_concurrent` is accepted for API stability but currently advisory.
+         * `max_concurrent` bounds how many are in flight at once. It used to be
+         * accepted and ignored; honouring it matters now that the tunnel can actually
+         * carry several at a time, because unbounded fan-out would open a socket per
+         * URL in a message we did not write.
          */
     @Throws(ProxyException::class) fun `proxyFetchImagesBatch`(`urls`: List<kotlin.String>, `maxConcurrent`: kotlin.UInt): List<BatchImageResult> {
             return FfiConverterSequenceTypeBatchImageResult.lift(
