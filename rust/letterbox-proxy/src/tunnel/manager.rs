@@ -19,7 +19,7 @@ use std::sync::mpsc::{channel, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::Semaphore;
+use tokio::sync::{watch, Semaphore};
 use tokio::task::{spawn_local, LocalSet};
 
 /// How long to wait for the initial (and any re-)handshake to complete.
@@ -179,6 +179,12 @@ impl Pending {
 /// Owns the tunnel worker thread and dispatches commands to it.
 pub struct TunnelManager {
     tx: UnboundedSender<Command>,
+    /// The driver's published connectedness, subscribed to rather than mirrored.
+    ///
+    /// Read without a round trip, so asking "is it up?" costs nothing and — the
+    /// point — cannot disagree with what [`Self::diagnostics`] reports, because
+    /// there is only the one value.
+    connected: watch::Receiver<bool>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -190,10 +196,11 @@ impl TunnelManager {
     pub fn start(config: WarpConfig) -> Result<Self, ProxyError> {
         let (tx, rx) = unbounded_channel::<Command>();
         let (ready_tx, ready_rx) = channel::<Result<(), ProxyError>>();
+        let (connected_tx, connected) = watch::channel(false);
 
         let worker = std::thread::Builder::new()
             .name("warp-tunnel".to_string())
-            .spawn(move || worker_loop(config, rx, ready_tx))
+            .spawn(move || worker_loop(config, rx, ready_tx, connected_tx))
             .map_err(|e| ProxyError::TunnelError {
                 details: format!("Failed to spawn tunnel thread: {e}"),
             })?;
@@ -201,6 +208,7 @@ impl TunnelManager {
         match ready_rx.recv() {
             Ok(Ok(())) => Ok(Self {
                 tx,
+                connected,
                 worker: Some(worker),
             }),
             Ok(Err(e)) => {
@@ -211,6 +219,11 @@ impl TunnelManager {
                 details: "Tunnel worker exited before signalling readiness".to_string(),
             }),
         }
+    }
+
+    /// Whether the tunnel's session is up, without asking the worker.
+    pub fn state(&self) -> ConnectionState {
+        (*self.connected.borrow()).into()
     }
 
     /// Hand a fetch to the worker without waiting for it.
@@ -274,6 +287,7 @@ fn worker_loop(
     config: WarpConfig,
     rx: UnboundedReceiver<Command>,
     ready_tx: Sender<Result<(), ProxyError>>,
+    connected: watch::Sender<bool>,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -288,7 +302,7 @@ fn worker_loop(
         }
     };
 
-    LocalSet::new().block_on(&runtime, serve(config, rx, ready_tx));
+    LocalSet::new().block_on(&runtime, serve(config, rx, ready_tx, connected));
 }
 
 /// Bring the tunnel up, then dispatch commands until every handle is gone.
@@ -296,8 +310,9 @@ async fn serve(
     config: WarpConfig,
     mut rx: UnboundedReceiver<Command>,
     ready_tx: Sender<Result<(), ProxyError>>,
+    connected: watch::Sender<bool>,
 ) {
-    let (tunnel, driver) = match Tunnel::new(&config) {
+    let (tunnel, driver) = match Tunnel::new(&config, connected) {
         Ok(pair) => pair,
         Err(e) => {
             let _ = ready_tx.send(Err(e));

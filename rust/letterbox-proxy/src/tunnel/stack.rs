@@ -154,7 +154,14 @@ impl Tunnel {
     /// Returns the handle callers fetch through and the future that must be
     /// spawned for any of it to work — separated so that "I have a tunnel" and
     /// "something is pumping it" cannot silently diverge.
-    pub fn new(config: &WarpConfig) -> Result<(Self, Driver), ProxyError> {
+    /// `connected` is supplied rather than created here so the manager — on the
+    /// other side of the worker thread — subscribes to the very same value the
+    /// driver publishes. A second flag mirrored across the boundary is how the
+    /// debug screen came to show two answers.
+    pub fn new(
+        config: &WarpConfig,
+        connected: watch::Sender<bool>,
+    ) -> Result<(Self, Driver), ProxyError> {
         let (transport, source) = MasqueTransport::new(config)?;
         let local_ipv4 = parse_ipv4_octets(&config.interface.address_ipv4)?;
 
@@ -182,7 +189,7 @@ impl Tunnel {
             names: DnsCache::new(),
             status: RefCell::new(transport.status()),
             egress: Notify::new(),
-            connected: watch::Sender::new(false),
+            connected,
             lingering: RefCell::new(Vec::new()),
             next_port: Cell::new(EPHEMERAL_FIRST),
             local_ipv4,
@@ -203,9 +210,9 @@ impl Tunnel {
         *self.shared.connected.borrow()
     }
 
-    /// Live transport statistics.
+    /// Live transport statistics, coherent with [`Self::is_connected`].
     pub fn stats(&self) -> TunnelStats {
-        self.shared.status.borrow().stats()
+        self.shared.status.borrow().stats(self.is_connected())
     }
 
     /// The WARP endpoint this tunnel targets.
@@ -701,12 +708,13 @@ mod tests {
 
     #[test]
     fn tunnel_creation_succeeds() {
-        assert!(Tunnel::new(&test_config()).is_ok());
+        assert!(Tunnel::new(&test_config(), watch::Sender::new(false)).is_ok());
     }
 
     #[test]
     fn tunnel_not_connected_initially() {
-        let (tunnel, _driver) = Tunnel::new(&test_config()).expect("build tunnel");
+        let (tunnel, _driver) =
+            Tunnel::new(&test_config(), watch::Sender::new(false)).expect("build tunnel");
         assert!(!tunnel.is_connected());
     }
 
@@ -731,7 +739,8 @@ mod tests {
 
     #[test]
     fn local_port_allocation_wraps() {
-        let (tunnel, _driver) = Tunnel::new(&test_config()).expect("build tunnel");
+        let (tunnel, _driver) =
+            Tunnel::new(&test_config(), watch::Sender::new(false)).expect("build tunnel");
         let sockets = SocketSet::new(Vec::new());
         tunnel.shared.next_port.set(EPHEMERAL_LAST);
         assert_eq!(
@@ -760,12 +769,27 @@ mod tests {
         assert_eq!(next_backoff(SessionEnd::Failed, MAX_BACKOFF), MAX_BACKOFF);
     }
 
+    /// The manager lives on the other side of the worker thread and subscribes
+    /// to this value rather than keeping its own copy. A mirrored flag is how
+    /// the debug screen came to show "Not running" beside a live session.
+    #[test]
+    fn a_subscriber_outside_the_worker_sees_the_published_state() {
+        let (sender, outside) = watch::channel(false);
+        let (tunnel, driver) = Tunnel::new(&test_config(), sender).expect("build tunnel");
+
+        driver.publish(true);
+
+        assert!(tunnel.is_connected());
+        assert!(*outside.borrow(), "there is only the one value to read");
+    }
+
     /// The regression this type exists to prevent: a transition published
     /// before anyone parks. An edge signal drops it and the waiter then sits
     /// out its entire timeout beside a tunnel that is already up.
     #[tokio::test]
     async fn ready_observes_a_transition_published_before_it_waited() {
-        let (tunnel, driver) = Tunnel::new(&test_config()).expect("build tunnel");
+        let (tunnel, driver) =
+            Tunnel::new(&test_config(), watch::Sender::new(false)).expect("build tunnel");
         driver.publish(true);
 
         tunnel
@@ -776,7 +800,8 @@ mod tests {
 
     #[tokio::test]
     async fn ready_times_out_when_the_session_never_comes_up() {
-        let (tunnel, _driver) = Tunnel::new(&test_config()).expect("build tunnel");
+        let (tunnel, _driver) =
+            Tunnel::new(&test_config(), watch::Sender::new(false)).expect("build tunnel");
         assert!(matches!(
             tunnel.ready(Duration::from_millis(20)).await,
             Err(ProxyError::Timeout { .. })
@@ -788,7 +813,8 @@ mod tests {
     /// believes the connection is live.
     #[test]
     fn a_dropped_socket_is_reaped_by_the_driver_not_by_drop() {
-        let (tunnel, driver) = Tunnel::new(&test_config()).expect("build tunnel");
+        let (tunnel, driver) =
+            Tunnel::new(&test_config(), watch::Sender::new(false)).expect("build tunnel");
         let handle = tunnel
             .start_connect(IpAddress::v4(1, 1, 1, 1), 443)
             .expect("open");
@@ -822,7 +848,8 @@ mod tests {
     /// port to a second fetch once it wrapped onto a live one.
     #[test]
     fn a_port_held_by_a_live_socket_is_skipped() {
-        let (tunnel, _driver) = Tunnel::new(&test_config()).expect("build tunnel");
+        let (tunnel, _driver) =
+            Tunnel::new(&test_config(), watch::Sender::new(false)).expect("build tunnel");
         let first = tunnel
             .start_connect(IpAddress::v4(1, 1, 1, 1), 443)
             .expect("open first");

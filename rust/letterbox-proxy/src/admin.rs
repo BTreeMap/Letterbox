@@ -19,23 +19,26 @@ use crate::provisioning::WarpProvisioner;
 use crate::types::WarpStoredConfig;
 use crate::{block_on, lock_state, ProxyState};
 
-/// Build the FFI snapshot from the currently held state.
+/// Build the FFI snapshot of what is *persisted*, and only that.
+///
+/// Deliberately says nothing about the live session. It used to carry a
+/// `tunnel_active` flag, which made this record and [`crate::WarpDiagnostics`]
+/// two answers to one question — and since reading diagnostics starts the
+/// tunnel, whichever the screen read first was the one that came out stale.
 ///
 /// Pure and lock-free: the caller already holds the guard. The public key is
 /// derived from the persisted private key; a derivation failure (corrupt key)
 /// degrades to an empty string rather than failing the whole snapshot, so the
 /// rest of the diagnostics still reach the user.
 fn snapshot(state: &ProxyState) -> WarpStoredConfig {
-    let tunnel_active = state.manager.is_some();
     let config_file_path = state
         .config
         .config_file_path()
         .to_string_lossy()
         .into_owned();
 
-    // The two facts that hold whether or not an account exists.
+    // The fact that holds whether or not an account exists.
     let base = WarpStoredConfig {
-        tunnel_active,
         config_file_path,
         ..WarpStoredConfig::default()
     };

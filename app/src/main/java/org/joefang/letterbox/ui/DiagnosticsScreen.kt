@@ -348,7 +348,9 @@ private fun StoredConfigBody(
         return
     }
 
-    DiagnosticRow("Tunnel", if (config.tunnelActive) "Active" else "Not running")
+    // No tunnel row here. Whether a session is up is the "Live tunnel" panel's
+    // to answer, and this one is loaded first — before reading diagnostics
+    // starts the tunnel — so a copy of it here was reliably stale.
     DiagnosticRow("WARP enabled", if (config.warpEnabled) "Yes" else "No")
     DiagnosticRow("Account type", config.accountType.ifBlank { "unknown" })
     DiagnosticRow("Account ID", config.accountId.ifBlank { "—" }, monospace = true)
@@ -600,7 +602,6 @@ private fun formatForClipboard(
 
     appendLine("# Stored configuration")
     appendLine("has_config=${config.hasConfig}")
-    appendLine("tunnel_active=${config.tunnelActive}")
     appendLine("warp_enabled=${config.warpEnabled}")
     appendLine("account_type=${config.accountType}")
     appendLine("account_id=${config.accountId}")

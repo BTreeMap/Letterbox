@@ -43,6 +43,25 @@ pub struct HttpFetchResponse {
     pub final_url: String,
 }
 
+/// Where the tunnel is in its lifecycle.
+///
+/// Three states, because there are three. A `bool` derived from "does a manager
+/// object exist" answered a different question from the one its name asked: an
+/// unstarted tunnel reported the same value as a started one whose session was
+/// down, and the debug screen rendered that as "Not running" beside a live
+/// session's "Connected". Naming the middle state is what stops the two panels
+/// contradicting each other.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, uniffi::Enum)]
+pub enum TunnelState {
+    /// Nothing has started one. The next fetch will.
+    #[default]
+    NotStarted,
+    /// One exists; its session is not up.
+    Disconnected,
+    /// One exists and its session is up.
+    Connected,
+}
+
 /// Status of the proxy.
 ///
 /// The `Default` is the pre-initialization status: nothing ready, nothing
@@ -53,8 +72,8 @@ pub struct ProxyStatus {
     pub ready: bool,
     /// Whether WARP is enabled on this device.
     pub warp_enabled: bool,
-    /// Whether the tunnel currently has a live session.
-    pub tunnel_connected: bool,
+    /// Where the tunnel is in its lifecycle.
+    pub tunnel: TunnelState,
     /// Current WARP endpoint (if provisioned).
     pub endpoint: Option<String>,
     /// Last error message (if any).
@@ -118,8 +137,6 @@ pub struct WarpDiagnostics {
 pub struct WarpStoredConfig {
     /// Whether a provisioned WARP configuration exists on disk.
     pub has_config: bool,
-    /// Whether a live tunnel manager is currently running.
-    pub tunnel_active: bool,
     /// Cloudflare account/device identifier.
     pub account_id: String,
     /// Account license key (may be empty for free accounts). Sensitive.

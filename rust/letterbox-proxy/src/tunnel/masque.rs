@@ -152,16 +152,19 @@ impl TransportStatus {
     ///
     /// `since_handshake` is `None` until the flow opens — "not connected" and
     /// "connected just now" are different facts.
+    ///
+    /// `connected` is passed in rather than read from these atomics so one
+    /// diagnostics snapshot cannot report a live session with no handshake
+    /// time, or the reverse, by consulting two clocks a poll apart.
     #[must_use]
-    pub fn stats(&self) -> TunnelStats {
+    pub fn stats(&self, connected: bool) -> TunnelStats {
         let snapshot = self.stats.snapshot();
         TunnelStats {
             // Measured from the first *observation* of the connected state, not
             // from the CONNECT response itself, so it can under-report by up to
             // one poll interval. A stopped clock reading zero would have looked
             // more precise and been less true.
-            since_handshake: self
-                .is_connected()
+            since_handshake: connected
                 .then(|| self.connected_at.get_or_init(Instant::now).elapsed()),
             tx_bytes: snapshot.tx_bytes,
             rx_bytes: snapshot.rx_bytes,

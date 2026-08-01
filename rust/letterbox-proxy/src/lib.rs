@@ -43,14 +43,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub use config::ProxyConfig;
 pub use error::ProxyError;
 pub use types::{
-    BatchImageResult, FetchedResource, HttpFetchResponse, ProxyStatus, UpdateResult,
+    BatchImageResult, FetchedResource, HttpFetchResponse, ProxyStatus, TunnelState, UpdateResult,
     WarpDiagnostics, WarpStoredConfig,
 };
 
 use config::{FetchLimits, WarpConfig};
 use provisioning::WarpProvisioner;
 use tunnel::http1::ClientProfile;
-use tunnel::{Fault, FetchRequest, Pending, TunnelDiagnostics, TunnelManager};
+use tunnel::{ConnectionState, Fault, FetchRequest, Pending, TunnelDiagnostics, TunnelManager};
 
 uniffi::setup_scaffolding!();
 
@@ -256,6 +256,21 @@ pub fn proxy_init(storage_path: String, max_cache_size: u32) -> Result<(), Proxy
     Ok(())
 }
 
+/// Where the tunnel is, asked of the tunnel itself.
+///
+/// Exhaustive over both the presence of a manager and its connectedness, so a
+/// third [`ConnectionState`] would be a compile error here rather than a state
+/// this quietly reported as one of the other two.
+fn tunnel_state(state: &ProxyState) -> TunnelState {
+    match &state.manager {
+        None => TunnelState::NotStarted,
+        Some(manager) => match manager.state() {
+            ConnectionState::Connected => TunnelState::Connected,
+            ConnectionState::Disconnected => TunnelState::Disconnected,
+        },
+    }
+}
+
 /// Get the current proxy status.
 ///
 /// Never fails: "not initialized" is a status, not an error, which is what the
@@ -270,7 +285,7 @@ pub fn proxy_status() -> Result<ProxyStatus, ProxyError> {
         |state| ProxyStatus {
             ready: true,
             warp_enabled: state.config.warp_enabled(),
-            tunnel_connected: state.manager.is_some(),
+            tunnel: tunnel_state(state),
             endpoint: state.config.endpoint_host().map(str::to_string),
             last_error: state.last_error.clone(),
             cache_size: state.cache.len() as u32,
@@ -658,7 +673,7 @@ mod tests {
     fn status_before_init_is_not_ready() {
         let status = ProxyStatus::default();
         assert!(!status.ready);
-        assert!(!status.tunnel_connected);
+        assert_eq!(status.tunnel, TunnelState::NotStarted);
         assert_eq!(status.cache_size, 0);
         assert_eq!(status.endpoint, None);
     }

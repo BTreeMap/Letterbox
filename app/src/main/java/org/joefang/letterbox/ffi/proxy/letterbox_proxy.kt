@@ -1420,9 +1420,9 @@ data class ProxyStatus (
     var `warpEnabled`: kotlin.Boolean
     , 
     /**
-     * Whether the tunnel currently has a live session.
+     * Where the tunnel is in its lifecycle.
      */
-    var `tunnelConnected`: kotlin.Boolean
+    var `tunnel`: TunnelState
     , 
     /**
      * Current WARP endpoint (if provisioned).
@@ -1456,7 +1456,7 @@ public object FfiConverterTypeProxyStatus: FfiConverterRustBuffer<ProxyStatus> {
         return ProxyStatus(
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
+            FfiConverterTypeTunnelState.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterUInt.read(buf),
@@ -1466,7 +1466,7 @@ public object FfiConverterTypeProxyStatus: FfiConverterRustBuffer<ProxyStatus> {
     override fun allocationSize(value: ProxyStatus) = (
             FfiConverterBoolean.allocationSize(value.`ready`) +
             FfiConverterBoolean.allocationSize(value.`warpEnabled`) +
-            FfiConverterBoolean.allocationSize(value.`tunnelConnected`) +
+            FfiConverterTypeTunnelState.allocationSize(value.`tunnel`) +
             FfiConverterOptionalString.allocationSize(value.`endpoint`) +
             FfiConverterOptionalString.allocationSize(value.`lastError`) +
             FfiConverterUInt.allocationSize(value.`cacheSize`)
@@ -1475,7 +1475,7 @@ public object FfiConverterTypeProxyStatus: FfiConverterRustBuffer<ProxyStatus> {
     override fun write(value: ProxyStatus, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`ready`, buf)
             FfiConverterBoolean.write(value.`warpEnabled`, buf)
-            FfiConverterBoolean.write(value.`tunnelConnected`, buf)
+            FfiConverterTypeTunnelState.write(value.`tunnel`, buf)
             FfiConverterOptionalString.write(value.`endpoint`, buf)
             FfiConverterOptionalString.write(value.`lastError`, buf)
             FfiConverterUInt.write(value.`cacheSize`, buf)
@@ -1787,11 +1787,6 @@ data class WarpStoredConfig (
     var `hasConfig`: kotlin.Boolean
     , 
     /**
-     * Whether a live tunnel manager is currently running.
-     */
-    var `tunnelActive`: kotlin.Boolean
-    , 
-    /**
      * Cloudflare account/device identifier.
      */
     var `accountId`: kotlin.String
@@ -1860,7 +1855,6 @@ public object FfiConverterTypeWarpStoredConfig: FfiConverterRustBuffer<WarpStore
     override fun read(buf: ByteBuffer): WarpStoredConfig {
         return WarpStoredConfig(
             FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
@@ -1875,7 +1869,6 @@ public object FfiConverterTypeWarpStoredConfig: FfiConverterRustBuffer<WarpStore
 
     override fun allocationSize(value: WarpStoredConfig) = (
             FfiConverterBoolean.allocationSize(value.`hasConfig`) +
-            FfiConverterBoolean.allocationSize(value.`tunnelActive`) +
             FfiConverterString.allocationSize(value.`accountId`) +
             FfiConverterString.allocationSize(value.`licenseKey`) +
             FfiConverterString.allocationSize(value.`registrationKey`) +
@@ -1889,7 +1882,6 @@ public object FfiConverterTypeWarpStoredConfig: FfiConverterRustBuffer<WarpStore
 
     override fun write(value: WarpStoredConfig, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`hasConfig`, buf)
-            FfiConverterBoolean.write(value.`tunnelActive`, buf)
             FfiConverterString.write(value.`accountId`, buf)
             FfiConverterString.write(value.`licenseKey`, buf)
             FfiConverterString.write(value.`registrationKey`, buf)
@@ -2525,6 +2517,60 @@ public object FfiConverterTypeTlsSelfTestOutcome : FfiConverterRustBuffer<TlsSel
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+/**
+ * Where the tunnel is in its lifecycle.
+ *
+ * Three states, because there are three. A `bool` derived from "does a manager
+ * object exist" answered a different question from the one its name asked: an
+ * unstarted tunnel reported the same value as a started one whose session was
+ * down, and the debug screen rendered that as "Not running" beside a live
+ * session's "Connected". Naming the middle state is what stops the two panels
+ * contradicting each other.
+ */
+
+enum class TunnelState {
+    
+    /**
+     * Nothing has started one. The next fetch will.
+     */
+    NOT_STARTED,
+    /**
+     * One exists; its session is not up.
+     */
+    DISCONNECTED,
+    /**
+     * One exists and its session is up.
+     */
+    CONNECTED;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTunnelState: FfiConverterRustBuffer<TunnelState> {
+    override fun read(buf: ByteBuffer) = try {
+        TunnelState.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: TunnelState) = 4UL
+
+    override fun write(value: TunnelState, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
     }
 }
 
