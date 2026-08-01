@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import org.joefang.letterbox.attempt
 import org.joefang.letterbox.data.ImageProxyService
 import org.joefang.letterbox.describe
@@ -40,6 +41,8 @@ import org.joefang.letterbox.ffi.proxy.WarpStoredConfig
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Loading state for the persisted WARP configuration.
@@ -60,10 +63,18 @@ private sealed interface StoredState {
  * Resolving this forces the tunnel to provision and handshake, so it doubles as
  * a connectivity self-test and may legitimately fail while [StoredState] still
  * succeeds.
+ *
+ * [Loaded] carries the fetch error alongside the counters because they are read
+ * in one pass and are only meaningful together: two facts sampled a second
+ * apart, drawn side by side, is a screen describing a moment that never existed.
  */
 private sealed interface LiveState {
     data object Loading : LiveState
-    data class Loaded(val diagnostics: WarpDiagnostics) : LiveState
+    data class Loaded(
+        val diagnostics: WarpDiagnostics,
+        val lastFetchError: String?,
+    ) : LiveState
+
     data class Failed(val message: String) : LiveState
 }
 
@@ -104,36 +115,54 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
     var liveState by remember { mutableStateOf<LiveState>(LiveState.Loading) }
     var revealSecrets by remember { mutableStateOf(false) }
     var verifyState by remember { mutableStateOf<VerifyState>(VerifyState.Idle) }
-    // The proxy records why the last fetch failed, and until now nothing read
-    // it. A remote image that fails renders as blank space — the `<img>` gets a
-    // 502 whose body is text, which a browser draws as nothing at all — so the
-    // reason existed but had nowhere to appear.
-    var lastFetchError by remember { mutableStateOf<String?>(null) }
     var resetting by remember { mutableStateOf(false) }
     var resetError by remember { mutableStateOf<String?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
 
+    // Read once. This is what is persisted, and the only things that change it
+    // — a reset, a first provision — re-key this effect themselves. Re-reading
+    // it on a timer would be file I/O and a key derivation every second to
+    // watch a value that cannot move.
     LaunchedEffect(reloadKey) {
         revealSecrets = false
         // A previous run describes a tunnel that may no longer exist; keeping it
         // on screen after a refresh or reset would be reporting a stale pass.
         verifyState = VerifyState.Idle
         storedState = StoredState.Loading
-        liveState = LiveState.Loading
-        val service = ImageProxyService.getInstance(context)
 
-        storedState = attempt { service.getStoredConfig() }.fold(
+        storedState = attempt { ImageProxyService.getInstance(context).getStoredConfig() }.fold(
             onSuccess = { StoredState.Loaded(it) },
             onFailure = { StoredState.Failed(it.describe("Failed to read stored configuration")) }
         )
+    }
 
-        liveState = attempt { service.getDiagnostics() }.fold(
-            onSuccess = { LiveState.Loaded(it) },
-            onFailure = { LiveState.Failed(it.describe("Failed to establish the tunnel")) }
-        )
-
-        // Read last, so it reflects everything above it.
-        lastFetchError = service.getStatus()?.lastError
+    // The live section refreshes itself, and is the *only* writer of
+    // `liveState`. Three effects used to assign it, which is the same defect the
+    // proxy had when two records each claimed to know whether the tunnel was up:
+    // whichever wrote last won, and nothing said which that would be.
+    //
+    // The delay follows the read rather than racing it, so a slow or blocked
+    // diagnostics call simply slows the cadence instead of queueing behind
+    // itself. `LiveState.Loading` is only ever the initial value, so a refresh
+    // replaces the numbers in place instead of blanking the section every tick.
+    LaunchedEffect(reloadKey, resetting) {
+        if (resetting) return@LaunchedEffect
+        val service = ImageProxyService.getInstance(context)
+        while (true) {
+            val snapshot = attempt {
+                LiveState.Loaded(
+                    diagnostics = service.getDiagnostics(),
+                    // Read after the counters, so it can only be older than
+                    // them, never newer than the snapshot it is drawn beside.
+                    lastFetchError = service.getStatus()?.lastError,
+                )
+            }.fold(
+                onSuccess = { it },
+                onFailure = { LiveState.Failed(it.describe("Failed to establish the tunnel")) }
+            )
+            liveState = snapshot
+            delay(refreshGap(snapshot))
+        }
     }
 
     // `resetting` is the request, exactly as `VerifyState.Running` is: the
@@ -155,28 +184,16 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
 
     // The end-to-end check, interpreting `VerifyState.Running`.
     //
-    // Both results are computed before either is published: publishing
-    // `verifyState` re-keys this effect and cancels what remains of it, so an
-    // assignment made partway through would strand the rest. Compute, then
-    // commit, with the re-keying write last.
+    // It no longer refreshes the counters itself. The check moves real bytes and
+    // does leave them stale, but the poller above corrects that within one
+    // interval — and a second writer of `liveState` would reintroduce exactly
+    // the ambiguity this screen was fixed to remove.
     LaunchedEffect(verifyState) {
         if (verifyState !is VerifyState.Running) return@LaunchedEffect
-        val service = ImageProxyService.getInstance(context)
-
-        val verified = attempt { service.verifyTunnel() }.fold(
+        verifyState = attempt { ImageProxyService.getInstance(context).verifyTunnel() }.fold(
             onSuccess = { VerifyState.Done(it) },
             onFailure = { VerifyState.Failed(it.describe("Verification failed")) }
         )
-
-        // The check moves real bytes, so the counters above are now stale;
-        // refresh them rather than leave two numbers on screen that disagree.
-        val refreshed = attempt { service.getDiagnostics() }.fold(
-            onSuccess = { LiveState.Loaded(it) },
-            onFailure = { LiveState.Failed(it.describe("Failed to re-read the tunnel")) }
-        )
-
-        liveState = refreshed
-        verifyState = verified
     }
 
     if (confirmReset) {
@@ -228,7 +245,7 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
                     onRun = { verifyState = VerifyState.Running }
                 )
 
-                LastFetchErrorSection(lastFetchError)
+                LastFetchErrorSection((liveState as? LiveState.Loaded)?.lastFetchError)
             }
         },
         confirmButton = {
@@ -394,6 +411,33 @@ private fun StoredConfigBody(
 
 /** Placeholder shown in place of a credential until it is deliberately revealed. */
 private const val HIDDEN_SECRET = "•••••••• (tap reveal)"
+
+/**
+ * Gap between live refreshes.
+ *
+ * A gap, not a period: it starts when a read finishes, so a diagnostics call
+ * that blocks cannot stack requests behind itself.
+ */
+private val REFRESH_INTERVAL = 1.seconds
+
+/** Gap after a read that failed. See [refreshGap]. */
+private val RETRY_INTERVAL = 5.seconds
+
+/**
+ * How long to wait before the next live read, given how the last one went.
+ *
+ * Pure and exhaustive, so a new [LiveState] variant has to state its own
+ * cadence rather than inherit one by falling through.
+ *
+ * Reading diagnostics provisions the tunnel if none exists, and provisioning
+ * registers a device with Cloudflare. Retrying that once a second while the
+ * network is down would strand a registration per attempt, so a failure earns
+ * a longer gap — the same reasoning as the tunnel driver's own backoff.
+ */
+private fun refreshGap(state: LiveState): Duration = when (state) {
+    is LiveState.Loaded -> REFRESH_INTERVAL
+    is LiveState.Failed, LiveState.Loading -> RETRY_INTERVAL
+}
 
 @Composable
 private fun LiveTunnelSection(state: LiveState) {
