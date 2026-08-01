@@ -19,6 +19,7 @@ use std::sync::mpsc::{channel, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::Semaphore;
 use tokio::task::{spawn_local, LocalSet};
 
 /// How long to wait for the initial (and any re-)handshake to complete.
@@ -35,6 +36,15 @@ const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
 /// Small on purpose. A fault that survives two attempts against a tunnel the
 /// driver is independently repairing is not the tunnel's.
 const MAX_TRANSPORT_RETRIES: u32 = 2;
+
+/// How many fetches may hold a socket at once.
+///
+/// Concurrency has to be bounded somewhere, and the binding resource is socket
+/// buffers: smoltcp allocates 64 KiB per direction, so this is a ceiling of
+/// about 2 MiB. The count of *pending* fetches is not bounded — a queued
+/// `FetchRequest` is a URL and some headers — because blocking the dispatch
+/// loop would stall the diagnostics command behind image traffic.
+const MAX_INFLIGHT_FETCHES: usize = 16;
 
 /// Pause before repeating a request that failed on transport.
 ///
@@ -308,15 +318,29 @@ async fn serve(
     let last_activity = Rc::new(Cell::new(Instant::now()));
     spawn_local(watch_health(tunnel.clone(), Rc::clone(&last_activity)));
 
+    // Acquired inside each task rather than before spawning, so a full window
+    // delays sockets without also delaying the loop that serves diagnostics.
+    let sockets = Rc::new(Semaphore::new(MAX_INFLIGHT_FETCHES));
+
     while let Some(command) = rx.recv().await {
         match command {
             Command::Fetch { request, reply } => {
                 let tunnel = tunnel.clone();
                 let activity = Rc::clone(&last_activity);
+                let sockets = Rc::clone(&sockets);
                 // Spawned rather than awaited: awaiting here is exactly the
                 // serialization this exists to remove.
                 spawn_local(async move {
-                    let outcome = serve_fetch(&tunnel, &request).await;
+                    let outcome = match sockets.acquire().await {
+                        // Held for the whole fetch, released by `Drop` on every
+                        // path out of it — including a panic.
+                        Ok(_permit) => serve_fetch(&tunnel, &request).await,
+                        // Only closure can fail, and nothing closes it while
+                        // this task holds an `Rc` to it.
+                        Err(_) => Err(ProxyError::TunnelError {
+                            details: "Tunnel worker is shutting down".to_string(),
+                        }),
+                    };
                     activity.set(Instant::now());
                     let _ = reply.send(outcome);
                 });

@@ -37,7 +37,7 @@ use std::rc::Rc;
 use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::sync::Notify;
+use tokio::sync::{watch, Notify};
 
 /// Per-direction TCP buffer size (64 KiB).
 const TCP_BUFFER_SIZE: usize = 65_535;
@@ -51,6 +51,17 @@ const WARP_GATEWAY: Ipv4Address = Ipv4Address::new(172, 16, 0, 1);
 /// the driver sooner, so this only bounds how stale a purely internal timer can
 /// get.
 const MAX_IDLE_SLICE: Duration = Duration::from_millis(100);
+
+/// How long the driver waits before rebuilding a session that never came up.
+///
+/// Doubling from `MIN` to `MAX`, reset the moment a session works. The floor is
+/// not zero because a transport that fails instantly would otherwise spawn
+/// session threads in a hot loop.
+const MIN_BACKOFF: Duration = Duration::from_millis(500);
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// How long an abandoned socket may linger before it is removed regardless.
+const LINGER: Duration = Duration::from_secs(2);
 
 /// Ephemeral port range, per IANA.
 const EPHEMERAL_FIRST: u16 = 49_152;
@@ -102,8 +113,29 @@ pub struct Shared {
     status: RefCell<TransportStatus>,
     /// Rung by a socket that has queued bytes the driver must put on the wire.
     egress: Notify,
-    /// Rung by the driver whenever the session's connectedness may have changed.
-    liveness: Notify,
+    /// Whether the session is up, as a *watched value* rather than an event.
+    ///
+    /// `Notify::notify_waiters` wakes only those already parked, storing no
+    /// permit, so a transition landing between a waiter's check and its await
+    /// is lost — a fetch would then sit out the full handshake timeout beside a
+    /// tunnel that had come up. Connectedness is a state, so it gets a type
+    /// that holds state: `wait_for` inspects the current value before parking,
+    /// which is what makes the race unrepresentable rather than unlikely.
+    ///
+    /// It is also the single published truth. The transport knows first, the
+    /// driver publishes, everyone else reads here — one direction, so no two
+    /// readers can disagree.
+    connected: watch::Sender<bool>,
+    /// Sockets whose owner is gone but which are not finished closing.
+    ///
+    /// A socket cannot be removed the instant its [`TunnelSocket`] drops: the
+    /// FIN `close` just queued has not been sent, and removing the entry
+    /// discards it, so the peer is left holding a connection nobody will ever
+    /// answer for. Worse, [`port_in_use`] scans live sockets, so the port would
+    /// be free to reissue while the peer still has state on it. They stay in the
+    /// set — visible to that scan — until smoltcp says `Closed` or [`LINGER`]
+    /// elapses.
+    lingering: RefCell<Vec<Lingering>>,
     /// Ephemeral port cursor. A [`Cell`] because a `u16` is `Copy` — a
     /// `RefCell` here would buy a runtime borrow check for nothing.
     next_port: Cell<u16>,
@@ -150,7 +182,8 @@ impl Tunnel {
             names: DnsCache::new(),
             status: RefCell::new(transport.status()),
             egress: Notify::new(),
-            liveness: Notify::new(),
+            connected: watch::Sender::new(false),
+            lingering: RefCell::new(Vec::new()),
             next_port: Cell::new(EPHEMERAL_FIRST),
             local_ipv4,
         });
@@ -165,9 +198,9 @@ impl Tunnel {
         Ok((Self { shared }, driver))
     }
 
-    /// Whether the session is up right now.
+    /// Whether the session is up, as last published by the driver.
     pub fn is_connected(&self) -> bool {
-        self.shared.status.borrow().is_connected()
+        *self.shared.connected.borrow()
     }
 
     /// Live transport statistics.
@@ -205,20 +238,23 @@ impl Tunnel {
     /// The driver rebuilds on its own; this is how a fetch waits for that to
     /// finish instead of racing it with a rebuild of its own.
     pub async fn ready(&self, timeout: Duration) -> Result<(), ProxyError> {
-        let deadline = Instant::now() + timeout;
-        while !self.is_connected() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(ProxyError::Timeout {
-                    seconds: timeout.as_secs() as u32,
-                });
-            }
-            // Subscribing before the check would be the correct order for a
-            // pure edge signal; `Notify` stores one permit, so a wake that
-            // lands between the check and the await is not lost.
-            let _ = tokio::time::timeout(remaining, self.shared.liveness.notified()).await;
+        let mut connected = self.shared.connected.subscribe();
+        // Moved into the block so the borrow `wait_for` takes ends with it; the
+        // returned `Ref` is dropped here rather than escaping into the match.
+        let up = async move { connected.wait_for(|up| *up).await.map(|_| ()) };
+        match tokio::time::timeout(timeout, up).await {
+            Ok(Ok(_)) => Ok(()),
+            // The sender lives in `Shared`, which every fetch holds an `Rc` to,
+            // so this is unreachable while a caller exists to observe it. Named
+            // rather than unwrapped: an "impossible" branch that panics is a
+            // crash waiting for the day the ownership changes.
+            Ok(Err(_)) => Err(ProxyError::TunnelError {
+                details: "Tunnel state is no longer published".to_string(),
+            }),
+            Err(_) => Err(ProxyError::Timeout {
+                seconds: timeout.as_secs() as u32,
+            }),
         }
-        Ok(())
     }
 
     /// Open a TCP connection through the tunnel.
@@ -297,6 +333,13 @@ impl Tunnel {
     }
 }
 
+/// An abandoned socket and the moment it stops being given the benefit of the
+/// doubt.
+struct Lingering {
+    handle: SocketHandle,
+    expires: Instant,
+}
+
 /// Whether any live socket already holds `port` locally.
 fn port_in_use(sockets: &SocketSet<'static>, port: u16) -> bool {
     sockets.iter().any(|(_, socket)| {
@@ -321,68 +364,132 @@ pub struct Driver {
     source: PacketSource,
 }
 
+/// Why a session stopped, and therefore how eagerly to try the next one.
+///
+/// The distinction is the whole backoff policy. A session that carried traffic
+/// and then died is a working configuration meeting a transient fault, so it is
+/// retried at once. A session that never came up is a reason to slow down — the
+/// device is offline, or the credentials are stale, and hammering a fresh QUIC
+/// handshake at it every few hundred milliseconds helps nobody.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionEnd {
+    /// It reached the connected state at least once.
+    Served,
+    /// It never did.
+    Failed,
+}
+
+/// How long to wait before the next attempt, given how the last one ended.
+///
+/// Pure, so the policy is checkable without standing up a session — the loop
+/// that uses it can only be exercised against a real network.
+fn next_backoff(end: SessionEnd, previous: Duration) -> Duration {
+    match end {
+        SessionEnd::Served => MIN_BACKOFF,
+        SessionEnd::Failed => (previous * 2).min(MAX_BACKOFF),
+    }
+}
+
 impl Driver {
-    /// Run until the tunnel handle is dropped.
+    /// Run for as long as this driver is owned.
+    ///
+    /// Total by construction: there is no `return`, no `?`, and no path that
+    /// stops driving. Every failure resolves to a [`SessionEnd`] and another
+    /// attempt, because the alternative — exiting on an error — leaves a live
+    /// `Tunnel` whose every fetch then blocks for the full handshake timeout
+    /// with nothing on the other end that could ever repair it. The only way
+    /// out is being dropped, which is the runtime shutting down.
     ///
     /// Reconnection lives here rather than in a fetch: a fetch that rebuilt the
     /// session would tear down every *other* fetch's socket to fix its own.
     pub async fn run(mut self, handshake_timeout: Duration) {
+        let mut backoff = MIN_BACKOFF;
         loop {
-            if let Err(e) = self.transport.initiate_handshake() {
-                log::warn!("MASQUE handshake could not start: {e}");
-                return;
-            }
-            self.shared.liveness.notify_waiters();
+            backoff = next_backoff(self.session(handshake_timeout).await, backoff);
 
-            self.pump(handshake_timeout).await;
+            self.publish(false);
+            log::warn!("MASQUE session ended; rebuilding in {backoff:?}");
+            tokio::time::sleep(backoff).await;
 
-            // The session is gone and cannot be restarted — `initiate_handshake`
-            // consumed what it needed. A rebuilt transport is the only honest
-            // reconnection, and swapping the status handle is what makes
+            // A started transport cannot restart — `initiate_handshake`
+            // consumed what it needed — so a rebuilt one is the only honest
+            // reconnection. Swapping the status handle is what makes
             // diagnostics report the new session rather than the dead one.
-            log::warn!("MASQUE session ended; rebuilding");
             match MasqueTransport::new(&self.config) {
                 Ok((transport, source)) => {
                     *self.shared.status.borrow_mut() = transport.status();
                     self.transport = transport;
                     self.source = source;
-                    self.shared.liveness.notify_waiters();
                 }
-                Err(e) => {
-                    log::error!("cannot rebuild MASQUE transport: {e}");
-                    return;
-                }
+                // Keep the old, dead transport and try again after a longer
+                // wait. Returning here would strand every future fetch.
+                Err(e) => log::error!("cannot rebuild MASQUE transport: {e}"),
             }
         }
     }
 
-    /// Move packets in both directions until the session ends.
-    async fn pump(&mut self, handshake_timeout: Duration) {
+    /// Drive one session from handshake to death.
+    async fn session(&mut self, handshake_timeout: Duration) -> SessionEnd {
+        if let Err(e) = self.transport.initiate_handshake() {
+            log::warn!("MASQUE handshake could not start: {e}");
+            return SessionEnd::Failed;
+        }
+
         let started = Instant::now();
-        let mut was_connected = false;
+        let mut served = false;
 
         loop {
             let delay = self.poll_once();
 
             let connected = self.transport.is_connected();
-            if connected != was_connected {
-                was_connected = connected;
-                self.shared.liveness.notify_waiters();
-            }
+            served |= connected;
+            self.publish(connected);
+
             if !connected && started.elapsed() > handshake_timeout {
-                return;
+                return if served {
+                    SessionEnd::Served
+                } else {
+                    SessionEnd::Failed
+                };
             }
 
             tokio::select! {
                 packet = self.source.recv() => match packet {
                     Some(packet) => self.device.push_inbound(packet),
                     // Every sender is gone: the session thread has exited.
-                    None => return,
+                    None => return if served { SessionEnd::Served } else { SessionEnd::Failed },
                 },
                 () = self.shared.egress.notified() => {}
                 () = tokio::time::sleep(delay) => {}
             }
         }
+    }
+
+    /// Publish connectedness, waking waiters only on an actual transition.
+    fn publish(&self, connected: bool) {
+        self.shared.connected.send_if_modified(|current| {
+            let changed = *current != connected;
+            *current = connected;
+            changed
+        });
+    }
+
+    /// Remove abandoned sockets that have finished closing, or run out of time.
+    ///
+    /// Bounded by [`LINGER`] rather than waiting for `Closed` unconditionally: a
+    /// peer that never answers our FIN must not pin a socket, and its buffers,
+    /// for the life of the process.
+    fn reap_lingering(&self) {
+        let now = Instant::now();
+        let mut net = self.shared.net.borrow_mut();
+        self.shared.lingering.borrow_mut().retain(|socket| {
+            let finished = net.sockets.get::<TcpSocket>(socket.handle).state() == TcpState::Closed
+                || now >= socket.expires;
+            if finished {
+                net.sockets.remove(socket.handle);
+            }
+            !finished
+        });
     }
 
     /// One synchronous turn of the stack, returning how long it may now sleep.
@@ -407,6 +514,10 @@ impl Driver {
                 log::debug!("dropping outbound packet: {e}");
             }
         }
+
+        // After the poll, so a FIN queued by the last `Drop` has been emitted
+        // by the loop above before its socket becomes eligible for removal.
+        self.reap_lingering();
 
         delay.map_or(MAX_IDLE_SLICE, |d| {
             Duration::from_micros(d.total_micros()).min(MAX_IDLE_SLICE)
@@ -449,16 +560,23 @@ impl TunnelSocket {
 }
 
 impl Drop for TunnelSocket {
-    /// Send a FIN and drop the socket.
+    /// Begin closing, and hand the socket to the driver to finish.
     ///
-    /// The FIN goes out on the driver's next turn, which the notification
-    /// schedules; waiting for it here would mean blocking a `Drop`, and the
-    /// peer's view of a connection we have already abandoned is not worth that.
+    /// Removing it here would discard the FIN `close` queues, because the
+    /// driver has not had a turn to put it on the wire yet. Waiting for that
+    /// turn is not an option either — `Drop` cannot await. So ownership
+    /// transfers instead: this is the last reference, and the driver reaps it.
     fn drop(&mut self) {
-        let mut net = self.shared.net.borrow_mut();
-        net.sockets.get_mut::<TcpSocket>(self.handle).close();
-        net.sockets.remove(self.handle);
-        drop(net);
+        self.shared
+            .net
+            .borrow_mut()
+            .sockets
+            .get_mut::<TcpSocket>(self.handle)
+            .close();
+        self.shared.lingering.borrow_mut().push(Lingering {
+            handle: self.handle,
+            expires: Instant::now() + LINGER,
+        });
         self.shared.egress.notify_one();
     }
 }
@@ -624,6 +742,80 @@ mod tests {
             tunnel.allocate_local_port(&sockets).unwrap(),
             EPHEMERAL_FIRST
         );
+    }
+
+    /// Repeated failure slows down; one working session resets it. Without the
+    /// floor a transport that fails instantly would spawn session threads in a
+    /// hot loop.
+    #[test]
+    fn backoff_doubles_on_failure_and_resets_on_success() {
+        let once = next_backoff(SessionEnd::Failed, MIN_BACKOFF);
+        assert_eq!(once, MIN_BACKOFF * 2);
+        assert_eq!(next_backoff(SessionEnd::Failed, once), MIN_BACKOFF * 4);
+        assert_eq!(next_backoff(SessionEnd::Served, once), MIN_BACKOFF);
+    }
+
+    #[test]
+    fn backoff_is_capped() {
+        assert_eq!(next_backoff(SessionEnd::Failed, MAX_BACKOFF), MAX_BACKOFF);
+    }
+
+    /// The regression this type exists to prevent: a transition published
+    /// before anyone parks. An edge signal drops it and the waiter then sits
+    /// out its entire timeout beside a tunnel that is already up.
+    #[tokio::test]
+    async fn ready_observes_a_transition_published_before_it_waited() {
+        let (tunnel, driver) = Tunnel::new(&test_config()).expect("build tunnel");
+        driver.publish(true);
+
+        tunnel
+            .ready(Duration::from_millis(50))
+            .await
+            .expect("a tunnel already up must be ready at once");
+    }
+
+    #[tokio::test]
+    async fn ready_times_out_when_the_session_never_comes_up() {
+        let (tunnel, _driver) = Tunnel::new(&test_config()).expect("build tunnel");
+        assert!(matches!(
+            tunnel.ready(Duration::from_millis(20)).await,
+            Err(ProxyError::Timeout { .. })
+        ));
+    }
+
+    /// Dropping a socket hands it over; it does not remove it. Removing it
+    /// there would discard the FIN and free the port while the peer still
+    /// believes the connection is live.
+    #[test]
+    fn a_dropped_socket_is_reaped_by_the_driver_not_by_drop() {
+        let (tunnel, driver) = Tunnel::new(&test_config()).expect("build tunnel");
+        let handle = tunnel
+            .start_connect(IpAddress::v4(1, 1, 1, 1), 443)
+            .expect("open");
+        let port = tunnel
+            .shared
+            .net
+            .borrow()
+            .sockets
+            .get::<TcpSocket>(handle)
+            .local_endpoint()
+            .expect("a connecting socket is bound")
+            .port;
+
+        drop(TunnelSocket {
+            shared: Rc::clone(&tunnel.shared),
+            handle,
+        });
+
+        assert_eq!(tunnel.shared.lingering.borrow().len(), 1);
+        assert!(
+            port_in_use(&tunnel.shared.net.borrow().sockets, port),
+            "the port must stay claimed until the driver reaps the socket"
+        );
+
+        driver.reap_lingering();
+        assert!(tunnel.shared.lingering.borrow().is_empty());
+        assert!(!port_in_use(&tunnel.shared.net.borrow().sockets, port));
     }
 
     /// Concurrency made this reachable: the cursor alone would hand the same
