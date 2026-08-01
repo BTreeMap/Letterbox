@@ -306,6 +306,11 @@ android {
                 device = "Pixel 7"
                 apiLevel = 34
                 systemImageSource = "aosp-atd"
+                // AGP 10 defaults this to arm64-v8a. The ATD image cannot
+                // translate, so on that upgrade the tests would stop running
+                // rather than fail; naming the runner's own ABI pins today's
+                // behaviour.
+                testedAbi = "x86_64"
             }
             groups {
                 create("ciPhones") {
