@@ -118,7 +118,7 @@ jobs:
         run: printf 'y\n%.0s' {1..100} | sdkmanager --licenses > /dev/null
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       # Host toolchain only. UniFFI reads the exported metadata out of a
       # compiled library, and that metadata is target-independent, so the

@@ -100,7 +100,7 @@ jobs:
           exit "$missing"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
         with:
           # Never written from here. This workflow runs in the default branch's
           # context (`github.ref` is `refs/heads/main`) but checks out the

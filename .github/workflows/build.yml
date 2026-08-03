@@ -308,7 +308,7 @@ jobs:
           save-if: ${{ env.CACHE_WRITE == 'true' }}
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
         with:
           cache-read-only: ${{ env.CACHE_WRITE != 'true' }}
 
@@ -400,7 +400,7 @@ jobs:
           path: app/src/main/jniLibs
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
         with:
           cache-read-only: ${{ env.CACHE_WRITE != 'true' }}
 
