@@ -56,7 +56,7 @@ usque-core = { path = "../usque-core" }
 # This lets the tunnel own all of its smoltcp storage for its whole lifetime
 # without resorting to `Box::leak` for `'static` borrows. Name resolution runs
 # over DNS-over-HTTPS through the tunnel, so only the TCP socket is needed.
-smoltcp = { version = "0.13", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "async"] }
+smoltcp = { version = "0.14", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "async"] }
 
 # TLS for HTTPS connections
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
