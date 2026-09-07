@@ -16,8 +16,8 @@ val forcedDependencies = listOf(
     // versions, so raising it cannot reintroduce this class of mismatch.
     "org.jetbrains.kotlinx:kotlinx-serialization-core:1.11.0",
     "org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0",
-    "com.google.protobuf:protobuf-java:4.35.1",
-    "com.google.protobuf:protobuf-kotlin:4.35.1",
+    "com.google.protobuf:protobuf-java:4.36.1",
+    "com.google.protobuf:protobuf-kotlin:4.36.1",
     "io.netty:netty-codec:4.2.17.Final",
     "io.netty:netty-codec-http:4.2.17.Final",
     "io.netty:netty-codec-http2:4.2.17.Final",
