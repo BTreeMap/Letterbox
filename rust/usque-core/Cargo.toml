@@ -12,7 +12,7 @@ license = "MIT"
 # iterator (GHSA-mh64-ph39-mrc9) is fixed in 0.29.2, so a resolve that landed
 # below it would be a silent regression. The caret still admits every 0.29.x
 # above it.
-quiche = "0.29.3"
+quiche = "0.30.0"
 octets = "0.3"
 
 # The session loop is async internally (tokio::select! over socket and packet
