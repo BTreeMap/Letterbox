@@ -86,17 +86,17 @@ log = "0.4"
 env_logger = "0.11"
 
 # UniFFI for Kotlin bindings
-uniffi = { version = "0.32", features = ["cli"] }
+uniffi = { version = "0.33", features = ["cli"] }
 
 # Caching
-lru = "0.18"
+lru = "0.19"
 
 # Time handling
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 
 [build-dependencies]
-uniffi = { version = "0.32", features = ["build"] }
+uniffi = { version = "0.33", features = ["build"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
